@@ -49,6 +49,11 @@ public class AcidIcons {
     public static final int ICON_DOWNLOAD = 22;
     public static final int ICON_CLOSE = 23;
     public static final int ICON_SEARCH = 24;
+    public static final int ICON_PLUS = 25;
+    public static final int ICON_TRASH = 26;
+    public static final int ICON_INCOGNITO = 27;
+    public static final int ICON_RETURN = 28;
+    public static final int ICON_GLOBE = 29;
 
     /**
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
@@ -369,6 +374,36 @@ public class AcidIcons {
                 // SVG Magnifier
                 p.addCircle(10.5f, 10.5f, 6f, Path.Direction.CW);
                 p.addPath(parseSvgPath("M 15 15 L 20.5 20.5"));
+                break;
+
+            case ICON_PLUS:
+                // SVG Plus
+                p.addPath(parseSvgPath("M 12 5 V 19 M 5 12 H 19"));
+                break;
+
+            case ICON_TRASH:
+                // SVG Trash can
+                p.addPath(parseSvgPath("M 3 6 H 21 M 8 6 V 4 H 16 V 6 M 19 6 V 19 C 19 20.1 18.1 21 17 21 H 7 C 5.9 21 5 20.1 5 19 V 6 M 10 10 V 17 M 14 10 V 17"));
+                break;
+
+            case ICON_INCOGNITO:
+                // SVG Spy glasses & hat
+                p.addPath(parseSvgPath("M 2 10 H 22 M 7 10 L 9.2 3.5 H 14.8 L 17 10"));
+                p.addCircle(7.5f, 15.5f, 3.5f, Path.Direction.CW);
+                p.addCircle(16.5f, 15.5f, 3.5f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 11 15.5 H 13"));
+                break;
+
+            case ICON_RETURN:
+                // SVG Return undo arrow
+                p.addPath(parseSvgPath("M 9 14 L 4 9 L 9 4"));
+                p.addPath(parseSvgPath("M 20 20 V 13 C 20 10.8 18.2 9 16 9 H 4"));
+                break;
+
+            case ICON_GLOBE:
+                // SVG Web Globe
+                p.addCircle(12f, 12f, 9f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 3 12 H 21 M 12 3 C 8.5 7.5 8.5 16.5 12 21 M 12 3 C 15.5 7.5 15.5 16.5 12 21"));
                 break;
 
             default:

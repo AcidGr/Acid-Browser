@@ -1,11 +1,10 @@
 package com.acid.browser;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -24,6 +23,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -39,11 +39,12 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Modern Clean White Browser Edition (Phase 2):
+ * Modern Clean White Browser Edition (Phase 3):
  * - Clean white theme by default (Normal browser look & feel)
  * - Classic 5-button bottom toolbar (Back, Forward, Menu, Tabs, Home)
- * - Central popup menu sheet (Night mode, Bookmarks, History, Downloads, PC/Mobile toggle, Agent Debug)
- * - Real-time synchronized SoM & Agent HUD loop
+ * - Concise "功能" menu sheet with refined compact vector icons
+ * - Full-screen 2-column Tab Manager with real-time web snapshots, direct 'X' close, and bottom actions
+ * - Beautiful custom BottomSheet for Bookmarks and History
  */
 public class BrowserActivity extends Activity implements BrowserController.BrowserStateListener {
 
@@ -59,6 +60,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private static final int LIGHT_ICON_DISABLED = Color.parseColor("#CBD5E1");
     private static final int LIGHT_ACCENT = Color.parseColor("#00BA76");
     private static final int LIGHT_MENU_ITEM_BG = Color.parseColor("#F8FAFC");
+    private static final int COLOR_TAB_ACTIVE_BORDER = Color.parseColor("#0284C7");
+    private static final int COLOR_OVERVIEW_BG = Color.parseColor("#F1F5F9");
 
     // Night/Dark Theme Colors
     private static final int DARK_BG = Color.parseColor("#0F172A");
@@ -83,6 +86,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private BrowserController mController;
     private HttpControlServer mHttpServer;
     private boolean mIsDarkMode = false;
+    private boolean mIncognitoMode = false;
 
     // Root views
     private FrameLayout mRootContainer;
@@ -124,7 +128,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private LinearLayout mBtnHome;
     private AcidIcons.SvgIconView mIconHome;
 
-    // Bottom Pop-up Menu Panel
+    // Bottom Pop-up Menu Panel ("功能")
     private FrameLayout mMenuOverlay;
     private View mMenuScrim;
     private LinearLayout mMenuCard;
@@ -136,6 +140,18 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private MenuCardItem mMenuItemDownload;
     private MenuCardItem mMenuItemDesktop;
     private MenuCardItem mMenuItemAgent;
+
+    // Full-screen Tab Overview Layout (Multi-tab card grid)
+    private FrameLayout mTabsOverviewLayout;
+    private LinearLayout mTabsGridContainer;
+    private TextView mTvTabsCountTitle;
+
+    // Custom List Dialog Layer (Bookmarks & History)
+    private FrameLayout mListDialogOverlay;
+    private LinearLayout mListDialogCard;
+    private TextView mTvListDialogTitle;
+    private LinearLayout mListItemsContainer;
+    private AcidIcons.BadgeButton mBtnListAction;
 
     // Inspector Drawer
     private LinearLayout mDrawerPanel;
@@ -193,6 +209,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (strokeColor != 0) {
             gd.setStroke(dp(1), strokeColor);
         }
+        return gd;
+    }
+
+    private GradientDrawable cardBorderBg(int fillColor, int strokeColor, int strokeWidthDp, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(fillColor);
+        gd.setCornerRadius(dp(radiusDp));
+        gd.setStroke(dp(strokeWidthDp), strokeColor);
         return gd;
     }
 
@@ -342,10 +366,20 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mRootContainer.addView(mMainContentLayout, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 2. Fullscreen Menu Sheet Layer (Modal pop-up)
+        // 2. Fullscreen Menu Sheet Layer ("功能" 弹窗面板)
         mMenuOverlay = buildMenuOverlay();
         mMenuOverlay.setVisibility(View.GONE);
         mRootContainer.addView(mMenuOverlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 3. Fullscreen Tab Overview Layout (多标签页卡片网格全屏层)
+        mTabsOverviewLayout = buildTabsOverviewLayout();
+        mTabsOverviewLayout.setVisibility(View.GONE);
+        mRootContainer.addView(mTabsOverviewLayout, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 4. Custom List Dialog Layer (书签与历史浏览专属优雅弹窗)
+        mListDialogOverlay = buildListDialogOverlay();
+        mListDialogOverlay.setVisibility(View.GONE);
+        mRootContainer.addView(mListDialogOverlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         return mRootContainer;
     }
@@ -442,7 +476,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mBtnTabs.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                showTabsDialog();
+                openTabsOverview();
             }
         });
         bar.addView(mBtnTabs, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
@@ -471,7 +505,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     // =========================================================================
-    // Pop-up Menu Panel (Modal Bottom Sheet)
+    // Pop-up Menu Panel ("功能" - Modal Bottom Sheet)
     // =========================================================================
 
     private FrameLayout buildMenuOverlay() {
@@ -503,15 +537,15 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         hLp.bottomMargin = dp(10);
         mMenuCard.addView(handle, hLp);
 
-        // Title row with close button
+        // Title row with close button ("功能")
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
 
         mMenuTitle = new TextView(this);
-        mMenuTitle.setText("Acid 功能与工具");
+        mMenuTitle.setText("功能");
         mMenuTitle.setTextColor(LIGHT_TEXT);
-        mMenuTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        mMenuTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
         mMenuTitle.setTypeface(Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         titleRow.addView(mMenuTitle, titleLp);
@@ -559,7 +593,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 @Override
                 public void onClick(View v) {
                     closeMenuSheet();
-                    showBookmarksDialog();
+                    showBookmarksSheet();
                 }
             }
         );
@@ -575,7 +609,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 @Override
                 public void onClick(View v) {
                     closeMenuSheet();
-                    showHistoryDialog();
+                    showHistorySheet();
                 }
             }
         );
@@ -591,13 +625,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         row2.setPadding(0, dp(6), 0, dp(6));
 
         mMenuItemDownload = new MenuCardItem(
-            this, AcidIcons.ICON_DOWNLOAD, "下载管理", "文件查看",
+            this, AcidIcons.ICON_DOWNLOAD, "下载管理", "任务查看",
             LIGHT_ACCENT, LIGHT_TEXT, LIGHT_MUTED, LIGHT_MENU_ITEM_BG,
             new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     closeMenuSheet();
-                    showDownloadsDialog();
+                    showDownloadsSheet();
                 }
             }
         );
@@ -758,8 +792,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mProgressBar.setBackgroundColor(accent);
         mBtnShield.setColor(accent);
 
-        mIconBack.setColor(mController != null && mController.getActiveTab() != null && mController.getActiveTab().webView.canGoBack() ? icon : (dark ? DARK_ICON_DISABLED : LIGHT_ICON_DISABLED));
-        mIconForward.setColor(mController != null && mController.getActiveTab() != null && mController.getActiveTab().webView.canGoForward() ? icon : (dark ? DARK_ICON_DISABLED : LIGHT_ICON_DISABLED));
+        updateNavButtons();
         mIconMenu.setColor(icon);
         mIconTabs.setColor(icon);
         mIconHome.setColor(icon);
@@ -772,6 +805,679 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mMenuCard.setBackground(cardGd);
         mMenuTitle.setTextColor(text);
         mBtnMenuClose.setColor(muted);
+    }
+
+    // =========================================================================
+    // Full-screen Tab Overview (2-Column Grid with Snapshots, 'X' Close & Bottom Bar)
+    // =========================================================================
+
+    private FrameLayout buildTabsOverviewLayout() {
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(COLOR_OVERVIEW_BG);
+
+        LinearLayout contentCol = new LinearLayout(this);
+        contentCol.setOrientation(LinearLayout.VERTICAL);
+
+        // 1. Top bar for Overview: "标签页管理 (N)" + Close 'X'
+        LinearLayout topBar = new LinearLayout(this);
+        topBar.setOrientation(LinearLayout.HORIZONTAL);
+        topBar.setGravity(Gravity.CENTER_VERTICAL);
+        topBar.setBackgroundColor(Color.WHITE);
+        topBar.setPadding(dp(16), dp(10), dp(16), dp(10));
+
+        mTvTabsCountTitle = new TextView(this);
+        mTvTabsCountTitle.setText("标签页 (1)");
+        mTvTabsCountTitle.setTextColor(LIGHT_TEXT);
+        mTvTabsCountTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        mTvTabsCountTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        topBar.addView(mTvTabsCountTitle, tLp);
+
+        LinearLayout closeBox = new LinearLayout(this);
+        closeBox.setGravity(Gravity.CENTER);
+        closeBox.setPadding(dp(6), dp(6), dp(6), dp(6));
+        AcidIcons.SvgIconView btnClose = new AcidIcons.SvgIconView(this, AcidIcons.ICON_CLOSE, LIGHT_MUTED, 18);
+        closeBox.addView(btnClose);
+        closeBox.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                closeTabsOverview();
+            }
+        });
+        topBar.addView(closeBox);
+        contentCol.addView(topBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        View div = new View(this);
+        div.setBackgroundColor(LIGHT_BORDER);
+        contentCol.addView(div, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+
+        // 2. Scrollable 2-Column Grid
+        ScrollView scroll = new ScrollView(this);
+        mTabsGridContainer = new LinearLayout(this);
+        mTabsGridContainer.setOrientation(LinearLayout.HORIZONTAL);
+        mTabsGridContainer.setPadding(dp(12), dp(12), dp(12), dp(12));
+        scroll.addView(mTabsGridContainer, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        contentCol.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        // 3. Bottom Action Bar (清除, 无痕模式, 新建, 返回)
+        View bDiv = new View(this);
+        bDiv.setBackgroundColor(LIGHT_BORDER);
+        contentCol.addView(bDiv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+
+        LinearLayout bottomActionToolbar = new LinearLayout(this);
+        bottomActionToolbar.setOrientation(LinearLayout.HORIZONTAL);
+        bottomActionToolbar.setGravity(Gravity.CENTER_VERTICAL);
+        bottomActionToolbar.setBackgroundColor(Color.WHITE);
+
+        // Action 1: 清除 (Close others)
+        LinearLayout btnClear = createOverviewActionBtn("清除", AcidIcons.ICON_TRASH, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mController != null && mController.getActiveTab() != null) {
+                    mController.closeOtherTabs(mController.getActiveTab().id);
+                    renderTabsGrid();
+                    Toast.makeText(BrowserActivity.this, "已清除其他标签页", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        bottomActionToolbar.addView(btnClear, new LinearLayout.LayoutParams(0, dp(54), 1f));
+
+        // Action 2: 无痕模式
+        LinearLayout btnIncognito = createOverviewActionBtn("无痕模式", AcidIcons.ICON_INCOGNITO, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mIncognitoMode = !mIncognitoMode;
+                Toast.makeText(BrowserActivity.this, mIncognitoMode ? "已开启无痕浏览模式" : "已切换为正常模式", Toast.LENGTH_SHORT).show();
+            }
+        });
+        bottomActionToolbar.addView(btnIncognito, new LinearLayout.LayoutParams(0, dp(54), 1f));
+
+        // Action 3: 新建 (+)
+        LinearLayout btnNew = createOverviewActionBtn("新建", AcidIcons.ICON_PLUS, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mController != null) {
+                    mController.createNewTab(BrowserController.HOME_URL, true);
+                    closeTabsOverview();
+                }
+            }
+        });
+        bottomActionToolbar.addView(btnNew, new LinearLayout.LayoutParams(0, dp(54), 1f));
+
+        // Action 4: 返回
+        LinearLayout btnReturn = createOverviewActionBtn("返回", AcidIcons.ICON_RETURN, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                closeTabsOverview();
+            }
+        });
+        bottomActionToolbar.addView(btnReturn, new LinearLayout.LayoutParams(0, dp(54), 1f));
+
+        contentCol.addView(bottomActionToolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        root.addView(contentCol, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return root;
+    }
+
+    private LinearLayout createOverviewActionBtn(String label, int iconId, View.OnClickListener listener) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setClickable(true);
+        box.setFocusable(true);
+
+        AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(this, iconId, LIGHT_ICON, 19);
+        box.addView(icon);
+
+        TextView tv = new TextView(this);
+        tv.setText(label);
+        tv.setTextColor(LIGHT_ICON);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(2);
+        box.addView(tv, lp);
+
+        if (listener != null) box.setOnClickListener(listener);
+        return box;
+    }
+
+    private void openTabsOverview() {
+        if (mController != null) {
+            mController.captureActiveTabSnapshot();
+        }
+        renderTabsGrid();
+        mTabsOverviewLayout.setVisibility(View.VISIBLE);
+    }
+
+    private void closeTabsOverview() {
+        mTabsOverviewLayout.setVisibility(View.GONE);
+    }
+
+    private void renderTabsGrid() {
+        mTabsGridContainer.removeAllViews();
+        if (mController == null) return;
+
+        List<BrowserController.TabSession> tabs = mController.getTabs();
+        BrowserController.TabSession activeTab = mController.getActiveTab();
+        mTvTabsCountTitle.setText("标签页 (" + tabs.size() + ")");
+
+        // Left and Right columns for 2-column card grid
+        LinearLayout leftCol = new LinearLayout(this);
+        leftCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout rightCol = new LinearLayout(this);
+        rightCol.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout.LayoutParams colLpL = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        colLpL.rightMargin = dp(6);
+        mTabsGridContainer.addView(leftCol, colLpL);
+
+        LinearLayout.LayoutParams colLpR = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        colLpR.leftMargin = dp(6);
+        mTabsGridContainer.addView(rightCol, colLpR);
+
+        for (int i = 0; i < tabs.size(); i++) {
+            final BrowserController.TabSession t = tabs.get(i);
+            boolean isActive = (activeTab != null && activeTab.id == t.id);
+
+            View card = buildSingleTabCard(t, isActive);
+            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            cLp.bottomMargin = dp(12);
+
+            if (i % 2 == 0) {
+                leftCol.addView(card, cLp);
+            } else {
+                rightCol.addView(card, cLp);
+            }
+        }
+    }
+
+    private View buildSingleTabCard(final BrowserController.TabSession tab, boolean isActive) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+
+        // Highlighting active card with blue border like reference screenshot
+        if (isActive) {
+            card.setBackground(cardBorderBg(Color.WHITE, COLOR_TAB_ACTIVE_BORDER, 2, 14));
+        } else {
+            card.setBackground(cardBorderBg(Color.WHITE, LIGHT_BORDER, 1, 14));
+        }
+        card.setClickable(true);
+        card.setFocusable(true);
+
+        // Header: Favicon/Globe + Title + Direct Close 'X'
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(8), dp(7), dp(6), dp(7));
+        GradientDrawable headGd = new GradientDrawable();
+        headGd.setColor(Color.parseColor("#F8FAFC"));
+        float r = dp(14);
+        headGd.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+        head.setBackground(headGd);
+
+        AcidIcons.SvgIconView globe = new AcidIcons.SvgIconView(this, AcidIcons.ICON_GLOBE, isActive ? COLOR_TAB_ACTIVE_BORDER : LIGHT_MUTED, 14);
+        head.addView(globe);
+
+        TextView title = new TextView(this);
+        title.setText(tab.title);
+        title.setTextColor(LIGHT_TEXT);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tLp.leftMargin = dp(5);
+        tLp.rightMargin = dp(4);
+        head.addView(title, tLp);
+
+        // Direct 'X' close button on card
+        LinearLayout closeBtn = new LinearLayout(this);
+        closeBtn.setGravity(Gravity.CENTER);
+        closeBtn.setPadding(dp(4), dp(4), dp(4), dp(4));
+        AcidIcons.SvgIconView closeIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_CLOSE, LIGHT_MUTED, 13);
+        closeBtn.addView(closeIcon);
+        closeBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mController.closeTab(tab.id);
+                renderTabsGrid();
+            }
+        });
+        head.addView(closeBtn);
+        card.addView(head);
+
+        // Body: Live Web Snapshot Thumbnail (or elegant placeholder)
+        FrameLayout body = new FrameLayout(this);
+        body.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(185)));
+
+        if (tab.snapshot != null && !tab.snapshot.isRecycled()) {
+            ImageView img = new ImageView(this);
+            img.setImageBitmap(tab.snapshot);
+            img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            body.addView(img, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        } else {
+            LinearLayout empty = new LinearLayout(this);
+            empty.setOrientation(LinearLayout.VERTICAL);
+            empty.setGravity(Gravity.CENTER);
+            empty.setBackgroundColor(Color.parseColor("#F8FAFC"));
+
+            AcidIcons.SvgIconView emptyIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_GLOBE, Color.parseColor("#CBD5E1"), 28);
+            empty.addView(emptyIcon);
+
+            TextView tip = new TextView(this);
+            tip.setText("空白页面");
+            tip.setTextColor(Color.parseColor("#94A3B8"));
+            tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            LinearLayout.LayoutParams tipLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            tipLp.topMargin = dp(4);
+            empty.addView(tip, tipLp);
+
+            body.addView(empty, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+
+        card.addView(body);
+
+        // Clicking the card body switches to this tab and dismisses overview
+        card.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mController.switchToTab(tab.id);
+                closeTabsOverview();
+            }
+        });
+
+        return card;
+    }
+
+    // =========================================================================
+    // Custom List Dialog Layer (Bookmarks & History BottomSheet)
+    // =========================================================================
+
+    private FrameLayout buildListDialogOverlay() {
+        FrameLayout overlay = new FrameLayout(this);
+
+        View scrim = new View(this);
+        scrim.setBackgroundColor(Color.parseColor("#80000000"));
+        scrim.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                closeListDialog();
+            }
+        });
+        overlay.addView(scrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        mListDialogCard = new LinearLayout(this);
+        mListDialogCard.setOrientation(LinearLayout.VERTICAL);
+        mListDialogCard.setPadding(dp(16), dp(10), dp(16), dp(16));
+        mListDialogCard.setBackground(cardBorderBg(Color.WHITE, 0, 0, 16));
+
+        // Handle
+        View handle = new View(this);
+        handle.setBackground(pillBg(Color.parseColor("#CBD5E1"), 0, 2));
+        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(dp(36), dp(4));
+        hLp.gravity = Gravity.CENTER_HORIZONTAL;
+        hLp.bottomMargin = dp(10);
+        mListDialogCard.addView(handle, hLp);
+
+        // Header row
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+
+        mTvListDialogTitle = new TextView(this);
+        mTvListDialogTitle.setText("书签收藏");
+        mTvListDialogTitle.setTextColor(LIGHT_TEXT);
+        mTvListDialogTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        mTvListDialogTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        head.addView(mTvListDialogTitle, titleLp);
+
+        mBtnListAction = new AcidIcons.BadgeButton(this, AcidIcons.ICON_PLUS, "添加当前页", LIGHT_ACCENT, null);
+        head.addView(mBtnListAction);
+
+        LinearLayout closeBox = new LinearLayout(this);
+        closeBox.setGravity(Gravity.CENTER);
+        closeBox.setPadding(dp(6), dp(6), dp(6), dp(6));
+        AcidIcons.SvgIconView btnClose = new AcidIcons.SvgIconView(this, AcidIcons.ICON_CLOSE, LIGHT_MUTED, 18);
+        closeBox.addView(btnClose);
+        closeBox.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                closeListDialog();
+            }
+        });
+        head.addView(closeBox);
+        mListDialogCard.addView(head);
+
+        // Items Container ScrollView
+        ScrollView scroll = new ScrollView(this);
+        mListItemsContainer = new LinearLayout(this);
+        mListItemsContainer.setOrientation(LinearLayout.VERTICAL);
+        mListItemsContainer.setPadding(0, dp(10), 0, dp(4));
+        scroll.addView(mListItemsContainer, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340));
+        mListDialogCard.addView(scroll, sLp);
+
+        FrameLayout.LayoutParams cLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        overlay.addView(mListDialogCard, cLp);
+
+        return overlay;
+    }
+
+    private void closeListDialog() {
+        mListDialogOverlay.setVisibility(View.GONE);
+    }
+
+    private void showBookmarksSheet() {
+        mTvListDialogTitle.setText("书签收藏");
+        mBtnListAction.setVisibility(View.VISIBLE);
+        mBtnListAction.update(AcidIcons.ICON_PLUS, "添加当前页", LIGHT_ACCENT);
+        mBtnListAction.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                BrowserController.TabSession cur = mController.getActiveTab();
+                if (cur != null && !TextUtils.isEmpty(cur.url)) {
+                    List<BookmarkItem> list = loadBookmarks();
+                    list.add(0, new BookmarkItem(cur.title, cur.url));
+                    saveBookmarks(list);
+                    renderBookmarkItems(list);
+                    Toast.makeText(BrowserActivity.this, "已添加当前页到书签！", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+
+        List<BookmarkItem> list = loadBookmarks();
+        renderBookmarkItems(list);
+        mListDialogOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private List<BookmarkItem> loadBookmarks() {
+        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+        String raw = prefs.getString(PREF_BOOKMARKS, "[]");
+        List<BookmarkItem> list = new ArrayList<BookmarkItem>();
+        try {
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                list.add(new BookmarkItem(o.getString("title"), o.getString("url")));
+            }
+        } catch (Exception ignored) {}
+
+        if (list.isEmpty()) {
+            list.add(new BookmarkItem("Acid 靶场首页", BrowserController.HOME_URL));
+            list.add(new BookmarkItem("Hacker News", "https://news.ycombinator.com"));
+            list.add(new BookmarkItem("GitHub", "https://github.com"));
+            list.add(new BookmarkItem("百度搜索", "https://www.baidu.com"));
+            saveBookmarks(list);
+        }
+        return list;
+    }
+
+    private void renderBookmarkItems(final List<BookmarkItem> list) {
+        mListItemsContainer.removeAllViews();
+        for (int i = 0; i < list.size(); i++) {
+            final BookmarkItem item = list.get(i);
+            final int index = i;
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(8), dp(10), dp(8), dp(10));
+            row.setBackground(pillBg(LIGHT_MENU_ITEM_BG, 0, 8));
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rLp.bottomMargin = dp(6);
+
+            AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_BOOKMARK, LIGHT_ACCENT, 17);
+            row.addView(icon);
+
+            LinearLayout textCol = new LinearLayout(this);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            tLp.leftMargin = dp(8);
+            tLp.rightMargin = dp(8);
+
+            TextView title = new TextView(this);
+            title.setText(item.title);
+            title.setTextColor(LIGHT_TEXT);
+            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setSingleLine(true);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            textCol.addView(title);
+
+            TextView url = new TextView(this);
+            url.setText(item.url);
+            url.setTextColor(LIGHT_MUTED);
+            url.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            url.setSingleLine(true);
+            url.setEllipsize(TextUtils.TruncateAt.END);
+            textCol.addView(url);
+
+            row.addView(textCol, tLp);
+
+            // Delete item button
+            LinearLayout delBox = new LinearLayout(this);
+            delBox.setGravity(Gravity.CENTER);
+            delBox.setPadding(dp(4), dp(4), dp(4), dp(4));
+            AcidIcons.SvgIconView delIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_CLOSE, LIGHT_MUTED, 13);
+            delBox.addView(delIcon);
+            delBox.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    list.remove(index);
+                    saveBookmarks(list);
+                    renderBookmarkItems(list);
+                }
+            });
+            row.addView(delBox);
+
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    closeListDialog();
+                    mController.loadUrl(item.url);
+                }
+            });
+
+            mListItemsContainer.addView(row, rLp);
+        }
+    }
+
+    private void showHistorySheet() {
+        mTvListDialogTitle.setText("历史浏览");
+        mBtnListAction.setVisibility(View.VISIBLE);
+        mBtnListAction.update(AcidIcons.ICON_TRASH, "清空历史", Color.parseColor("#EF4444"));
+        mBtnListAction.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit().putString(PREF_HISTORY, "[]").apply();
+                renderHistoryItems(new ArrayList<BookmarkItem>());
+                Toast.makeText(BrowserActivity.this, "历史记录已清空", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        List<BookmarkItem> list = loadHistory();
+        renderHistoryItems(list);
+        mListDialogOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private List<BookmarkItem> loadHistory() {
+        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+        String raw = prefs.getString(PREF_HISTORY, "[]");
+        List<BookmarkItem> list = new ArrayList<BookmarkItem>();
+        try {
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                list.add(new BookmarkItem(o.getString("title"), o.getString("url")));
+            }
+        } catch (Exception ignored) {}
+        return list;
+    }
+
+    private void renderHistoryItems(final List<BookmarkItem> list) {
+        mListItemsContainer.removeAllViews();
+        if (list.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("暂无历史浏览记录");
+            empty.setTextColor(LIGHT_MUTED);
+            empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(0, dp(30), 0, dp(30));
+            mListItemsContainer.addView(empty);
+            return;
+        }
+
+        for (int i = 0; i < list.size(); i++) {
+            final BookmarkItem item = list.get(i);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(8), dp(10), dp(8), dp(10));
+            row.setBackground(pillBg(LIGHT_MENU_ITEM_BG, 0, 8));
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rLp.bottomMargin = dp(6);
+
+            AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_HISTORY, Color.parseColor("#F59E0B"), 17);
+            row.addView(icon);
+
+            LinearLayout textCol = new LinearLayout(this);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            tLp.leftMargin = dp(8);
+            tLp.rightMargin = dp(8);
+
+            TextView title = new TextView(this);
+            title.setText(item.title);
+            title.setTextColor(LIGHT_TEXT);
+            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setSingleLine(true);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            textCol.addView(title);
+
+            TextView url = new TextView(this);
+            url.setText(item.url);
+            url.setTextColor(LIGHT_MUTED);
+            url.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            url.setSingleLine(true);
+            url.setEllipsize(TextUtils.TruncateAt.END);
+            textCol.addView(url);
+
+            row.addView(textCol, tLp);
+
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    closeListDialog();
+                    mController.loadUrl(item.url);
+                }
+            });
+
+            mListItemsContainer.addView(row, rLp);
+        }
+    }
+
+    private void showDownloadsSheet() {
+        mTvListDialogTitle.setText("下载管理");
+        mBtnListAction.setVisibility(View.GONE);
+        mListItemsContainer.removeAllViews();
+
+        List<BrowserController.DownloadItem> list = mController.getDownloads();
+        if (list.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("暂无下载任务记录");
+            empty.setTextColor(LIGHT_MUTED);
+            empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(0, dp(30), 0, dp(30));
+            mListItemsContainer.addView(empty);
+        } else {
+            for (BrowserController.DownloadItem it : list) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(8), dp(10), dp(8), dp(10));
+                row.setBackground(pillBg(LIGHT_MENU_ITEM_BG, 0, 8));
+                LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                rLp.bottomMargin = dp(6);
+
+                AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_DOWNLOAD, LIGHT_ACCENT, 17);
+                row.addView(icon);
+
+                LinearLayout textCol = new LinearLayout(this);
+                textCol.setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                tLp.leftMargin = dp(8);
+
+                TextView url = new TextView(this);
+                url.setText(it.url);
+                url.setTextColor(LIGHT_TEXT);
+                url.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+                url.setTypeface(Typeface.DEFAULT_BOLD);
+                url.setSingleLine(true);
+                url.setEllipsize(TextUtils.TruncateAt.END);
+                textCol.addView(url);
+
+                TextView info = new TextView(this);
+                info.setText((it.mimeType.isEmpty() ? "文件" : it.mimeType) + " | " + it.contentLength + " B");
+                info.setTextColor(LIGHT_MUTED);
+                info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+                textCol.addView(info);
+
+                row.addView(textCol, tLp);
+                mListItemsContainer.addView(row, rLp);
+            }
+        }
+        mListDialogOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void saveBookmarks(List<BookmarkItem> list) {
+        JSONArray arr = new JSONArray();
+        for (BookmarkItem item : list) {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("title", item.title);
+                o.put("url", item.url);
+                arr.put(o);
+            } catch (Exception ignored) {}
+        }
+        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit().putString(PREF_BOOKMARKS, arr.toString()).apply();
+    }
+
+    private void recordHistory(String url, String title) {
+        if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)) return;
+        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+        String raw = prefs.getString(PREF_HISTORY, "[]");
+        try {
+            JSONArray arr = new JSONArray(raw);
+            JSONArray next = new JSONArray();
+            JSONObject cur = new JSONObject();
+            cur.put("title", TextUtils.isEmpty(title) ? url : title);
+            cur.put("url", url);
+            cur.put("time", System.currentTimeMillis());
+            next.put(cur);
+            for (int i = 0; i < arr.length() && next.length() < 100; i++) {
+                JSONObject o = arr.getJSONObject(i);
+                if (!o.optString("url").equals(url)) {
+                    next.put(o);
+                }
+            }
+            prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    private static class BookmarkItem {
+        public final String title;
+        public final String url;
+        public BookmarkItem(String title, String url) {
+            this.title = title;
+            this.url = url;
+        }
     }
 
     // =========================================================================
@@ -908,190 +1614,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
     }
 
-    // =========================================================================
-    // Dialogs: Tabs, Bookmarks, History, Downloads
-    // =========================================================================
-
-    private void showTabsDialog() {
-        final List<BrowserController.TabSession> tabs = mController.getTabs();
-        BrowserController.TabSession active = mController.getActiveTab();
-        String[] items = new String[tabs.size() + 2];
-        for (int i = 0; i < tabs.size(); i++) {
-            BrowserController.TabSession t = tabs.get(i);
-            String prefix = (active != null && active.id == t.id) ? "[*] " : "[ ] ";
-            items[i] = prefix + "Tab #" + t.id + " - " + t.title;
-        }
-        items[tabs.size()] = "[+] 新建标签页";
-        items[tabs.size() + 1] = "[x] 关闭当前标签页";
-
-        new AlertDialog.Builder(this)
-            .setTitle("标签页管理 (" + tabs.size() + ")")
-            .setItems(items, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface dialog, int which) {
-                    if (which < tabs.size()) {
-                        mController.switchToTab(tabs.get(which).id);
-                    } else if (which == tabs.size()) {
-                        mController.createNewTab(BrowserController.HOME_URL, true);
-                    } else {
-                        BrowserController.TabSession cur = mController.getActiveTab();
-                        if (cur != null) {
-                            mController.closeTab(cur.id);
-                        }
-                    }
-                }
-            })
-            .show();
-    }
-
-    private void showBookmarksDialog() {
-        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
-        String raw = prefs.getString(PREF_BOOKMARKS, "[]");
-        final List<BookmarkItem> list = new ArrayList<BookmarkItem>();
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.getJSONObject(i);
-                list.add(new BookmarkItem(o.getString("title"), o.getString("url")));
-            }
-        } catch (Exception ignored) {}
-
-        if (list.isEmpty()) {
-            list.add(new BookmarkItem("Acid 靶场首页", BrowserController.HOME_URL));
-            list.add(new BookmarkItem("Hacker News", "https://news.ycombinator.com"));
-            list.add(new BookmarkItem("GitHub", "https://github.com"));
-            list.add(new BookmarkItem("百度搜索", "https://www.baidu.com"));
-            saveBookmarks(list);
-        }
-
-        String[] items = new String[list.size() + 1];
-        items[0] = "[+] 收藏当前网页到书签";
-        for (int i = 0; i < list.size(); i++) {
-            items[i + 1] = list.get(i).title + " (" + list.get(i).url + ")";
-        }
-
-        new AlertDialog.Builder(this)
-            .setTitle("书签收藏 (" + list.size() + ")")
-            .setItems(items, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface dialog, int which) {
-                    if (which == 0) {
-                        BrowserController.TabSession cur = mController.getActiveTab();
-                        if (cur != null && !TextUtils.isEmpty(cur.url)) {
-                            list.add(0, new BookmarkItem(cur.title, cur.url));
-                            saveBookmarks(list);
-                            Toast.makeText(BrowserActivity.this, "已添加当前页到书签！", Toast.LENGTH_SHORT).show();
-                        }
-                    } else {
-                        BookmarkItem bm = list.get(which - 1);
-                        mController.loadUrl(bm.url);
-                    }
-                }
-            })
-            .show();
-    }
-
-    private void saveBookmarks(List<BookmarkItem> list) {
-        JSONArray arr = new JSONArray();
-        for (BookmarkItem item : list) {
-            JSONObject o = new JSONObject();
-            try {
-                o.put("title", item.title);
-                o.put("url", item.url);
-                arr.put(o);
-            } catch (Exception ignored) {}
-        }
-        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit().putString(PREF_BOOKMARKS, arr.toString()).apply();
-    }
-
-    private void showHistoryDialog() {
-        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
-        String raw = prefs.getString(PREF_HISTORY, "[]");
-        final List<BookmarkItem> list = new ArrayList<BookmarkItem>();
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.getJSONObject(i);
-                list.add(new BookmarkItem(o.getString("title"), o.getString("url")));
-            }
-        } catch (Exception ignored) {}
-
-        if (list.isEmpty()) {
-            Toast.makeText(this, "暂无历史浏览记录", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        String[] items = new String[list.size() + 1];
-        items[0] = "[x] 清空所有浏览历史";
-        for (int i = 0; i < list.size(); i++) {
-            items[i + 1] = list.get(i).title + " (" + list.get(i).url + ")";
-        }
-
-        new AlertDialog.Builder(this)
-            .setTitle("历史浏览记录 (" + list.size() + ")")
-            .setItems(items, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface dialog, int which) {
-                    if (which == 0) {
-                        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit().putString(PREF_HISTORY, "[]").apply();
-                        Toast.makeText(BrowserActivity.this, "历史记录已清空", Toast.LENGTH_SHORT).show();
-                    } else {
-                        mController.loadUrl(list.get(which - 1).url);
-                    }
-                }
-            })
-            .show();
-    }
-
-    private void recordHistory(String url, String title) {
-        if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)) return;
-        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
-        String raw = prefs.getString(PREF_HISTORY, "[]");
-        try {
-            JSONArray arr = new JSONArray(raw);
-            JSONArray next = new JSONArray();
-            JSONObject cur = new JSONObject();
-            cur.put("title", TextUtils.isEmpty(title) ? url : title);
-            cur.put("url", url);
-            cur.put("time", System.currentTimeMillis());
-            next.put(cur);
-            for (int i = 0; i < arr.length() && next.length() < 100; i++) {
-                JSONObject o = arr.getJSONObject(i);
-                if (!o.optString("url").equals(url)) {
-                    next.put(o);
-                }
-            }
-            prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
-        } catch (Exception ignored) {}
-    }
-
-    private void showDownloadsDialog() {
-        List<BrowserController.DownloadItem> list = mController.getDownloads();
-        if (list.isEmpty()) {
-            Toast.makeText(this, "暂无下载任务记录", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        String[] items = new String[list.size()];
-        for (int i = 0; i < list.size(); i++) {
-            BrowserController.DownloadItem it = list.get(i);
-            items[i] = it.url + " (" + it.mimeType + ", " + it.contentLength + "B)";
-        }
-        new AlertDialog.Builder(this)
-            .setTitle("下载任务记录 (" + list.size() + ")")
-            .setItems(items, null)
-            .setPositiveButton("确定", null)
-            .show();
-    }
-
-    private static class BookmarkItem {
-        public final String title;
-        public final String url;
-        public BookmarkItem(String title, String url) {
-            this.title = title;
-            this.url = url;
-        }
-    }
-
     private void hideKeyboard() {
         try {
             InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
@@ -1196,6 +1718,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void run() {
                 mIconTabs.setCount(tabCount);
                 updateNavButtons();
+                if (mTabsOverviewLayout != null && mTabsOverviewLayout.getVisibility() == View.VISIBLE) {
+                    renderTabsGrid();
+                }
             }
         });
     }
@@ -1212,6 +1737,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     @Override
     public void onBackPressed() {
+        if (mTabsOverviewLayout != null && mTabsOverviewLayout.getVisibility() == View.VISIBLE) {
+            closeTabsOverview();
+            return;
+        }
+        if (mListDialogOverlay != null && mListDialogOverlay.getVisibility() == View.VISIBLE) {
+            closeListDialog();
+            return;
+        }
         if (mMenuOverlay != null && mMenuOverlay.getVisibility() == View.VISIBLE) {
             closeMenuSheet();
             return;
@@ -1237,7 +1770,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     // =========================================================================
-    // Menu Card Item View Component
+    // Menu Card Item View Component (Compact 20dp icon version)
     // =========================================================================
 
     private static class MenuCardItem extends LinearLayout {
@@ -1251,12 +1784,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             setGravity(Gravity.CENTER);
             float d = context.getResources().getDisplayMetrics().density;
             int padH = Math.round(8 * d);
-            int padV = Math.round(12 * d);
+            int padV = Math.round(11 * d);
             setPadding(padH, padV, padH, padV);
 
             applyCardBg(cardBgColor);
 
-            iconView = new AcidIcons.SvgIconView(context, iconId, iconColor, 24);
+            // Refined icon size: 20dp (compact & elegant)
+            iconView = new AcidIcons.SvgIconView(context, iconId, iconColor, 20);
             addView(iconView);
 
             titleView = new TextView(context);
@@ -1266,7 +1800,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             titleView.setTypeface(Typeface.DEFAULT_BOLD);
             titleView.setGravity(Gravity.CENTER);
             LayoutParams tLp = new LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            tLp.topMargin = Math.round(6 * d);
+            tLp.topMargin = Math.round(5 * d);
             addView(titleView, tLp);
 
             descView = new TextView(context);
