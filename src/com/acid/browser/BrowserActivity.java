@@ -39,11 +39,12 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Modern Clean White Browser Edition (Phase 3):
+ * Modern Clean White Browser Edition (Phase 3.1):
  * - Clean white theme by default (Normal browser look & feel)
- * - Classic 5-button bottom toolbar (Back, Forward, Menu, Tabs, Home)
- * - Concise "功能" menu sheet with refined compact vector icons
- * - Full-screen 2-column Tab Manager with real-time web snapshots, direct 'X' close, and bottom actions
+ * - Classic 5-button bottom toolbar: [Back] [Forward] [Home (Center)] [Tabs] [Menu (Right)]
+ * - Toggle Tabs Overview: Tapping [Tabs] button again immediately exits tab overview!
+ * - Bottom 5 buttons stay permanent & stationary on screen
+ * - "无痕模式" moved into "功能" menu sheet
  * - Beautiful custom BottomSheet for Bookmarks and History
  */
 public class BrowserActivity extends Activity implements BrowserController.BrowserStateListener {
@@ -114,19 +115,19 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private TextView mTvTakeoverStatus;
     private AcidIcons.BadgeButton mBtnTakeoverAction;
 
-    // Bottom 5-Button Bar
+    // Bottom 5-Button Bar: Back, Forward, Home (Center), Tabs, Menu
     private View mBottomDivider;
     private LinearLayout mBottomBar;
     private LinearLayout mBtnBack;
     private AcidIcons.SvgIconView mIconBack;
     private LinearLayout mBtnForward;
     private AcidIcons.SvgIconView mIconForward;
-    private LinearLayout mBtnMenu;
-    private AcidIcons.SvgIconView mIconMenu;
-    private LinearLayout mBtnTabs;
-    private AcidIcons.TabBoxView mIconTabs;
     private LinearLayout mBtnHome;
     private AcidIcons.SvgIconView mIconHome;
+    private LinearLayout mBtnTabs;
+    private AcidIcons.TabBoxView mIconTabs;
+    private LinearLayout mBtnMenu;
+    private AcidIcons.SvgIconView mIconMenu;
 
     // Bottom Pop-up Menu Panel ("功能")
     private FrameLayout mMenuOverlay;
@@ -135,13 +136,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private TextView mMenuTitle;
     private AcidIcons.SvgIconView mBtnMenuClose;
     private MenuCardItem mMenuItemNight;
+    private MenuCardItem mMenuItemIncognito;
     private MenuCardItem mMenuItemBookmark;
     private MenuCardItem mMenuItemHistory;
     private MenuCardItem mMenuItemDownload;
     private MenuCardItem mMenuItemDesktop;
     private MenuCardItem mMenuItemAgent;
 
-    // Full-screen Tab Overview Layout (Multi-tab card grid)
+    // Tab Overview Layout (Inside centerFrame, overlaying webview)
     private FrameLayout mTabsOverviewLayout;
     private LinearLayout mTabsGridContainer;
     private TextView mTvTabsCountTitle;
@@ -230,7 +232,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        // 1. Main vertical layout (TopBar + Viewport + Drawer + BottomBar)
+        // 1. Main vertical layout (TopBar + CenterFrame + Drawer + BottomBar)
         mMainContentLayout = new LinearLayout(this);
         mMainContentLayout.setOrientation(LinearLayout.VERTICAL);
         mMainContentLayout.setBackgroundColor(LIGHT_BG);
@@ -282,6 +284,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE ||
                     (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN)) {
                     hideKeyboard();
+                    if (mTabsOverviewLayout != null && mTabsOverviewLayout.getVisibility() == View.VISIBLE) {
+                        closeTabsOverview();
+                    }
                     mController.loadUrl(mEtUrl.getText().toString());
                     return true;
                 }
@@ -291,7 +296,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         mSearchContainer.addView(mEtUrl, etLp);
 
-        // Reload Button inside search container
+        // Reload Button inside search container (Crisp reload circle)
         LinearLayout reloadBox = new LinearLayout(this);
         reloadBox.setGravity(Gravity.CENTER);
         reloadBox.setPadding(dp(4), dp(4), dp(4), dp(4));
@@ -343,12 +348,18 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mTakeoverBar.setVisibility(View.GONE);
         mMainContentLayout.addView(mTakeoverBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // --- Center Viewport ---
+        // --- Center Viewport (contains WebView, Overlay and TabsOverviewLayout) ---
         mCenterFrame = new FrameLayout(this);
         mWebViewContainer = new FrameLayout(this);
         mOverlayView = new AgentOverlayView(this);
         mCenterFrame.addView(mWebViewContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         mCenterFrame.addView(mOverlayView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // Tab Overview Layer sits directly inside centerFrame, leaving bottom bar fully visible and permanent!
+        mTabsOverviewLayout = buildTabsOverviewLayout();
+        mTabsOverviewLayout.setVisibility(View.GONE);
+        mCenterFrame.addView(mTabsOverviewLayout, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         mMainContentLayout.addView(mCenterFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // --- Collapsible Inspector Drawer ---
@@ -356,7 +367,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mDrawerPanel.setVisibility(View.GONE);
         mMainContentLayout.addView(mDrawerPanel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(220)));
 
-        // --- Bottom 5-Button Toolbar ---
+        // --- Bottom 5-Button Toolbar: [Back] [Forward] [Home (Center)] [Tabs] [Menu (Right)] ---
         mBottomDivider = new View(this);
         mBottomDivider.setBackgroundColor(LIGHT_BORDER);
         mMainContentLayout.addView(mBottomDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
@@ -371,12 +382,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mMenuOverlay.setVisibility(View.GONE);
         mRootContainer.addView(mMenuOverlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 3. Fullscreen Tab Overview Layout (多标签页卡片网格全屏层)
-        mTabsOverviewLayout = buildTabsOverviewLayout();
-        mTabsOverviewLayout.setVisibility(View.GONE);
-        mRootContainer.addView(mTabsOverviewLayout, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        // 4. Custom List Dialog Layer (书签与历史浏览专属优雅弹窗)
+        // 3. Custom List Dialog Layer (书签与历史浏览专属优雅弹窗)
         mListDialogOverlay = buildListDialogOverlay();
         mListDialogOverlay.setVisibility(View.GONE);
         mRootContainer.addView(mListDialogOverlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -418,7 +424,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     // =========================================================================
-    // Bottom 5-Button Toolbar: Back, Forward, Menu, Tabs, Home
+    // Bottom 5-Button Toolbar: [Back] [Forward] [Home (Center)] [Tabs] [Menu (Right)]
     // =========================================================================
 
     private LinearLayout buildBottomToolbar() {
@@ -434,6 +440,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mBtnBack.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (mTabsOverviewLayout != null && mTabsOverviewLayout.getVisibility() == View.VISIBLE) {
+                    closeTabsOverview();
+                    return;
+                }
                 BrowserController.TabSession tab = mController.getActiveTab();
                 if (tab != null && tab.webView.canGoBack()) {
                     tab.webView.goBack();
@@ -449,6 +459,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mBtnForward.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (mTabsOverviewLayout != null && mTabsOverviewLayout.getVisibility() == View.VISIBLE) {
+                    closeTabsOverview();
+                    return;
+                }
                 BrowserController.TabSession tab = mController.getActiveTab();
                 if (tab != null && tab.webView.canGoForward()) {
                     tab.webView.goForward();
@@ -457,9 +471,36 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
         bar.addView(mBtnForward, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        // 3. Menu (Center Core)
+        // 3. Home (Placed squarely in the center as requested!)
+        mBtnHome = createBottomTabItem();
+        mIconHome = new AcidIcons.SvgIconView(this, AcidIcons.ICON_HOME, LIGHT_ICON, 21);
+        mBtnHome.addView(mIconHome);
+        mBtnHome.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mTabsOverviewLayout != null && mTabsOverviewLayout.getVisibility() == View.VISIBLE) {
+                    closeTabsOverview();
+                }
+                mController.loadUrl(BrowserController.HOME_URL);
+            }
+        });
+        bar.addView(mBtnHome, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        // 4. Tabs (Click again to EXIT tab overview!)
+        mBtnTabs = createBottomTabItem();
+        mIconTabs = new AcidIcons.TabBoxView(this, LIGHT_ICON, 18);
+        mBtnTabs.addView(mIconTabs);
+        mBtnTabs.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleTabsOverview();
+            }
+        });
+        bar.addView(mBtnTabs, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        // 5. Menu / "功能" (Moved to the 5th spot on the right)
         mBtnMenu = createBottomTabItem();
-        mIconMenu = new AcidIcons.SvgIconView(this, AcidIcons.ICON_MENU, LIGHT_ICON, 21);
+        mIconMenu = new AcidIcons.SvgIconView(this, AcidIcons.ICON_MENU, LIGHT_ICON, 20);
         mBtnMenu.addView(mIconMenu);
         mBtnMenu.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -468,30 +509,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         });
         bar.addView(mBtnMenu, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
-
-        // 4. Tabs
-        mBtnTabs = createBottomTabItem();
-        mIconTabs = new AcidIcons.TabBoxView(this, LIGHT_ICON, 18);
-        mBtnTabs.addView(mIconTabs);
-        mBtnTabs.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                openTabsOverview();
-            }
-        });
-        bar.addView(mBtnTabs, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
-
-        // 5. Home
-        mBtnHome = createBottomTabItem();
-        mIconHome = new AcidIcons.SvgIconView(this, AcidIcons.ICON_HOME, LIGHT_ICON, 20);
-        mBtnHome.addView(mIconHome);
-        mBtnHome.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                mController.loadUrl(BrowserController.HOME_URL);
-            }
-        });
-        bar.addView(mBtnHome, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
         return bar;
     }
@@ -505,7 +522,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     // =========================================================================
-    // Pop-up Menu Panel ("功能" - Modal Bottom Sheet)
+    // Pop-up Menu Panel ("功能" - Modal Bottom Sheet with Incognito Mode)
     // =========================================================================
 
     private FrameLayout buildMenuOverlay() {
@@ -527,7 +544,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         // Bottom rounded card
         mMenuCard = new LinearLayout(this);
         mMenuCard.setOrientation(LinearLayout.VERTICAL);
-        mMenuCard.setPadding(dp(16), dp(10), dp(16), dp(20));
+        mMenuCard.setPadding(dp(14), dp(10), dp(14), dp(18));
 
         // Top drag handle
         View handle = new View(this);
@@ -564,7 +581,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         titleRow.addView(closeBox);
         mMenuCard.addView(titleRow);
 
-        // Menu items grid (Row 1: Night, Bookmarks, History)
+        // Menu items grid (Row 1: 4 items - Night, Incognito, Bookmarks, History)
         LinearLayout row1 = new LinearLayout(this);
         row1.setOrientation(LinearLayout.HORIZONTAL);
         row1.setPadding(0, dp(12), 0, dp(6));
@@ -583,8 +600,30 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         );
         LinearLayout.LayoutParams itemLp1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp1.rightMargin = dp(6);
+        itemLp1.rightMargin = dp(4);
         row1.addView(mMenuItemNight, itemLp1);
+
+        mMenuItemIncognito = new MenuCardItem(
+            this, AcidIcons.ICON_INCOGNITO, "无痕模式",
+            mIncognitoMode ? "已开启" : "已关闭",
+            mIncognitoMode ? Color.parseColor("#8B5CF6") : LIGHT_ACCENT, LIGHT_TEXT, LIGHT_MUTED, LIGHT_MENU_ITEM_BG,
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    mIncognitoMode = !mIncognitoMode;
+                    updateMenuCards();
+                    Toast.makeText(
+                        BrowserActivity.this,
+                        mIncognitoMode ? "已开启无痕模式 (不记录浏览足迹与缓存)" : "已恢复正常浏览模式",
+                        Toast.LENGTH_SHORT
+                    ).show();
+                }
+            }
+        );
+        LinearLayout.LayoutParams itemLp2 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        itemLp2.leftMargin = dp(2);
+        itemLp2.rightMargin = dp(2);
+        row1.addView(mMenuItemIncognito, itemLp2);
 
         mMenuItemBookmark = new MenuCardItem(
             this, AcidIcons.ICON_BOOKMARK, "书签收藏", "快速直达",
@@ -597,10 +636,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
             }
         );
-        LinearLayout.LayoutParams itemLp2 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp2.leftMargin = dp(3);
-        itemLp2.rightMargin = dp(3);
-        row1.addView(mMenuItemBookmark, itemLp2);
+        LinearLayout.LayoutParams itemLp3 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        itemLp3.leftMargin = dp(2);
+        itemLp3.rightMargin = dp(2);
+        row1.addView(mMenuItemBookmark, itemLp3);
 
         mMenuItemHistory = new MenuCardItem(
             this, AcidIcons.ICON_HISTORY, "历史浏览", "足迹记录",
@@ -613,31 +652,16 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
             }
         );
-        LinearLayout.LayoutParams itemLp3 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp3.leftMargin = dp(6);
-        row1.addView(mMenuItemHistory, itemLp3);
+        LinearLayout.LayoutParams itemLp4 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        itemLp4.leftMargin = dp(4);
+        row1.addView(mMenuItemHistory, itemLp4);
 
         mMenuCard.addView(row1);
 
-        // Menu items grid (Row 2: Downloads, Desktop/Mobile, Agent Debug)
+        // Menu items grid (Row 2: 3 items - Desktop, Downloads, Agent Debug)
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
         row2.setPadding(0, dp(6), 0, dp(6));
-
-        mMenuItemDownload = new MenuCardItem(
-            this, AcidIcons.ICON_DOWNLOAD, "下载管理", "任务查看",
-            LIGHT_ACCENT, LIGHT_TEXT, LIGHT_MUTED, LIGHT_MENU_ITEM_BG,
-            new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    closeMenuSheet();
-                    showDownloadsSheet();
-                }
-            }
-        );
-        LinearLayout.LayoutParams itemLp4 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp4.rightMargin = dp(6);
-        row2.addView(mMenuItemDownload, itemLp4);
 
         mMenuItemDesktop = new MenuCardItem(
             this,
@@ -660,9 +684,24 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         );
         LinearLayout.LayoutParams itemLp5 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp5.leftMargin = dp(3);
-        itemLp5.rightMargin = dp(3);
+        itemLp5.rightMargin = dp(4);
         row2.addView(mMenuItemDesktop, itemLp5);
+
+        mMenuItemDownload = new MenuCardItem(
+            this, AcidIcons.ICON_DOWNLOAD, "下载管理", "任务查看",
+            LIGHT_ACCENT, LIGHT_TEXT, LIGHT_MUTED, LIGHT_MENU_ITEM_BG,
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    closeMenuSheet();
+                    showDownloadsSheet();
+                }
+            }
+        );
+        LinearLayout.LayoutParams itemLp6 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        itemLp6.leftMargin = dp(2);
+        itemLp6.rightMargin = dp(2);
+        row2.addView(mMenuItemDownload, itemLp6);
 
         mMenuItemAgent = new MenuCardItem(
             this, AcidIcons.ICON_TERMINAL, "Agent调试", ":3090控制台",
@@ -676,9 +715,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
             }
         );
-        LinearLayout.LayoutParams itemLp6 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp6.leftMargin = dp(6);
-        row2.addView(mMenuItemAgent, itemLp6);
+        LinearLayout.LayoutParams itemLp7 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        itemLp7.leftMargin = dp(4);
+        row2.addView(mMenuItemAgent, itemLp7);
 
         mMenuCard.addView(row2);
 
@@ -715,6 +754,15 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 "夜间模式",
                 mIsDarkMode ? "已开启" : "已关闭",
                 iconCol, textCol, mutedCol, itemBg
+            );
+        }
+
+        if (mMenuItemIncognito != null) {
+            mMenuItemIncognito.update(
+                AcidIcons.ICON_INCOGNITO,
+                "无痕模式",
+                mIncognitoMode ? "已开启" : "已关闭",
+                mIncognitoMode ? Color.parseColor("#8B5CF6") : iconCol, textCol, mutedCol, itemBg
             );
         }
 
@@ -793,9 +841,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mBtnShield.setColor(accent);
 
         updateNavButtons();
-        mIconMenu.setColor(icon);
-        mIconTabs.setColor(icon);
         mIconHome.setColor(icon);
+        mIconTabs.setColor(icon);
+        mIconMenu.setColor(icon);
 
         // Menu Card styling
         GradientDrawable cardGd = new GradientDrawable();
@@ -808,7 +856,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     // =========================================================================
-    // Full-screen Tab Overview (2-Column Grid with Snapshots, 'X' Close & Bottom Bar)
+    // Tab Overview (2-Column Grid with Snapshots, 'X' Close & Permanent Bottom Bar)
     // =========================================================================
 
     private FrameLayout buildTabsOverviewLayout() {
@@ -818,12 +866,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         LinearLayout contentCol = new LinearLayout(this);
         contentCol.setOrientation(LinearLayout.VERTICAL);
 
-        // 1. Top bar for Overview: "标签页管理 (N)" + Close 'X'
+        // 1. Top bar for Overview: "标签页 (N)" + [+] New + [Trash] Clear + [X] Close
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setBackgroundColor(Color.WHITE);
-        topBar.setPadding(dp(16), dp(10), dp(16), dp(10));
+        topBar.setPadding(dp(16), dp(8), dp(16), dp(8));
 
         mTvTabsCountTitle = new TextView(this);
         mTvTabsCountTitle.setText("标签页 (1)");
@@ -833,9 +881,43 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         topBar.addView(mTvTabsCountTitle, tLp);
 
+        // Action: New Tab (+)
+        LinearLayout newBox = new LinearLayout(this);
+        newBox.setGravity(Gravity.CENTER);
+        newBox.setPadding(dp(7), dp(6), dp(7), dp(6));
+        AcidIcons.SvgIconView btnNew = new AcidIcons.SvgIconView(this, AcidIcons.ICON_PLUS, LIGHT_ACCENT, 18);
+        newBox.addView(btnNew);
+        newBox.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mController.createNewTab(BrowserController.HOME_URL, true);
+                closeTabsOverview();
+            }
+        });
+        topBar.addView(newBox);
+
+        // Action: Clear others (Trash)
+        LinearLayout clearBox = new LinearLayout(this);
+        clearBox.setGravity(Gravity.CENTER);
+        clearBox.setPadding(dp(7), dp(6), dp(7), dp(6));
+        AcidIcons.SvgIconView btnClear = new AcidIcons.SvgIconView(this, AcidIcons.ICON_TRASH, LIGHT_MUTED, 18);
+        clearBox.addView(btnClear);
+        clearBox.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mController != null && mController.getActiveTab() != null) {
+                    mController.closeOtherTabs(mController.getActiveTab().id);
+                    renderTabsGrid();
+                    Toast.makeText(BrowserActivity.this, "已清除其他标签页", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        topBar.addView(clearBox);
+
+        // Action: Exit overview (X)
         LinearLayout closeBox = new LinearLayout(this);
         closeBox.setGravity(Gravity.CENTER);
-        closeBox.setPadding(dp(6), dp(6), dp(6), dp(6));
+        closeBox.setPadding(dp(7), dp(6), dp(7), dp(6));
         AcidIcons.SvgIconView btnClose = new AcidIcons.SvgIconView(this, AcidIcons.ICON_CLOSE, LIGHT_MUTED, 18);
         closeBox.addView(btnClose);
         closeBox.setOnClickListener(new View.OnClickListener() {
@@ -845,6 +927,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         });
         topBar.addView(closeBox);
+
         contentCol.addView(topBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         View div = new View(this);
@@ -861,87 +944,16 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         ));
         contentCol.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 3. Bottom Action Bar (清除, 无痕模式, 新建, 返回)
-        View bDiv = new View(this);
-        bDiv.setBackgroundColor(LIGHT_BORDER);
-        contentCol.addView(bDiv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
-
-        LinearLayout bottomActionToolbar = new LinearLayout(this);
-        bottomActionToolbar.setOrientation(LinearLayout.HORIZONTAL);
-        bottomActionToolbar.setGravity(Gravity.CENTER_VERTICAL);
-        bottomActionToolbar.setBackgroundColor(Color.WHITE);
-
-        // Action 1: 清除 (Close others)
-        LinearLayout btnClear = createOverviewActionBtn("清除", AcidIcons.ICON_TRASH, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mController != null && mController.getActiveTab() != null) {
-                    mController.closeOtherTabs(mController.getActiveTab().id);
-                    renderTabsGrid();
-                    Toast.makeText(BrowserActivity.this, "已清除其他标签页", Toast.LENGTH_SHORT).show();
-                }
-            }
-        });
-        bottomActionToolbar.addView(btnClear, new LinearLayout.LayoutParams(0, dp(54), 1f));
-
-        // Action 2: 无痕模式
-        LinearLayout btnIncognito = createOverviewActionBtn("无痕模式", AcidIcons.ICON_INCOGNITO, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                mIncognitoMode = !mIncognitoMode;
-                Toast.makeText(BrowserActivity.this, mIncognitoMode ? "已开启无痕浏览模式" : "已切换为正常模式", Toast.LENGTH_SHORT).show();
-            }
-        });
-        bottomActionToolbar.addView(btnIncognito, new LinearLayout.LayoutParams(0, dp(54), 1f));
-
-        // Action 3: 新建 (+)
-        LinearLayout btnNew = createOverviewActionBtn("新建", AcidIcons.ICON_PLUS, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mController != null) {
-                    mController.createNewTab(BrowserController.HOME_URL, true);
-                    closeTabsOverview();
-                }
-            }
-        });
-        bottomActionToolbar.addView(btnNew, new LinearLayout.LayoutParams(0, dp(54), 1f));
-
-        // Action 4: 返回
-        LinearLayout btnReturn = createOverviewActionBtn("返回", AcidIcons.ICON_RETURN, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                closeTabsOverview();
-            }
-        });
-        bottomActionToolbar.addView(btnReturn, new LinearLayout.LayoutParams(0, dp(54), 1f));
-
-        contentCol.addView(bottomActionToolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
         root.addView(contentCol, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         return root;
     }
 
-    private LinearLayout createOverviewActionBtn(String label, int iconId, View.OnClickListener listener) {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setGravity(Gravity.CENTER);
-        box.setClickable(true);
-        box.setFocusable(true);
-
-        AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(this, iconId, LIGHT_ICON, 19);
-        box.addView(icon);
-
-        TextView tv = new TextView(this);
-        tv.setText(label);
-        tv.setTextColor(LIGHT_ICON);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(2);
-        box.addView(tv, lp);
-
-        if (listener != null) box.setOnClickListener(listener);
-        return box;
+    private void toggleTabsOverview() {
+        if (mTabsOverviewLayout != null && mTabsOverviewLayout.getVisibility() == View.VISIBLE) {
+            closeTabsOverview();
+        } else {
+            openTabsOverview();
+        }
     }
 
     private void openTabsOverview() {
@@ -1450,6 +1462,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     private void recordHistory(String url, String title) {
+        if (mIncognitoMode) return; // Incognito mode: never save browsing history
         if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)) return;
         SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
         String raw = prefs.getString(PREF_HISTORY, "[]");
@@ -1783,8 +1796,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             setOrientation(VERTICAL);
             setGravity(Gravity.CENTER);
             float d = context.getResources().getDisplayMetrics().density;
-            int padH = Math.round(8 * d);
-            int padV = Math.round(11 * d);
+            int padH = Math.round(6 * d);
+            int padV = Math.round(10 * d);
             setPadding(padH, padV, padH, padV);
 
             applyCardBg(cardBgColor);
@@ -1796,7 +1809,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             titleView = new TextView(context);
             titleView.setText(title);
             titleView.setTextColor(textColor);
-            titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
             titleView.setTypeface(Typeface.DEFAULT_BOLD);
             titleView.setGravity(Gravity.CENTER);
             LayoutParams tLp = new LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1806,7 +1819,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             descView = new TextView(context);
             descView.setText(desc);
             descView.setTextColor(mutedColor);
-            descView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+            descView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
             descView.setSingleLine(true);
             descView.setEllipsize(TextUtils.TruncateAt.END);
             descView.setGravity(Gravity.CENTER);
