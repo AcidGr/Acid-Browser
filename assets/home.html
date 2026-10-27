@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Acid · Agentic Browser</title>
+    <style>
+        :root {
+            --bg: #F8FAFC;
+            --card: #FFFFFF;
+            --border: #E2E8F0;
+            --acid: #00BA76;
+            --cyan: #0284C7;
+            --amber: #D97706;
+            --text: #0F172A;
+            --muted: #64748B;
+            --input-bg: #F8FAFC;
+            --link-bg: #F1F5F9;
+            --link-border: #E2E8F0;
+            --log-bg: #F1F5F9;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+        }
+        body.dark-mode {
+            --bg: #0A0E14;
+            --card: #121822;
+            --border: #1E293B;
+            --acid: #00FF88;
+            --cyan: #00E5FF;
+            --amber: #FFB300;
+            --text: #E2E8F0;
+            --muted: #94A3B8;
+            --input-bg: #0D121A;
+            --link-bg: #1A2332;
+            --link-border: #2D3B4E;
+            --log-bg: #080B10;
+            --shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            padding: 16px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+        .svg-icon {
+            width: 16px;
+            height: 16px;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            fill: none;
+            vertical-align: -3px;
+            margin-right: 5px;
+        }
+        .header {
+            border: 1px solid var(--border);
+            background: var(--card);
+            border-radius: 12px;
+            padding: 14px 16px;
+            margin-bottom: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            box-shadow: var(--shadow);
+        }
+        .brand-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .brand-logo {
+            width: 32px;
+            height: 32px;
+            stroke: var(--acid);
+            stroke-width: 2;
+            fill: rgba(0, 186, 118, 0.1);
+        }
+        .header h1 {
+            font-size: 16.5px;
+            color: var(--text);
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            background: rgba(0, 186, 118, 0.1);
+            color: var(--acid);
+            border: 1px solid var(--acid);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 14px;
+        }
+        @media (min-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .desktop-only-banner {
+                display: flex !important;
+            }
+        }
+        .desktop-only-banner {
+            display: none;
+            align-items: center;
+            background: rgba(2, 132, 199, 0.08);
+            border: 1px solid var(--cyan);
+            color: var(--cyan);
+            padding: 10px 14px;
+            border-radius: 8px;
+            margin-bottom: 14px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: var(--shadow);
+        }
+        .card h2 {
+            font-size: 13.5px;
+            color: var(--cyan);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            font-weight: 700;
+        }
+        .kv {
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 6px;
+            word-break: break-all;
+        }
+        .kv span { color: var(--text); font-weight: 600; }
+        .quick-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .quick-links a {
+            display: inline-flex;
+            align-items: center;
+            padding: 8px 14px;
+            background: var(--link-bg);
+            color: var(--text);
+            border: 1px solid var(--link-border);
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+        }
+        .quick-links a:hover, .quick-links a:active {
+            border-color: var(--acid);
+            color: var(--acid);
+        }
+        .form-row {
+            margin-bottom: 10px;
+        }
+        .form-row label {
+            display: block;
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+        input[type="text"], select {
+            width: 100%;
+            padding: 9px 12px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 8px;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        input[type="text"]:focus, select:focus {
+            border-color: var(--acid);
+        }
+        .btn-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        button {
+            display: inline-flex;
+            align-items: center;
+            padding: 9px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--acid);
+            background: rgba(0, 186, 118, 0.1);
+            color: var(--acid);
+            font-weight: 600;
+            font-size: 12.5px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        button.secondary {
+            border-color: var(--amber);
+            background: rgba(217, 119, 6, 0.1);
+            color: var(--amber);
+        }
+        #action-log {
+            margin-top: 12px;
+            padding: 10px;
+            background: var(--log-bg);
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--acid);
+            min-height: 38px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="brand-row">
+            <img src="acid_logo.png" alt="Acid" style="width:34px;height:34px;border-radius:8px;" />
+            <div>
+                <h1>Acid Browser · AI 内核</h1>
+                <div style="font-size:11.5px;color:var(--muted);">原生支持 Agent Loop · 零敏感权限 · 双端视口自由切换</div>
+            </div>
+        </div>
+        <div class="badge" id="identity-badge">Detecting...</div>
+    </div>
+
+    <div class="desktop-only-banner" id="desktop-banner">
+        <svg class="svg-icon" viewBox="0 0 24 24">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <path d="M8 21h8M12 17v4"/>
+        </svg>
+        <span>已激活 Desktop 宽视口模式 (Width >= 900px) — 电脑端专属双栏布局与完整 DOM 已解锁</span>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <h2>
+                <svg class="svg-icon" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="9"/>
+                    <path d="M12 8v4l3 3"/>
+                </svg>
+                1. 实时环境指纹与视口探针
+            </h2>
+            <div class="kv">Viewport (CSS px): <span id="vp-size">-</span></div>
+            <div class="kv">Screen Resolution: <span id="scr-size">-</span></div>
+            <div class="kv">Platform / TouchPoints: <span id="plat-info">-</span></div>
+            <div class="kv">navigator.webdriver: <span id="wd-info">-</span></div>
+            <div class="kv">User-Agent: <span id="ua-info">-</span></div>
+        </div>
+
+        <div class="card">
+            <h2>
+                <svg class="svg-icon" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                </svg>
+                2. 常用站点快速访问
+            </h2>
+            <div class="quick-links">
+                <a href="https://news.ycombinator.com/">Hacker News</a>
+                <a href="https://github.com/trending">GitHub Trending</a>
+                <a href="https://www.zhihu.com/billboard">知乎热榜 (测防跳App)</a>
+                <a href="https://www.bilibili.com/">Bilibili (测PC/移动切换)</a>
+                <a href="https://www.baidu.com/">百度搜索</a>
+                <a href="https://www.v2ex.com/">V2EX</a>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>
+                <svg class="svg-icon" viewBox="0 0 24 24">
+                    <rect x="4" y="4" width="16" height="16" rx="2"/>
+                    <rect x="9" y="9" width="6" height="6"/>
+                    <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>
+                </svg>
+                3. Agent 动作靶场 (Observe / Fill / Click / Select)
+            </h2>
+            <form id="test-form" onsubmit="handleFormSubmit(event)">
+                <div class="form-row">
+                    <label for="agent-query">任务指令输入框 (测试 React-safe 免键盘填充)</label>
+                    <input type="text" id="agent-query" name="query" placeholder="等待 Agent 调用 fill(ref, text)..." />
+                </div>
+                <div class="form-row">
+                    <label for="agent-engine">目标引擎选择 (测试 selectOption)</label>
+                    <select id="agent-engine" name="engine" onchange="logEvent('Selected engine: ' + this.value)">
+                        <option value="deepseek">DeepSeek-V3 / R1</option>
+                        <option value="claude">Claude 4 Sonnet</option>
+                        <option value="gemini">Gemini 2.5 Pro</option>
+                    </select>
+                </div>
+                <div class="btn-row">
+                    <button type="submit" id="btn-submit">
+                        <svg class="svg-icon" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                        <span>提交表单</span>
+                    </button>
+                    <button type="button" id="btn-counter" onclick="incrementCounter()">
+                        <svg class="svg-icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+                        <span id="counter-label">点击计数 (0)</span>
+                    </button>
+                    <button type="button" class="secondary" id="btn-hijack" onclick="triggerDeepLink()">
+                        <svg class="svg-icon" viewBox="0 0 24 24"><path d="M12 2.5L4 6v5.5C4 16.8 7.4 20.6 12 22c4.6-1.4 8-5.2 8-10.5V6L12 2.5z"/><path d="M9 12l2 2 4-4"/></svg>
+                        <span>测试流氓跳 App (zhihu://)</span>
+                    </button>
+                </div>
+            </form>
+            <div id="action-log">Ready. 等待人类或 Agent 触发交互事件...</div>
+        </div>
+    </div>
+
+    <script>
+        let count = 0;
+        const SVG_DESKTOP = '<svg class="svg-icon" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
+        const SVG_MOBILE = '<svg class="svg-icon" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 5h4M10 19h4"/></svg>';
+
+        function updateProbe() {
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            document.getElementById('vp-size').textContent = vw + ' x ' + vh + ' (DPR ' + window.devicePixelRatio.toFixed(2) + ')';
+            document.getElementById('scr-size').textContent = window.screen.width + ' x ' + window.screen.height;
+            document.getElementById('plat-info').textContent = navigator.platform + ' / maxTouchPoints=' + navigator.maxTouchPoints;
+            document.getElementById('wd-info').textContent = String(navigator.webdriver);
+            document.getElementById('ua-info').textContent = navigator.userAgent;
+            const isDesktop = vw >= 900 || !/Android|Mobile/i.test(navigator.userAgent);
+            const badge = document.getElementById('identity-badge');
+            badge.innerHTML = (isDesktop ? SVG_DESKTOP + '<span>DESKTOP IDENTITY</span>' : SVG_MOBILE + '<span>MOBILE IDENTITY</span>');
+            badge.style.borderColor = isDesktop ? '#0284C7' : '#00BA76';
+            badge.style.color = isDesktop ? '#0284C7' : '#00BA76';
+        }
+        function logEvent(msg) {
+            const box = document.getElementById('action-log');
+            box.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+        }
+        function incrementCounter() {
+            count++;
+            document.getElementById('counter-label').textContent = '点击计数 (' + count + ')';
+            logEvent('Button clicked! Counter = ' + count);
+        }
+        function handleFormSubmit(e) {
+            e.preventDefault();
+            const q = document.getElementById('agent-query').value;
+            const eng = document.getElementById('agent-engine').value;
+            logEvent('Form Submitted -> query="' + q + '", engine="' + eng + '"');
+        }
+        function triggerDeepLink() {
+            logEvent('Attempting zhihu://questions/123456 scheme redirect...');
+            window.location.href = 'zhihu://questions/123456';
+        }
+        window.addEventListener('resize', updateProbe);
+        updateProbe();
+    </script>
+</body>
+</html>
