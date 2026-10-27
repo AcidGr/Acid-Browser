@@ -70,6 +70,7 @@ public class BrowserController {
         public String url = HOME_URL;
         public int progress = 0;
         public boolean isLoading = false;
+        public Bitmap snapshot = null;
 
         public TabSession(int id, WebView webView) {
             this.id = id;
@@ -243,7 +244,28 @@ public class BrowserController {
         return tab;
     }
 
+    public void captureActiveTabSnapshot() {
+        if (mActiveTab == null || mActiveTab.webView == null) return;
+        try {
+            WebView wv = mActiveTab.webView;
+            int w = wv.getWidth();
+            int h = wv.getHeight();
+            if (w <= 0 || h <= 0) return;
+            float scale = 0.35f;
+            int sw = Math.max(1, (int)(w * scale));
+            int sh = Math.max(1, (int)(h * scale));
+            Bitmap bmp = Bitmap.createBitmap(sw, sh, Bitmap.Config.RGB_565);
+            Canvas canvas = new Canvas(bmp);
+            canvas.scale(scale, scale);
+            wv.draw(canvas);
+            mActiveTab.snapshot = bmp;
+        } catch (Exception ignored) {}
+    }
+
     public boolean switchToTab(int tabId) {
+        if (mActiveTab != null && mActiveTab.id != tabId) {
+            captureActiveTabSnapshot();
+        }
         for (TabSession t : mTabs) {
             if (t.id == tabId) {
                 mActiveTab = t;
@@ -283,6 +305,11 @@ public class BrowserController {
             removed.webView.destroy();
         } catch (Exception ignored) {}
 
+        if (removed.snapshot != null && !removed.snapshot.isRecycled()) {
+            try { removed.snapshot.recycle(); } catch (Exception ignored) {}
+            removed.snapshot = null;
+        }
+
         if (mActiveTab == removed) {
             int nextIdx = Math.max(0, idx - 1);
             switchToTab(mTabs.get(nextIdx).id);
@@ -290,6 +317,18 @@ public class BrowserController {
             mListener.onTabsChanged(mTabs.size(), mActiveTab.id);
         }
         return true;
+    }
+
+    public void closeOtherTabs(int keepTabId) {
+        List<TabSession> toRemove = new ArrayList<TabSession>();
+        for (TabSession t : mTabs) {
+            if (t.id != keepTabId) {
+                toRemove.add(t);
+            }
+        }
+        for (TabSession t : toRemove) {
+            closeTab(t.id);
+        }
     }
 
     public List<TabSession> getTabs() {
@@ -386,6 +425,29 @@ public class BrowserController {
                     mListener.onUrlChanged(url, tab.title);
                     mListener.onProgressChanged(100, false);
                 }
+                final WebView fView = view;
+                fView.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            int w = fView.getWidth();
+                            int h = fView.getHeight();
+                            if (w > 0 && h > 0) {
+                                float scale = 0.35f;
+                                int sw = Math.max(1, (int)(w * scale));
+                                int sh = Math.max(1, (int)(h * scale));
+                                Bitmap bmp = Bitmap.createBitmap(sw, sh, Bitmap.Config.RGB_565);
+                                Canvas canvas = new Canvas(bmp);
+                                canvas.scale(scale, scale);
+                                fView.draw(canvas);
+                                if (tab.snapshot != null && !tab.snapshot.isRecycled()) {
+                                    tab.snapshot.recycle();
+                                }
+                                tab.snapshot = bmp;
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }, 200);
             }
         });
 
