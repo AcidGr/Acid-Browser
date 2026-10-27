@@ -361,6 +361,63 @@ public class HttpControlServer {
             return res;
         }
 
+        if ("/api/cookies".equals(path)) {
+            String action = body.optString("action", query.get("action") != null ? query.get("action") : "get").toLowerCase();
+            String targetUrl = body.optString("url", query.get("url"));
+            if (targetUrl == null || targetUrl.isEmpty()) {
+                BrowserController.TabSession active = mController.getActiveTab();
+                targetUrl = active != null ? active.url : BrowserController.HOME_URL;
+            }
+
+            JSONObject res = new JSONObject();
+            if ("clear".equals(action) || "delete".equals(action) || "DELETE".equals(method)) {
+                mController.clearAllCookies();
+                res.put("ok", true);
+                res.put("message", "All cookies cleared");
+                return res;
+            }
+
+            if ("set".equals(action) || "add".equals(action) || ("POST".equals(method) && (body.has("cookie") || body.has("cookies")))) {
+                if (body.has("cookies")) {
+                    JSONArray cArr = body.optJSONArray("cookies");
+                    for (int i = 0; i < cArr.length(); i++) {
+                        mController.setCookieForUrl(targetUrl, cArr.optString(i));
+                    }
+                } else {
+                    String cVal = body.optString("cookie", body.optString("value", ""));
+                    mController.setCookieForUrl(targetUrl, cVal);
+                }
+                res.put("ok", true);
+                res.put("url", targetUrl);
+                res.put("cookies", mController.getCookieForUrl(targetUrl));
+                return res;
+            }
+
+            // Default: GET cookies
+            String rawCookies = mController.getCookieForUrl(targetUrl);
+            res.put("ok", true);
+            res.put("url", targetUrl);
+            res.put("raw", rawCookies != null ? rawCookies : "");
+            JSONArray items = new JSONArray();
+            if (rawCookies != null && !rawCookies.trim().isEmpty()) {
+                String[] parts = rawCookies.split(";");
+                for (String p : parts) {
+                    int eq = p.indexOf('=');
+                    JSONObject cObj = new JSONObject();
+                    if (eq > 0) {
+                        cObj.put("name", p.substring(0, eq).trim());
+                        cObj.put("value", p.substring(eq + 1).trim());
+                    } else {
+                        cObj.put("name", p.trim());
+                        cObj.put("value", "");
+                    }
+                    items.put(cObj);
+                }
+            }
+            res.put("items", items);
+            return res;
+        }
+
         JSONObject notFound = new JSONObject();
         notFound.put("ok", false);
         notFound.put("error", "Unknown endpoint: " + path);
