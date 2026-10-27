@@ -239,9 +239,9 @@ public class AcidIcons {
                 break;
 
             case ICON_RELOAD:
-                // SVG Circular reload arc + arrowhead
-                p.addArc(new RectF(4.2f, 4.2f, 19.8f, 19.8f), -40f, 290f);
-                p.addPath(parseSvgPath("M 16 2.8 L 19.8 6.8 L 14.5 7.6"));
+                // Classic crisp clockwise reload arrow (Chrome / Safari style)
+                p.addArc(new RectF(4.5f, 4.5f, 19.5f, 19.5f), -60f, 300f);
+                p.addPath(parseSvgPath("M 12.5 3.2 L 18 5.6 L 15.6 11"));
                 break;
 
             case ICON_MOBILE:
