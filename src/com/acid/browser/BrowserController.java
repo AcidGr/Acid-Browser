@@ -680,6 +680,41 @@ public class BrowserController {
         return mDownloads;
     }
 
+    public String getCookieForUrl(String url) {
+        if (url == null || url.isEmpty()) {
+            url = mActiveTab != null ? mActiveTab.url : HOME_URL;
+        }
+        try {
+            return CookieManager.getInstance().getCookie(url);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    public boolean setCookieForUrl(String url, String cookieString) {
+        if (url == null || url.isEmpty() || cookieString == null) return false;
+        try {
+            CookieManager.getInstance().setCookie(url, cookieString);
+            if (Build.VERSION.SDK_INT >= 21) {
+                CookieManager.getInstance().flush();
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public void clearAllCookies() {
+        try {
+            if (Build.VERSION.SDK_INT >= 21) {
+                CookieManager.getInstance().removeAllCookies(null);
+                CookieManager.getInstance().flush();
+            } else {
+                CookieManager.getInstance().removeAllCookie();
+            }
+        } catch (Exception ignored) {}
+    }
+
     public int getBlockedDeepLinksCount() {
         return mBlockedDeepLinks;
     }
