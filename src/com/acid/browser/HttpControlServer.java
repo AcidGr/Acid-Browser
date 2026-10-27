@@ -418,6 +418,74 @@ public class HttpControlServer {
             return res;
         }
 
+        if ("/api/cookies/import".equals(path)) {
+            // Batch import cookies (e.g. migrated from Via Browser Chromium DB).
+            // Body: { "cookies": [ {host,name,value,path,secure,httpOnly,sameSite,expires}, ... ] }
+            JSONArray arr = body.optJSONArray("cookies");
+            JSONObject res = new JSONObject();
+            if (arr == null) {
+                res.put("ok", false);
+                res.put("error", "Missing 'cookies' array in request body.");
+                return res;
+            }
+
+            final int total = arr.length();
+            final java.util.concurrent.atomic.AtomicInteger okCount = new java.util.concurrent.atomic.AtomicInteger(0);
+            final java.util.concurrent.atomic.AtomicInteger failCount = new java.util.concurrent.atomic.AtomicInteger(0);
+            final java.util.Set<String> touchedHosts = new java.util.HashSet<String>();
+
+            for (int i = 0; i < total; i++) {
+                JSONObject c = arr.optJSONObject(i);
+                if (c == null) { failCount.incrementAndGet(); continue; }
+
+                String host = c.optString("host", "");
+                String name = c.optString("name", "");
+                String value = c.optString("value", "");
+                String cPath = c.optString("path", "/");
+                boolean secure = c.optBoolean("secure", false);
+                boolean httpOnly = c.optBoolean("httpOnly", false);
+                int sameSite = c.optInt("sameSite", -1);
+                long expires = c.optLong("expires", 0);
+
+                if (host.isEmpty() || name.isEmpty()) { failCount.incrementAndGet(); continue; }
+
+                String bareHost = host.startsWith(".") ? host.substring(1) : host;
+                String scheme = secure ? "https" : "http";
+                String url = scheme + "://" + bareHost + (cPath.startsWith("/") ? cPath : "/" + cPath);
+
+                StringBuilder sb = new StringBuilder();
+                sb.append(name).append("=").append(value).append("; Domain=").append(host);
+                sb.append("; Path=").append(cPath.startsWith("/") ? cPath : "/" + cPath);
+                if (secure) sb.append("; Secure");
+                if (httpOnly) sb.append("; HttpOnly");
+                if (expires > 0) {
+                    java.text.SimpleDateFormat fmt =
+                        new java.text.SimpleDateFormat("EEE, dd-MMM-yyyy HH:mm:ss zzz", java.util.Locale.US);
+                    sb.append("; Expires=").append(fmt.format(new java.util.Date(expires * 1000L)));
+                }
+                if (sameSite == 0) sb.append("; SameSite=None");
+                else if (sameSite == 1) sb.append("; SameSite=Lax");
+                else if (sameSite == 2) sb.append("; SameSite=Strict");
+
+                if (mController.setCookieForUrl(url, sb.toString())) {
+                    okCount.incrementAndGet();
+                    touchedHosts.add(host);
+                } else {
+                    failCount.incrementAndGet();
+                }
+            }
+
+            // Force flush to disk so the cookies survive process restart
+            mController.flushCookies();
+
+            res.put("ok", failCount.get() == 0);
+            res.put("total", total);
+            res.put("imported", okCount.get());
+            res.put("failed", failCount.get());
+            res.put("domains", touchedHosts.size());
+            return res;
+        }
+
         JSONObject notFound = new JSONObject();
         notFound.put("ok", false);
         notFound.put("error", "Unknown endpoint: " + path);
