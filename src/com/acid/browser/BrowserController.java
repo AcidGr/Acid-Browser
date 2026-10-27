@@ -715,6 +715,12 @@ public class BrowserController {
         } catch (Exception ignored) {}
     }
 
+    public void flushCookies() {
+        try {
+            CookieManager.getInstance().flush();
+        } catch (Exception ignored) {}
+    }
+
     public int getBlockedDeepLinksCount() {
         return mBlockedDeepLinks;
     }

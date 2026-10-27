@@ -5,6 +5,11 @@ build/
 *.dex
 *.class
 
+# Sensitive: exported cookies / credentials must never be committed
+via_cookies.json
+*_cookies.json
+*.cookies.db
+
 # Android / OS generated files
 .DS_Store
 *.swp
