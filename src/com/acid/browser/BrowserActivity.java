@@ -1654,20 +1654,30 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         int centerH = mCenterFrame.getHeight();
         if (centerH <= 0) return;
 
-        int cardH = dp(360);
-        int margin = dp(10);
-        float defaultBottomY = Math.max(margin, centerH - cardH - margin);
+        int topPadding = dp(8);
+        int bottomPadding = dp(12);
+        int maxAvailableH = centerH - topPadding - bottomPadding;
+        int targetCardH = Math.min(dp(380), Math.max(dp(220), maxAvailableH));
+
+        ViewGroup.LayoutParams lp = mDrawerPanel.getLayoutParams();
+        if (lp != null && lp.height != targetCardH) {
+            lp.height = targetCardH;
+            mDrawerPanel.setLayoutParams(lp);
+        }
+
+        float minY = topPadding;
+        float defaultBottomY = Math.max(minY, centerH - targetCardH - bottomPadding);
 
         // If user hasn't dragged, default to bottom resting position
         float baseTargetY = (mUserTargetY < 0) ? defaultBottomY : mUserTargetY;
 
         // When space is constrained (e.g. keyboard open), max allowed Y so card isn't covered
-        float maxAllowedY = Math.max(margin, centerH - cardH - margin);
+        float maxAllowedY = Math.max(minY, centerH - targetCardH - bottomPadding);
 
         final float finalY;
         if (baseTargetY <= maxAllowedY) {
             // Already placed up high: DO NOT push up! Stay at user's desired position.
-            finalY = Math.max(margin, baseTargetY);
+            finalY = Math.max(minY, baseTargetY);
         } else {
             // Lower than maxAllowedY: push up to the fixed height (maxAllowedY)
             finalY = maxAllowedY;
@@ -1747,10 +1757,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         }
                         if (dragging) {
                             int centerH = mCenterFrame != null ? mCenterFrame.getHeight() : 0;
-                            int cardH = dp(360);
-                            int margin = dp(10);
-                            float minY = margin;
-                            float maxY = Math.max(minY, centerH - cardH - margin);
+                            int topPadding = dp(8);
+                            int bottomPadding = dp(12);
+                            int cardH = panel.getHeight() > 0 ? panel.getHeight() : dp(360);
+                            float minY = topPadding;
+                            float maxY = Math.max(minY, centerH - cardH - bottomPadding);
                             float nextY = Math.min(maxY, Math.max(minY, startTransY + dy));
                             panel.setTranslationY(nextY);
                         }
