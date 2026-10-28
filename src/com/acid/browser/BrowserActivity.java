@@ -989,7 +989,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             triggerBtn.setText("正在检查...");
             triggerBtn.setEnabled(false);
         }
-        Toast.makeText(this, "正在向服务器发送更新探针...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "正在检查更新...", Toast.LENGTH_SHORT).show();
 
         new Thread(new Runnable() {
             @Override
@@ -1025,7 +1025,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         }
 
                         if (resultJson == null) {
-                            Toast.makeText(BrowserActivity.this, "连接更新服务器失败 (github.com:8888)\n请确认华为云安全组是否已放通 TCP 8888 端口", Toast.LENGTH_LONG).show();
+                            Toast.makeText(BrowserActivity.this, "检查更新失败", Toast.LENGTH_SHORT).show();
                             return;
                         }
 
@@ -1051,7 +1051,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                                 Toast.makeText(BrowserActivity.this, "当前已是最新版本 (v" + currentName + ")", Toast.LENGTH_SHORT).show();
                             }
                         } catch (Exception e) {
-                            Toast.makeText(BrowserActivity.this, "解析更新信息异常: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(BrowserActivity.this, "检查更新失败", Toast.LENGTH_SHORT).show();
                         }
                     }
                 });
