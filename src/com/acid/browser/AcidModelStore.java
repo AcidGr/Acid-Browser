@@ -37,6 +37,8 @@ public class AcidModelStore {
     private static final String KEY_SELECTED_PROVIDER = "selected_provider_id";
     private static final String KEY_SELECTED_MODEL = "selected_model_id";
     private static final String KEY_SELECTED_EFFORT = "selected_reasoning_effort";
+    private static final String KEY_CATALOG_VERSION = "catalog_version";
+    private static final int CURRENT_CATALOG_VERSION = 3;
 
     // Legacy preference keys from AcidAgentLoop v1 for seamless migration
     private static final String LEGACY_PREF_AGENT = "acid_agent_config";
@@ -133,6 +135,14 @@ public class AcidModelStore {
             defaultModels.add(new ModelEntry(id, name, supportsReasoning));
             return this;
         }
+
+        public ModelEntry findModel(String modelId) {
+            if (modelId == null) return null;
+            for (ModelEntry m : defaultModels) {
+                if (modelId.equals(m.id)) return m;
+            }
+            return null;
+        }
     }
 
     /**
@@ -211,7 +221,7 @@ public class AcidModelStore {
     private final Context mContext;
     private final List<ConfiguredProvider> mProviders = new ArrayList<ConfiguredProvider>();
     private String mSelectedProviderId = "deepseek";
-    private String mSelectedModelId = "deepseek-chat";
+    private String mSelectedModelId = "deepseek-flash";
     private String mSelectedEffort = EFFORT_DEFAULT;
 
     public AcidModelStore(Context context) {
@@ -227,84 +237,113 @@ public class AcidModelStore {
 
         list.add(new CatalogProviderPreset(
             "deepseek", "DeepSeek", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY",
-            "DeepSeek 官方 API，包含 V3/V4 与 R1 深度思考模型"
+            "DeepSeek 官方 API，包含 V4/V4.1 系列与 R1 深度思考模型"
         )
-            .addModel("deepseek-chat", "DeepSeek-V3 (Chat)", false)
-            .addModel("deepseek-reasoner", "DeepSeek-R1 (Reasoner)", true)
             .addModel("deepseek-flash", "DeepSeek-V4.1-Flash", true)
-            .addModel("deepseek-v4-pro", "DeepSeek-V4-Pro", true));
+            .addModel("deepseek-v4-pro", "DeepSeek-V4-Pro", true)
+            .addModel("deepseek-chat", "DeepSeek-V3 (Chat)", false)
+            .addModel("deepseek-reasoner", "DeepSeek-R1 (Reasoner)", true));
 
         list.add(new CatalogProviderPreset(
             "openai", "OpenAI", "https://api.openai.com/v1", "OPENAI_API_KEY",
-            "OpenAI 官方接口，支持 GPT-4.1、GPT-4o 及 o3/o4 推理系列"
+            "OpenAI 官方接口，支持 GPT-5.4、GPT-5.2 及 o3/o4 推理系列"
         )
-            .addModel("gpt-4.1", "GPT-4.1", false)
-            .addModel("gpt-4o", "GPT-4o", false)
+            .addModel("gpt-5.4", "GPT-5.4", true)
+            .addModel("gpt-5.4-mini", "GPT-5.4 mini", true)
+            .addModel("gpt-5.2", "GPT-5.2", true)
+            .addModel("o4-mini", "OpenAI o4-mini", true)
             .addModel("o3", "OpenAI o3", true)
-            .addModel("o4-mini", "OpenAI o4-mini", true));
-
-        list.add(new CatalogProviderPreset(
-            "moonshotai-cn", "Kimi (月之暗面)", "https://api.moonshot.cn/v1", "MOONSHOT_API_KEY",
-            "Moonshot AI 官方接口，支持 Kimi K2.6 / K2.7 Code 与长文本模型"
-        )
-            .addModel("kimi-k2.6", "Kimi K2.6", true)
-            .addModel("kimi-k2.7-code", "Kimi K2.7 Code", true)
-            .addModel("moonshot-v1-128k", "Moonshot V1 128K", false));
-
-        list.add(new CatalogProviderPreset(
-            "zai-coding-cn", "智谱 GLM (BigModel)", "https://open.bigmodel.cn/api/paas/v4", "ZAI_CODING_CN_API_KEY",
-            "智谱清言开放平台，支持 GLM-5.3、GLM-Z1 推理与 GLM-4 系列"
-        )
-            .addModel("glm-5.3", "GLM-5.3", true)
-            .addModel("glm-5.3-flash", "GLM-5.3-Flash", true)
-            .addModel("glm-z1-air", "GLM-Z1-Air", true)
-            .addModel("glm-4-plus", "GLM-4-Plus", false));
-
-        list.add(new CatalogProviderPreset(
-            "qwen-cn", "阿里云百炼 (Qwen)", "https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY",
-            "阿里云通义千问 OpenAI 兼容接口，支持 Qwen-Max、Plus 与 QwQ"
-        )
-            .addModel("qwen-max", "Qwen-Max", false)
-            .addModel("qwen-plus", "Qwen-Plus", true)
-            .addModel("qwq-plus", "QwQ-Plus (深度思考)", true));
+            .addModel("gpt-4.1", "GPT-4.1", false)
+            .addModel("gpt-4o", "GPT-4o", false));
 
         list.add(new CatalogProviderPreset(
             "anthropic", "Anthropic (Claude)", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY",
-            "Anthropic 官方或兼容网关，支持 Claude 4 / 3.7 Sonnet 扩展思考"
+            "Anthropic 官方或兼容网关，支持 Claude 4.5 / 5 Sonnet 与扩展思考"
         )
-            .addModel("claude-sonnet-4-20250514", "Claude Sonnet 4", true)
-            .addModel("claude-3-7-sonnet-latest", "Claude 3.7 Sonnet", true)
-            .addModel("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet", false));
+            .addModel("claude-sonnet-4-5", "Claude Sonnet 4.5", true)
+            .addModel("claude-haiku-4-5", "Claude Haiku 4.5", true)
+            .addModel("claude-opus-4-5", "Claude Opus 4.5", true)
+            .addModel("claude-sonnet-4-6", "Claude Sonnet 4.6", true)
+            .addModel("claude-sonnet-5", "Claude Sonnet 5", true)
+            .addModel("claude-3-7-sonnet-latest", "Claude 3.7 Sonnet", true));
 
         list.add(new CatalogProviderPreset(
             "google", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY",
-            "Google AI Studio OpenAI 兼容端点，支持 Gemini 2.5 Pro / Flash"
+            "Google AI Studio 兼容端点，支持 Gemini 3.8 / 3.5 Flash 与 Gemini 4 系列"
         )
+            .addModel("gemini-3.8-flash", "Gemini 3.8 Flash", true)
+            .addModel("gemini-3.5-flash", "Gemini 3.5 Flash", true)
+            .addModel("gemini-4-argon", "Gemini 4 Argon", true)
+            .addModel("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", true)
             .addModel("gemini-2.5-pro", "Gemini 2.5 Pro", true)
             .addModel("gemini-2.5-flash", "Gemini 2.5 Flash", true));
 
         list.add(new CatalogProviderPreset(
-            "siliconflow", "硅基流动 (SiliconFlow)", "https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY",
-            "国内高速聚合推理平台，内置满血 DeepSeek-R1/V3 与 Qwen 系列"
+            "moonshotai-cn", "Kimi (月之暗面)", "https://api.moonshot.cn/v1", "MOONSHOT_API_KEY",
+            "Moonshot AI 官方接口，支持 Kimi K3 / K2.7 Code 深度思考与长上下文"
         )
-            .addModel("deepseek-ai/DeepSeek-V3", "DeepSeek-V3", false)
-            .addModel("deepseek-ai/DeepSeek-R1", "DeepSeek-R1", true)
-            .addModel("Qwen/QwQ-32B", "QwQ-32B", true));
+            .addModel("kimi-k3", "Kimi K3", true)
+            .addModel("kimi-k2.7-code", "Kimi K2.7 Code", true)
+            .addModel("kimi-k2.7-code-highspeed", "Kimi K2.7 Code HighSpeed", true)
+            .addModel("kimi-k2.6", "Kimi K2.6", true));
 
         list.add(new CatalogProviderPreset(
-            "openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY",
-            "全球多模型聚合路由，统一接入 Claude / GPT / Gemini / DeepSeek"
+            "zai-coding-cn", "智谱 GLM (BigModel)", "https://open.bigmodel.cn/api/paas/v4", "ZAI_CODING_CN_API_KEY",
+            "智谱清言开放平台，支持 GLM-5.3、GLM-5.3 Flash 深度推理与视觉模型"
         )
-            .addModel("deepseek/deepseek-r1", "DeepSeek R1", true)
-            .addModel("anthropic/claude-3.7-sonnet", "Claude 3.7 Sonnet", true)
-            .addModel("google/gemini-2.5-pro-preview", "Gemini 2.5 Pro", true));
+            .addModel("glm-5.3", "GLM-5.3", true)
+            .addModel("glm-5.3-flash", "GLM-5.3-Flash", true)
+            .addModel("glm-5.3-highspeed", "GLM-5.3 Highspeed", true)
+            .addModel("glm-4.6v", "GLM-4.6V (Vision)", true));
+
+        list.add(new CatalogProviderPreset(
+            "qwen-cn", "阿里云百炼 (Qwen)", "https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY",
+            "阿里云通义千问兼容接口，支持 Qwen 3.8 Max/Flash、Qwen 3.7 Plus 与 QwQ"
+        )
+            .addModel("qwen3.8-max", "Qwen 3.8 Max", true)
+            .addModel("qwen3.8-flash", "Qwen 3.8 Flash", true)
+            .addModel("qwen3.7-plus", "Qwen 3.7 Plus", true)
+            .addModel("qwen3.7-max", "Qwen 3.7 Max", true)
+            .addModel("qwen-max", "Qwen-Max", false)
+            .addModel("qwq-plus", "QwQ-Plus (深度思考)", true));
 
         list.add(new CatalogProviderPreset(
             "xai", "xAI (Grok)", "https://api.x.ai/v1", "XAI_API_KEY",
-            "xAI 官方接口，支持 Grok 3 与 Grok 3 Mini 推理模型"
+            "xAI 官方接口，支持 Grok 4.7、Grok 4.6 与 Grok 4.5 系列"
         )
-            .addModel("grok-3", "Grok 3", false)
-            .addModel("grok-3-mini", "Grok 3 Mini", true));
+            .addModel("grok-4.7", "Grok 4.7", true)
+            .addModel("grok-4.6", "Grok 4.6", true)
+            .addModel("grok-4.5", "Grok 4.5", true)
+            .addModel("grok-4.3", "Grok 4.3", true)
+            .addModel("grok-3", "Grok 3", false));
+
+        list.add(new CatalogProviderPreset(
+            "siliconflow", "硅基流动 (SiliconFlow)", "https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY",
+            "国内高速聚合推理平台，内置满血 DeepSeek-V4.1 / V4-Pro 与 Qwen 系列"
+        )
+            .addModel("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash", true)
+            .addModel("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4-Pro", true)
+            .addModel("Qwen/Qwen3.8-Max", "Qwen3.8-Max", true)
+            .addModel("deepseek-ai/DeepSeek-V3", "DeepSeek-V3", false)
+            .addModel("deepseek-ai/DeepSeek-R1", "DeepSeek-R1", true));
+
+        list.add(new CatalogProviderPreset(
+            "openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY",
+            "全球多模型聚合路由，统一接入 Claude 4.5 / GPT-5.4 / Gemini 3.8 / DeepSeek V4.1"
+        )
+            .addModel("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", true)
+            .addModel("anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5", true)
+            .addModel("google/gemini-3.8-flash", "Gemini 3.8 Flash", true)
+            .addModel("openai/gpt-5.4", "GPT-5.4", true)
+            .addModel("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro", true)
+            .addModel("x-ai/grok-4.7", "Grok 4.7", true));
+
+        list.add(new CatalogProviderPreset(
+            "xiaomi", "小米大模型 (MiMo)", "https://api.mimo.xiaomi.com/v1", "XIAOMI_API_KEY",
+            "小米 MiMo 大模型平台，支持 MiMo-V2.6 Flash 与 Pro 推理系列"
+        )
+            .addModel("mimo-v2.6-flash", "MiMo-V2.6-Flash", true)
+            .addModel("mimo-v2.6-pro", "MiMo-V2.6-Pro", true));
 
         return list;
     }
@@ -329,13 +368,24 @@ public class AcidModelStore {
             lower.contains("o4") ||
             lower.contains("z1") ||
             lower.contains("glm-5") ||
-            lower.contains("kimi-k2") ||
+            lower.contains("kimi-k") ||
             lower.contains("deepseek-flash") ||
             lower.contains("deepseek-v4") ||
             lower.contains("gemini-2.5") ||
-            lower.contains("claude-3-7") ||
+            lower.contains("gemini-3") ||
+            lower.contains("gemini-4") ||
             lower.contains("claude-sonnet-4") ||
-            lower.contains("grok-3-mini");
+            lower.contains("claude-sonnet-5") ||
+            lower.contains("claude-haiku-4") ||
+            lower.contains("claude-haiku-5") ||
+            lower.contains("claude-opus-4") ||
+            lower.contains("claude-opus-5") ||
+            lower.contains("claude-fable") ||
+            lower.contains("claude-3-7") ||
+            lower.contains("gpt-5") ||
+            lower.contains("gpt-6") ||
+            lower.contains("grok-4") ||
+            lower.contains("mimo-v2.6");
     }
 
     // =========================================================================
@@ -362,14 +412,52 @@ public class AcidModelStore {
             } catch (Exception ignored) {}
         }
 
+        int savedVer = sp.getInt(KEY_CATALOG_VERSION, 0);
+
         if (mProviders.isEmpty()) {
             migrateOrSeedDefaults();
+            sp.edit().putInt(KEY_CATALOG_VERSION, CURRENT_CATALOG_VERSION).apply();
         } else {
+            if (savedVer < CURRENT_CATALOG_VERSION) {
+                upgradeBuiltinCatalog(sp);
+            }
             mSelectedProviderId = sp.getString(KEY_SELECTED_PROVIDER, mProviders.get(0).id);
             mSelectedModelId = sp.getString(KEY_SELECTED_MODEL, "");
+            if ("deepseek-chat".equals(mSelectedModelId) || TextUtils.isEmpty(mSelectedModelId)) {
+                mSelectedModelId = "deepseek-flash";
+            }
             mSelectedEffort = sp.getString(KEY_SELECTED_EFFORT, EFFORT_DEFAULT);
             ensureValidSelection();
         }
+    }
+
+    private void upgradeBuiltinCatalog(SharedPreferences sp) {
+        for (ConfiguredProvider p : mProviders) {
+            if (!p.isCustom) {
+                CatalogProviderPreset preset = findBuiltinPreset(p.id);
+                if (preset != null) {
+                    List<ModelEntry> customModels = new ArrayList<ModelEntry>();
+                    for (ModelEntry m : p.models) {
+                        if (preset.findModel(m.id) == null) {
+                            customModels.add(m);
+                        }
+                    }
+                    p.models.clear();
+                    for (ModelEntry m : preset.defaultModels) {
+                        p.models.add(m.copy());
+                    }
+                    p.models.addAll(customModels);
+                }
+            }
+        }
+        if ("deepseek-chat".equals(mSelectedModelId) || TextUtils.isEmpty(mSelectedModelId)) {
+            mSelectedModelId = "deepseek-flash";
+        }
+        sp.edit()
+            .putInt(KEY_CATALOG_VERSION, CURRENT_CATALOG_VERSION)
+            .putString(KEY_SELECTED_MODEL, mSelectedModelId)
+            .apply();
+        saveToPrefs();
     }
 
     private void migrateOrSeedDefaults() {
@@ -404,14 +492,14 @@ public class AcidModelStore {
                 legacyUrl,
                 legacyKey
             );
-            String mId = !TextUtils.isEmpty(legacyModel) ? legacyModel : "gpt-4o";
+            String mId = !TextUtils.isEmpty(legacyModel) ? legacyModel : "gpt-5.4";
             customLegacy.models.add(new ModelEntry(mId, mId, guessSupportsReasoning(mId)));
             mProviders.add(0, customLegacy);
             mSelectedProviderId = customLegacy.id;
             mSelectedModelId = mId;
         } else {
             mSelectedProviderId = "deepseek";
-            mSelectedModelId = !TextUtils.isEmpty(legacyModel) ? legacyModel : "deepseek-chat";
+            mSelectedModelId = !TextUtils.isEmpty(legacyModel) && !"deepseek-chat".equals(legacyModel) ? legacyModel : "deepseek-flash";
         }
 
         mSelectedEffort = EFFORT_DEFAULT;
