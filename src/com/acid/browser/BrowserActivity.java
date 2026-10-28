@@ -438,10 +438,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mDrawerPanel = buildInspectorDrawer();
         mDrawerPanel.setVisibility(View.GONE);
         FrameLayout.LayoutParams floatPanelLp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(380), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(360), Gravity.TOP | Gravity.CENTER_HORIZONTAL
         );
-        floatPanelLp.setMargins(dp(10), dp(10), dp(10), dp(10));
+        floatPanelLp.setMargins(dp(10), 0, dp(10), 0);
         mCenterFrame.addView(mDrawerPanel, floatPanelLp);
+
+        mCenterFrame.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int left, int top, int right, int bottom,
+                                       int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                int oldH = oldBottom - oldTop;
+                int newH = bottom - top;
+                if (newH > 0 && newH != oldH && mDrawerPanel != null && mDrawerPanel.getVisibility() == View.VISIBLE) {
+                    updateFloatingWindowPosition(oldH > 0);
+                }
+            }
+        });
 
         mMainContentLayout.addView(mCenterFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -938,7 +950,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         // Agent Floating Window styling (Elevated Card with High-Contrast Border and Tinted Body)
         if (mDrawerPanel != null) {
             int floatBg = dark ? Color.parseColor("#0F172A") : Color.parseColor("#F1F5F9");
-            int floatBorder = dark ? Color.parseColor("#334155") : Color.parseColor("#94A3B8");
+            int floatBorder = dark ? Color.parseColor("#334155") : Color.parseColor("#64748B");
             mDrawerPanel.setBackground(cardBorderBg(floatBg, floatBorder, 2, 16));
         }
         if (mAgentHeaderBar != null) {
@@ -1611,9 +1623,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     // DSH-Style Floating Agent Window (Zero WebView Compression)
     // =========================================================================
 
+    private float mUserTargetY = -1;
+
     private void openAgentFloatingWindow() {
         if (mDrawerPanel != null) {
             mDrawerPanel.setVisibility(View.VISIBLE);
+            updateFloatingWindowPosition(false);
         }
         scrollChatToBottom();
     }
@@ -1631,6 +1646,40 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             closeAgentFloatingWindow();
         } else {
             openAgentFloatingWindow();
+        }
+    }
+
+    private void updateFloatingWindowPosition(boolean animated) {
+        if (mDrawerPanel == null || mCenterFrame == null) return;
+        int centerH = mCenterFrame.getHeight();
+        if (centerH <= 0) return;
+
+        int cardH = dp(360);
+        int margin = dp(10);
+        float defaultBottomY = Math.max(margin, centerH - cardH - margin);
+
+        // If user hasn't dragged, default to bottom resting position
+        float baseTargetY = (mUserTargetY < 0) ? defaultBottomY : mUserTargetY;
+
+        // When space is constrained (e.g. keyboard open), max allowed Y so card isn't covered
+        float maxAllowedY = Math.max(margin, centerH - cardH - margin);
+
+        final float finalY;
+        if (baseTargetY <= maxAllowedY) {
+            // Already placed up high: DO NOT push up! Stay at user's desired position.
+            finalY = Math.max(margin, baseTargetY);
+        } else {
+            // Lower than maxAllowedY: push up to the fixed height (maxAllowedY)
+            finalY = maxAllowedY;
+        }
+
+        if (animated && Build.VERSION.SDK_INT >= 12) {
+            mDrawerPanel.animate()
+                .translationY(finalY)
+                .setDuration(180)
+                .start();
+        } else {
+            mDrawerPanel.setTranslationY(finalY);
         }
     }
 
@@ -1656,7 +1705,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         final LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         int floatBg = mIsDarkMode ? Color.parseColor("#0F172A") : Color.parseColor("#F1F5F9");
-        int floatBorder = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#94A3B8");
+        int floatBorder = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#64748B");
         panel.setBackground(cardBorderBg(floatBg, floatBorder, 2, 16));
         if (Build.VERSION.SDK_INT >= 21) {
             panel.setElevation(dp(16));
@@ -1697,13 +1746,20 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                             dragging = true;
                         }
                         if (dragging) {
-                            float nextY = Math.min(dp(40), Math.max(-dp(260), startTransY + dy));
+                            int centerH = mCenterFrame != null ? mCenterFrame.getHeight() : 0;
+                            int cardH = dp(360);
+                            int margin = dp(10);
+                            float minY = margin;
+                            float maxY = Math.max(minY, centerH - cardH - margin);
+                            float nextY = Math.min(maxY, Math.max(minY, startTransY + dy));
                             panel.setTranslationY(nextY);
                         }
                         return true;
                     case MotionEvent.ACTION_UP:
                         if (!dragging) {
                             showAgentSessionsSheet();
+                        } else {
+                            mUserTargetY = panel.getTranslationY();
                         }
                         return true;
                 }
