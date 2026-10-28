@@ -60,8 +60,8 @@ public class AcidSandboxTools {
                 "- 'fill': Fill text into input/textarea/contenteditable ('ref' or 'selector'). React/Vue safe. Optional 'submit'=true.\n" +
                 "- 'select': Choose option in <select> dropdown 'ref' by value or visible label.\n" +
                 "- 'scroll': Scroll viewport ('direction': 'down'|'up'|'top'|'bottom', 'amount': 0.8).\n" +
-                "- 'wait': Wait for a specific condition ('condition': 'networkidle'|'selector'|'stable'|'text'|'gone'|'ms', optional 'selector', 'text', 'quiet_ms', 'ms', 'timeout_ms'). Automatically returns the latest page observation upon completion.\n" +
-                "- 'eval': Evaluate JavaScript expression ('code') on current page. Supports async/await; Promises are automatically awaited.\n" +
+                "- 'wait': Wait for a specific condition ('condition': 'networkidle'|'selector'|'stable'|'text'|'gone'|'ms', optional 'selector', 'text', 'quiet_ms', 'ms', 'timeout_ms'). Returns a receipt {satisfied, timed_out, elapsed_ms, error_code?} followed by the latest page observation. Always check 'satisfied' before proceeding.\n" +
+                "- 'eval': Evaluate JavaScript ('code') on current page and return {ok, result, result_type}. Accepts an expression, multiple statements (value of the last statement is returned automatically), or a function body with explicit 'return'. Supports async/await; Promises are awaited. Syntax errors return SYNTAX_ERROR without executing.\n" +
                 "- 'set_mode': Switch browser identity ('mode': 'desktop' for 1280px PC view or 'mobile'), or toggle 'som' (true/false).\n" +
                 "- 'tabs': Manage tabs ('tab_action': 'list'|'new'|'switch'|'close', optional 'tab_id', 'url').\n" +
                 "- 'back': Navigate back in current tab history.\n" +
@@ -321,8 +321,15 @@ public class AcidSandboxTools {
                 quietMs = args.optLong("ms", 1000);
             }
             JSONObject waitRes = mController.waitSync(cond, target, quietMs, timeoutMs);
-            String title = "WAIT " + cond.toUpperCase() + (target != null ? " (\"" + target + "\")" : "") + " [" + waitRes.optLong("elapsed_ms", 0) + "ms]";
-            return new ToolExecResult(formatObservationWithActionHeader(title, null, waitRes), false, null);
+            boolean sat = waitRes.optBoolean("satisfied", false);
+            String status = sat ? "✓ SATISFIED" : ("✗ " + waitRes.optString("error_code", "NOT_SATISFIED"));
+            String title = "WAIT " + waitRes.optString("condition", cond).toUpperCase()
+                + (target != null ? " (\"" + target + "\")" : "")
+                + " " + status + " [" + waitRes.optLong("elapsed_ms", 0) + "ms]";
+            JSONObject snapshot = waitRes.optJSONObject("snapshot");
+            JSONObject receipt = new JSONObject(waitRes.toString());
+            receipt.remove("snapshot");
+            return new ToolExecResult(formatObservationWithActionHeader(title, receipt, snapshot), false, null);
         }
 
         if ("eval".equals(action)) {
