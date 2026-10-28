@@ -46,6 +46,7 @@ public class AcidAgentLoop {
     private final BrowserController mController;
     private final AcidSandboxTools mSandboxTools;
     private final AcidSessionStore mSessionStore;
+    private final AcidModelStore mModelStore;
     private final AgentLoopListener mListener;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final JSONArray mToolsSchema;
@@ -60,6 +61,7 @@ public class AcidAgentLoop {
         mController = controller;
         mSandboxTools = new AcidSandboxTools(controller);
         mSessionStore = new AcidSessionStore(context);
+        mModelStore = new AcidModelStore(context);
         mListener = listener;
         mToolsSchema = AcidSandboxTools.buildToolsSchema();
     }
@@ -68,27 +70,47 @@ public class AcidAgentLoop {
         return mSessionStore;
     }
 
+    public AcidModelStore getModelStore() {
+        return mModelStore;
+    }
+
     public AcidSessionStore.AgentSession getActiveSession() {
         return mSessionStore.getActiveSession();
     }
 
     // =========================================================================
-    // Model Configuration (BYOK Persistence)
+    // Model Configuration & Selection Queries
     // =========================================================================
 
     public String getBaseUrl() {
+        AcidModelStore.ConfiguredProvider p = mModelStore.getActiveProvider();
+        if (p != null && !p.baseUrl.isEmpty()) {
+            return p.baseUrl;
+        }
         SharedPreferences sp = mContext.getSharedPreferences(PREF_AGENT, Context.MODE_PRIVATE);
         return sp.getString(KEY_BASE_URL, DEFAULT_BASE_URL);
     }
 
     public String getApiKey() {
+        AcidModelStore.ConfiguredProvider p = mModelStore.getActiveProvider();
+        if (p != null) {
+            return p.apiKey != null ? p.apiKey : "";
+        }
         SharedPreferences sp = mContext.getSharedPreferences(PREF_AGENT, Context.MODE_PRIVATE);
         return sp.getString(KEY_API_KEY, "");
     }
 
     public String getModelName() {
+        AcidModelStore.ModelEntry m = mModelStore.getActiveModel();
+        if (m != null && !m.id.isEmpty()) {
+            return m.id;
+        }
         SharedPreferences sp = mContext.getSharedPreferences(PREF_AGENT, Context.MODE_PRIVATE);
         return sp.getString(KEY_MODEL, DEFAULT_MODEL);
+    }
+
+    public String getModelStatusDisplay() {
+        return mModelStore.getStatusDisplayText();
     }
 
     public void saveConfig(String baseUrl, String apiKey, String modelName) {
@@ -182,10 +204,16 @@ public class AcidAgentLoop {
             addErrorItem("Agent 正在运行中，请先点击停止按钮中断当前任务。");
             return;
         }
+        AcidModelStore.ConfiguredProvider activeProvider = mModelStore.getActiveProvider();
+        AcidModelStore.ModelEntry activeModel = mModelStore.getActiveModel();
+        if (activeProvider == null || activeModel == null) {
+            addErrorItem("尚未装载任何可用模型！请点击浏览器右下角 [功能 -> 模型配置] 添加供应商与模型。");
+            return;
+        }
         String apiKey = getApiKey();
         String baseUrl = getBaseUrl();
         if (apiKey.isEmpty() && !baseUrl.contains("127.0.0.1") && !baseUrl.contains("localhost")) {
-            addErrorItem("尚未配置 API Key！请点击面板右上角 [模型设置] 填入 API Key（如 DeepSeek / OpenAI 兼容接口）。");
+            addErrorItem("当前供应商 [" + activeProvider.displayName + "] 尚未配置 API Key！请点击浏览器右下角 [功能 -> 模型配置] 填入 API Key，或点击面板右上角切换其他已配置模型。");
             return;
         }
 
@@ -496,6 +524,18 @@ public class AcidAgentLoop {
         reqBody.put("messages", messages);
         reqBody.put("tools", mToolsSchema);
         reqBody.put("temperature", 0.2);
+
+        AcidModelStore.ModelEntry activeModel = mModelStore.getActiveModel();
+        String effort = mModelStore.getSelectedReasoningEffort();
+        if (activeModel != null && activeModel.supportsReasoning && effort != null) {
+            if (AcidModelStore.EFFORT_LOW.equals(effort) ||
+                AcidModelStore.EFFORT_MEDIUM.equals(effort) ||
+                AcidModelStore.EFFORT_HIGH.equals(effort)) {
+                reqBody.put("reasoning_effort", effort);
+            } else if (AcidModelStore.EFFORT_MAX.equals(effort)) {
+                reqBody.put("reasoning_effort", "high");
+            }
+        }
 
         byte[] payload = reqBody.toString().getBytes(StandardCharsets.UTF_8);
 

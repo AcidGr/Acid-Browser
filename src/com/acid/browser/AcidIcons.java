@@ -61,6 +61,8 @@ public class AcidIcons {
     public static final int ICON_SETTINGS = 34;
     public static final int ICON_CHAT_LIST = 35;
     public static final int ICON_FILE = 36;
+    public static final int ICON_MODEL = 37;
+    public static final int ICON_EDIT = 38;
 
     /**
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
@@ -447,6 +449,20 @@ public class AcidIcons {
             case ICON_FILE:
                 // SVG File Document
                 p.addPath(parseSvgPath("M 6 3 H 14 L 19 8 V 21 H 6 V 3 Z M 14 3 V 8 H 19 M 9 13 H 15 M 9 17 H 15"));
+                break;
+
+            case ICON_MODEL:
+                // SVG Layered Model Stack / Cube (DSH IconDataOutline style)
+                p.addPath(parseSvgPath(
+                    "M 12 3 L 21 7.5 L 12 12 L 3 7.5 Z " +
+                    "M 3 12 L 12 16.5 L 21 12 " +
+                    "M 3 16.5 L 12 21 L 21 16.5"
+                ));
+                break;
+
+            case ICON_EDIT:
+                // SVG Pencil Edit
+                p.addPath(parseSvgPath("M 16.5 3.5 L 20.5 7.5 L 8 20 H 4 V 16 L 16.5 3.5 Z M 14 6 L 18 10"));
                 break;
 
             default:

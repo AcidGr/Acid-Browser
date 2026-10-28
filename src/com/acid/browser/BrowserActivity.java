@@ -13,8 +13,12 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.text.TextWatcher;
+import android.text.method.HideReturnsTransformationMethod;
+import android.text.method.PasswordTransformationMethod;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -151,6 +155,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private MenuCardItem mMenuItemDownload;
     private MenuCardItem mMenuItemDesktop;
     private MenuCardItem mMenuItemAgent;
+    private MenuCardItem mMenuItemModelConfig;
 
     // Tab Overview Layout (Inside centerFrame, overlaying webview)
     private FrameLayout mTabsOverviewLayout;
@@ -204,7 +209,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         mTvAgentLoopStatus.setText("等待人工接管协助");
                         mTvAgentLoopStatus.setTextColor(COLOR_AMBER);
                     } else {
-                        mTvAgentLoopStatus.setText(mAgentLoop.getModelName());
+                        mTvAgentLoopStatus.setText(mAgentLoop.getModelStatusDisplay());
                         mTvAgentLoopStatus.setTextColor(muted);
                     }
                 }
@@ -845,8 +850,24 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         );
         LinearLayout.LayoutParams itemLp7 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp7.leftMargin = dp(4);
+        itemLp7.leftMargin = dp(2);
+        itemLp7.rightMargin = dp(2);
         row2.addView(mMenuItemAgent, itemLp7);
+
+        mMenuItemModelConfig = new MenuCardItem(
+            this, AcidIcons.ICON_MODEL, "模型配置", "供应商管理",
+            LIGHT_ACCENT, LIGHT_TEXT, LIGHT_MUTED, LIGHT_MENU_ITEM_BG,
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    closeMenuSheet();
+                    showModelProviderConfigSheet();
+                }
+            }
+        );
+        LinearLayout.LayoutParams itemLp8 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        itemLp8.leftMargin = dp(4);
+        row2.addView(mMenuItemModelConfig, itemLp8);
 
         mMenuCard.addView(row2);
 
@@ -901,6 +922,31 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 isPc ? AcidIcons.ICON_MOBILE : AcidIcons.ICON_DESKTOP,
                 isPc ? "切换手机端" : "切换电脑端",
                 isPc ? "当前: 1280px" : "当前: 手机版",
+                iconCol, textCol, mutedCol, itemBg
+            );
+        }
+
+        if (mMenuItemBookmark != null) {
+            mMenuItemBookmark.update(AcidIcons.ICON_BOOKMARK, "书签收藏", "快速直达", iconCol, textCol, mutedCol, itemBg);
+        }
+        if (mMenuItemHistory != null) {
+            mMenuItemHistory.update(AcidIcons.ICON_HISTORY, "历史浏览", "足迹记录", iconCol, textCol, mutedCol, itemBg);
+        }
+        if (mMenuItemDownload != null) {
+            mMenuItemDownload.update(AcidIcons.ICON_DOWNLOAD, "下载管理", "任务查看", iconCol, textCol, mutedCol, itemBg);
+        }
+        if (mMenuItemAgent != null) {
+            mMenuItemAgent.update(AcidIcons.ICON_AGENT, "Acid Agent", "悬浮对话窗", iconCol, textCol, mutedCol, itemBg);
+        }
+        if (mMenuItemModelConfig != null) {
+            int providerCount = (mAgentLoop != null && mAgentLoop.getModelStore() != null)
+                ? mAgentLoop.getModelStore().getProviders().size() : 1;
+            int modelCount = (mAgentLoop != null && mAgentLoop.getModelStore() != null)
+                ? mAgentLoop.getModelStore().getTotalLoadedModelsCount() : 1;
+            mMenuItemModelConfig.update(
+                AcidIcons.ICON_MODEL,
+                "模型配置",
+                providerCount + " 供应商 · " + modelCount + " 模型",
                 iconCol, textCol, mutedCol, itemBg
             );
         }
@@ -982,6 +1028,16 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mMenuCard.setBackground(cardGd);
         mMenuTitle.setTextColor(text);
         mBtnMenuClose.setColor(muted);
+
+        if (mListDialogCard != null) {
+            GradientDrawable listGd = new GradientDrawable();
+            listGd.setColor(bar);
+            listGd.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+            mListDialogCard.setBackground(listGd);
+        }
+        if (mTvListDialogTitle != null) {
+            mTvListDialogTitle.setTextColor(text);
+        }
 
         // Agent Floating Window styling (Elevated Card with High-Contrast Border and Tinted Body)
         if (mDrawerPanel != null) {
@@ -1333,7 +1389,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mListItemsContainer.setPadding(0, dp(10), 0, dp(4));
         scroll.addView(mListItemsContainer, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340));
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(430));
         mListDialogCard.addView(scroll, sLp);
 
         FrameLayout.LayoutParams cLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
@@ -1843,7 +1899,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         titleCol.addView(mTvAgentSessionTitle);
 
         mTvAgentLoopStatus = new TextView(this);
-        mTvAgentLoopStatus.setText("deepseek-chat · 就绪");
+        mTvAgentLoopStatus.setText("DeepSeek / DeepSeek-V3 (Chat)");
         mTvAgentLoopStatus.setTextColor(LIGHT_MUTED);
         mTvAgentLoopStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
         mTvAgentLoopStatus.setSingleLine(true);
@@ -1872,11 +1928,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
         headerRow.addView(btnNewSession);
 
-        // Button: Model Config Settings
-        LinearLayout btnConfig = AcidIcons.createToolbarIconBtn(this, AcidIcons.ICON_SETTINGS, LIGHT_MUTED, new View.OnClickListener() {
+        // Button: Pure Model Selector (Right next to 'X' Close button)
+        LinearLayout btnConfig = AcidIcons.createToolbarIconBtn(this, AcidIcons.ICON_MODEL, LIGHT_MUTED, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                showAgentConfigDialog();
+                showAgentModelSelectorSheet();
             }
         });
         headerRow.addView(btnConfig);
@@ -1966,7 +2022,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mTvAgentSessionTitle.setText(session.title);
         }
         if (mTvAgentLoopStatus != null && mAgentLoop != null && !mAgentLoop.isRunning()) {
-            mTvAgentLoopStatus.setText(mAgentLoop.getModelName());
+            mTvAgentLoopStatus.setText(mAgentLoop.getModelStatusDisplay());
         }
 
         if (session == null || session.uiItems.isEmpty()) {
@@ -2501,65 +2557,1278 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mAgentLoop.submitUserTask(task);
     }
 
-    private void showAgentConfigDialog() {
+    private void refreshAgentStatusLabel() {
+        if (mTvAgentLoopStatus != null && mAgentLoop != null && !mAgentLoop.isRunning() && !mAgentLoop.isPausedForTakeover()) {
+            mTvAgentLoopStatus.setText(mAgentLoop.getModelStatusDisplay());
+        }
+        updateMenuCards();
+    }
+
+    // =========================================================================
+    // 1. Agent Card Top-Right Button: Pure Model Selector + Reasoning Effort
+    //    (Reference: DSH dsh-client-ui-model-selection)
+    // =========================================================================
+
+    private String mModelSelectorFilterQuery = "";
+
+    private void showAgentModelSelectorSheet() {
         if (mAgentLoop == null) return;
+        mModelSelectorFilterQuery = "";
+        mTvListDialogTitle.setText("选择模型与思考深度");
+        mBtnListAction.setVisibility(View.VISIBLE);
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        mBtnListAction.update(AcidIcons.ICON_SETTINGS, "模型配置", accent);
+        mBtnListAction.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showModelProviderConfigSheet();
+            }
+        });
+
+        renderAgentModelSelectorContent();
+        mListDialogOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void renderAgentModelSelectorContent() {
+        mListItemsContainer.removeAllViews();
+        if (mAgentLoop == null || mAgentLoop.getModelStore() == null) return;
+
+        final AcidModelStore store = mAgentLoop.getModelStore();
+        final List<AcidModelStore.ConfiguredProvider> providers = store.getProviders();
+        final AcidModelStore.ConfiguredProvider activeProvider = store.getActiveProvider();
+        final AcidModelStore.ModelEntry activeModel = store.getActiveModel();
+        final String activeEffort = store.getSelectedReasoningEffort();
+
+        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int borderCol = mIsDarkMode ? DARK_BORDER : LIGHT_BORDER;
+        int textCol = mIsDarkMode ? DARK_TEXT : LIGHT_TEXT;
+        int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        int blue = Color.parseColor("#0284C7");
+
+        // --- Section A: Active Selection & Reasoning Effort (思考深度) Card ---
+        LinearLayout topCard = new LinearLayout(this);
+        topCard.setOrientation(LinearLayout.VERTICAL);
+        topCard.setBackground(cardBorderBg(cardBg, blue, 1, 12));
+        topCard.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams topLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        topLp.bottomMargin = dp(10);
+        topCard.setLayoutParams(topLp);
+
+        TextView lblCur = new TextView(this);
+        lblCur.setText("当前使用模型 (供应商 + 模型名称)");
+        lblCur.setTextColor(mutedCol);
+        lblCur.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        topCard.addView(lblCur);
+
+        TextView tvCurVal = new TextView(this);
+        if (activeProvider != null && activeModel != null) {
+            tvCurVal.setText(activeProvider.displayName + "  /  " + activeModel.name + " (" + activeModel.id + ")");
+            tvCurVal.setTextColor(textCol);
+        } else {
+            tvCurVal.setText("暂无已装载模型，请点击右上角 [模型配置] 添加");
+            tvCurVal.setTextColor(COLOR_AMBER);
+        }
+        tvCurVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        tvCurVal.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCurVal.setPadding(0, dp(3), 0, dp(8));
+        topCard.addView(tvCurVal);
+
+        // Reasoning Effort (思考深度) Selector Row
+        if (activeModel != null) {
+            LinearLayout effortHead = new LinearLayout(this);
+            effortHead.setOrientation(LinearLayout.HORIZONTAL);
+            effortHead.setGravity(Gravity.CENTER_VERTICAL);
+
+            TextView lblEffort = new TextView(this);
+            lblEffort.setText("思考深度 (Reasoning Effort):");
+            lblEffort.setTextColor(textCol);
+            lblEffort.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            lblEffort.setTypeface(Typeface.DEFAULT_BOLD);
+            LinearLayout.LayoutParams leLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            effortHead.addView(lblEffort, leLp);
+
+            if (activeModel.supportsReasoning) {
+                TextView curEffortBadge = new TextView(this);
+                curEffortBadge.setText("当前: " + AcidModelStore.getEffortDisplayName(activeEffort));
+                curEffortBadge.setTextColor(blue);
+                curEffortBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+                curEffortBadge.setTypeface(Typeface.DEFAULT_BOLD);
+                effortHead.addView(curEffortBadge);
+                topCard.addView(effortHead);
+
+                // 2 rows of 3 effort pills: [默认] [关闭] [低] / [中] [高] [极高]
+                String[] effortIds = AcidModelStore.EFFORT_IDS;
+                for (int r = 0; r < 2; r++) {
+                    LinearLayout eRow = new LinearLayout(this);
+                    eRow.setOrientation(LinearLayout.HORIZONTAL);
+                    LinearLayout.LayoutParams erLp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    );
+                    erLp.topMargin = dp(6);
+                    eRow.setLayoutParams(erLp);
+
+                    for (int c = 0; c < 3; c++) {
+                        int idx = r * 3 + c;
+                        if (idx >= effortIds.length) break;
+                        final String efId = effortIds[idx];
+                        boolean isSelectedEffort = efId.equals(activeEffort);
+
+                        TextView pill = new TextView(this);
+                        pill.setText(AcidModelStore.getEffortDisplayName(efId));
+                        pill.setGravity(Gravity.CENTER);
+                        pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+                        pill.setTypeface(isSelectedEffort ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                        pill.setPadding(dp(6), dp(6), dp(6), dp(6));
+                        if (isSelectedEffort) {
+                            pill.setTextColor(Color.WHITE);
+                            pill.setBackground(pillBg(blue, blue, 8));
+                        } else {
+                            pill.setTextColor(textCol);
+                            pill.setBackground(pillBg(mIsDarkMode ? DARK_BG : Color.WHITE, borderCol, 8));
+                        }
+                        pill.setOnClickListener(new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                store.setReasoningEffort(efId);
+                                refreshAgentStatusLabel();
+                                renderAgentModelSelectorContent();
+                            }
+                        });
+
+                        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                        if (c > 0) pLp.leftMargin = dp(6);
+                        eRow.addView(pill, pLp);
+                    }
+                    topCard.addView(eRow);
+                }
+            } else {
+                TextView btnEnableThink = new TextView(this);
+                btnEnableThink.setText("开启思考深度调节");
+                btnEnableThink.setTextColor(blue);
+                btnEnableThink.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+                btnEnableThink.setPadding(dp(8), dp(3), dp(8), dp(3));
+                btnEnableThink.setBackground(pillBg(Color.argb(24, 2, 132, 199), blue, 6));
+                btnEnableThink.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        activeModel.supportsReasoning = true;
+                        store.saveToPrefs();
+                        refreshAgentStatusLabel();
+                        renderAgentModelSelectorContent();
+                    }
+                });
+                effortHead.addView(btnEnableThink);
+                topCard.addView(effortHead);
+
+                TextView tvNoReason = new TextView(this);
+                tvNoReason.setText("当前模型未开启思考深度选项（标准对话模式）。如该模型支持推理思考，可点击右侧按钮开启。");
+                tvNoReason.setTextColor(mutedCol);
+                tvNoReason.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+                tvNoReason.setPadding(0, dp(4), 0, 0);
+                topCard.addView(tvNoReason);
+            }
+        }
+        mListItemsContainer.addView(topCard);
+
+        // --- Section B: Search Box (Shown when > 4 models loaded, per DSH ModelSelect) ---
+        int totalModels = store.getTotalLoadedModelsCount();
+        final LinearLayout groupsContainer = new LinearLayout(this);
+        groupsContainer.setOrientation(LinearLayout.VERTICAL);
+
+        if (totalModels > 4) {
+            final EditText etSearch = new EditText(this);
+            etSearch.setSingleLine(true);
+            etSearch.setHint("搜索已装载的供应商或模型名称...");
+            etSearch.setHintTextColor(mutedCol);
+            etSearch.setTextColor(textCol);
+            etSearch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+            etSearch.setPadding(dp(12), dp(7), dp(12), dp(7));
+            etSearch.setBackground(pillBg(cardBg, borderCol, 10));
+            etSearch.setText(mModelSelectorFilterQuery);
+            LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            sLp.bottomMargin = dp(8);
+            mListItemsContainer.addView(etSearch, sLp);
+
+            etSearch.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    mModelSelectorFilterQuery = s != null ? s.toString() : "";
+                    populateModelSelectorGroups(groupsContainer, store, providers, activeProvider, activeModel);
+                }
+                @Override
+                public void afterTextChanged(Editable s) {}
+            });
+        }
+
+        mListItemsContainer.addView(groupsContainer, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        populateModelSelectorGroups(groupsContainer, store, providers, activeProvider, activeModel);
+    }
+
+    private void populateModelSelectorGroups(
+        LinearLayout container,
+        final AcidModelStore store,
+        List<AcidModelStore.ConfiguredProvider> providers,
+        AcidModelStore.ConfiguredProvider activeProvider,
+        AcidModelStore.ModelEntry activeModel
+    ) {
+        container.removeAllViews();
+        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int borderCol = mIsDarkMode ? DARK_BORDER : LIGHT_BORDER;
+        int textCol = mIsDarkMode ? DARK_TEXT : LIGHT_TEXT;
+        int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        int blue = Color.parseColor("#0284C7");
+
+        String query = mModelSelectorFilterQuery != null ? mModelSelectorFilterQuery.trim().toLowerCase(Locale.US) : "";
+        int matchedCount = 0;
+
+        for (int i = 0; i < providers.size(); i++) {
+            final AcidModelStore.ConfiguredProvider p = providers.get(i);
+            if (p.models.isEmpty()) continue;
+
+            List<AcidModelStore.ModelEntry> matchedModels = new ArrayList<AcidModelStore.ModelEntry>();
+            for (AcidModelStore.ModelEntry m : p.models) {
+                if (query.isEmpty() ||
+                    p.displayName.toLowerCase(Locale.US).contains(query) ||
+                    m.name.toLowerCase(Locale.US).contains(query) ||
+                    m.id.toLowerCase(Locale.US).contains(query)) {
+                    matchedModels.add(m);
+                }
+            }
+            if (matchedModels.isEmpty()) continue;
+
+            // Provider Group Header
+            LinearLayout groupHead = new LinearLayout(this);
+            groupHead.setOrientation(LinearLayout.HORIZONTAL);
+            groupHead.setGravity(Gravity.CENTER_VERTICAL);
+            groupHead.setPadding(dp(4), dp(6), dp(4), dp(4));
+
+            TextView tvGroupName = new TextView(this);
+            tvGroupName.setText("供应商: " + p.displayName);
+            tvGroupName.setTextColor(mutedCol);
+            tvGroupName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            tvGroupName.setTypeface(Typeface.DEFAULT_BOLD);
+            LinearLayout.LayoutParams gnLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            groupHead.addView(tvGroupName, gnLp);
+
+            boolean hasKey = p.hasApiKey();
+            TextView tvKeyBadge = new TextView(this);
+            tvKeyBadge.setText(hasKey ? "● 密钥已就绪" : "● 待填 API Key");
+            tvKeyBadge.setTextColor(hasKey ? accent : COLOR_AMBER);
+            tvKeyBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            groupHead.addView(tvKeyBadge);
+
+            container.addView(groupHead);
+
+            // Models inside this provider
+            for (int j = 0; j < matchedModels.size(); j++) {
+                final AcidModelStore.ModelEntry m = matchedModels.get(j);
+                matchedCount++;
+                final boolean isSelected = (activeProvider != null && activeModel != null &&
+                    p.id.equals(activeProvider.id) && m.id.equals(activeModel.id));
+
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(10), dp(10), dp(10), dp(10));
+                int rBg = isSelected ? (mIsDarkMode ? Color.parseColor("#0C4A6E") : Color.parseColor("#E0F2FE")) : cardBg;
+                int rStroke = isSelected ? blue : borderCol;
+                row.setBackground(pillBg(rBg, rStroke, 10));
+                LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                rLp.bottomMargin = dp(6);
+
+                AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(
+                    this, AcidIcons.ICON_MODEL, isSelected ? blue : accent, 17
+                );
+                row.addView(icon);
+
+                LinearLayout textColView = new LinearLayout(this);
+                textColView.setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                tcLp.leftMargin = dp(8);
+                tcLp.rightMargin = dp(8);
+
+                // Display: 供应商 + 模型名字
+                TextView tvTitle = new TextView(this);
+                tvTitle.setText(p.displayName + "  ·  " + m.name);
+                tvTitle.setTextColor(textCol);
+                tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+                tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+                tvTitle.setSingleLine(true);
+                tvTitle.setEllipsize(TextUtils.TruncateAt.END);
+                textColView.addView(tvTitle);
+
+                TextView tvSub = new TextView(this);
+                String subInfo = "ID: " + m.id + (m.supportsReasoning ? "  ·  支持思考深度" : "  ·  标准对话");
+                tvSub.setText(subInfo);
+                tvSub.setTextColor(m.supportsReasoning ? blue : mutedCol);
+                tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+                tvSub.setSingleLine(true);
+                tvSub.setEllipsize(TextUtils.TruncateAt.END);
+                textColView.addView(tvSub);
+
+                row.addView(textColView, tcLp);
+
+                if (isSelected) {
+                    AcidIcons.SvgIconView check = new AcidIcons.SvgIconView(this, AcidIcons.ICON_CHECK, blue, 18);
+                    row.addView(check);
+                } else {
+                    TextView tvPick = new TextView(this);
+                    tvPick.setText("选择");
+                    tvPick.setTextColor(mutedCol);
+                    tvPick.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+                    row.addView(tvPick);
+                }
+
+                row.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        store.selectModel(p.id, m.id, null);
+                        refreshAgentStatusLabel();
+                        renderAgentModelSelectorContent();
+                        Toast.makeText(
+                            BrowserActivity.this,
+                            "已切换模型: " + p.displayName + " / " + m.name,
+                            Toast.LENGTH_SHORT
+                        ).show();
+                    }
+                });
+
+                container.addView(row, rLp);
+            }
+        }
+
+        if (matchedCount == 0) {
+            TextView tvEmpty = new TextView(this);
+            tvEmpty.setText(query.isEmpty()
+                ? "尚未装载任何模型。请点击右上角 [模型配置] 或浏览器右下角 [功能 -> 模型配置] 添加供应商。"
+                : "没有匹配的已装载模型。");
+            tvEmpty.setTextColor(mutedCol);
+            tvEmpty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+            tvEmpty.setGravity(Gravity.CENTER);
+            tvEmpty.setPadding(dp(12), dp(24), dp(12), dp(24));
+            container.addView(tvEmpty);
+        }
+    }
+
+    // =========================================================================
+    // 2. Bottom-Right Menu -> "模型配置": Provider & Model Management Page
+    //    (Reference: DSH dsh-client-ui-settings-models)
+    // =========================================================================
+
+    private void showModelProviderConfigSheet() {
+        if (mAgentLoop == null) return;
+        hideKeyboard();
+        mTvListDialogTitle.setText("模型配置");
+        mBtnListAction.setVisibility(View.VISIBLE);
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        mBtnListAction.update(AcidIcons.ICON_PLUS, "添加供应商", accent);
+        mBtnListAction.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showAddProviderView(false);
+            }
+        });
+
+        renderConfiguredProvidersList();
+        mListDialogOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void renderConfiguredProvidersList() {
+        mListItemsContainer.removeAllViews();
+        if (mAgentLoop == null || mAgentLoop.getModelStore() == null) return;
+
+        final AcidModelStore store = mAgentLoop.getModelStore();
+        final List<AcidModelStore.ConfiguredProvider> providers = store.getProviders();
+
+        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int borderCol = mIsDarkMode ? DARK_BORDER : LIGHT_BORDER;
+        int textCol = mIsDarkMode ? DARK_TEXT : LIGHT_TEXT;
+        int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        int blue = Color.parseColor("#0284C7");
+
+        // Intro description banner (per DSH Models page)
+        TextView intro = new TextView(this);
+        intro.setText("填入各供应商的 API 密钥即可在 Agent 模型选择器中使用其模型。点击右上角 [+ 添加供应商] 可选择内置默认供应商或添加自定义 OpenAI 兼容接口。");
+        intro.setTextColor(mutedCol);
+        intro.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        intro.setPadding(dp(2), 0, dp(2), dp(10));
+        mListItemsContainer.addView(intro);
+
+        for (int i = 0; i < providers.size(); i++) {
+            final AcidModelStore.ConfiguredProvider p = providers.get(i);
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackground(cardBorderBg(cardBg, borderCol, 1, 12));
+            card.setPadding(dp(12), dp(10), dp(12), dp(10));
+            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            cLp.bottomMargin = dp(10);
+            card.setLayoutParams(cLp);
+
+            // Row 1: Provider Name + Tag (默认/自定义) + API Key Status Dot
+            LinearLayout headRow = new LinearLayout(this);
+            headRow.setOrientation(LinearLayout.HORIZONTAL);
+            headRow.setGravity(Gravity.CENTER_VERTICAL);
+
+            TextView tvName = new TextView(this);
+            tvName.setText(p.displayName);
+            tvName.setTextColor(textCol);
+            tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+            tvName.setTypeface(Typeface.DEFAULT_BOLD);
+            headRow.addView(tvName);
+
+            TextView tvTag = new TextView(this);
+            tvTag.setText(p.isCustom ? "自定义" : "内置目录");
+            tvTag.setTextColor(p.isCustom ? Color.parseColor("#8B5CF6") : blue);
+            tvTag.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+            tvTag.setPadding(dp(6), dp(2), dp(6), dp(2));
+            tvTag.setBackground(pillBg(
+                p.isCustom ? Color.argb(26, 139, 92, 246) : Color.argb(26, 2, 132, 199),
+                0, 4
+            ));
+            LinearLayout.LayoutParams tagLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            tagLp.leftMargin = dp(6);
+            headRow.addView(tvTag, tagLp);
+
+            View spacer = new View(this);
+            headRow.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+
+            boolean hasKey = p.hasApiKey();
+            TextView tvKeyState = new TextView(this);
+            tvKeyState.setText(hasKey ? "● API 密钥已配置" : "● API 密钥缺失");
+            tvKeyState.setTextColor(hasKey ? accent : Color.parseColor("#EF4444"));
+            tvKeyState.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            tvKeyState.setTypeface(Typeface.DEFAULT_BOLD);
+            headRow.addView(tvKeyState);
+
+            card.addView(headRow);
+
+            // Row 2: Base URL
+            TextView tvUrl = new TextView(this);
+            tvUrl.setText("API 地址: " + (p.baseUrl.isEmpty() ? "默认" : p.baseUrl));
+            tvUrl.setTextColor(mutedCol);
+            tvUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            tvUrl.setSingleLine(true);
+            tvUrl.setEllipsize(TextUtils.TruncateAt.END);
+            tvUrl.setPadding(0, dp(4), 0, dp(4));
+            card.addView(tvUrl);
+
+            // Row 3: Loaded Models Summary
+            StringBuilder mSb = new StringBuilder();
+            for (int j = 0; j < p.models.size(); j++) {
+                AcidModelStore.ModelEntry me = p.models.get(j);
+                if (j > 0) mSb.append("  |  ");
+                mSb.append(me.name);
+                if (me.supportsReasoning) mSb.append(" [思考]");
+            }
+            TextView tvModels = new TextView(this);
+            tvModels.setText("已装载模型 (" + p.models.size() + "): " + (mSb.length() > 0 ? mSb.toString() : "暂无模型"));
+            tvModels.setTextColor(textCol);
+            tvModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            tvModels.setPadding(0, dp(2), 0, dp(8));
+            card.addView(tvModels);
+
+            // Row 4: Action Buttons ([编辑 / 配置密钥]  [删除])
+            LinearLayout actionRow = new LinearLayout(this);
+            actionRow.setOrientation(LinearLayout.HORIZONTAL);
+            actionRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+
+            AcidIcons.BadgeButton btnEdit = new AcidIcons.BadgeButton(
+                this, AcidIcons.ICON_EDIT, "编辑供应商与模型", blue,
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        showEditProviderView(p, null);
+                    }
+                }
+            );
+            actionRow.addView(btnEdit);
+
+            if (providers.size() > 1 || p.isCustom) {
+                AcidIcons.BadgeButton btnDel = new AcidIcons.BadgeButton(
+                    this, AcidIcons.ICON_TRASH, "删除", Color.parseColor("#EF4444"),
+                    new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            new AlertDialog.Builder(BrowserActivity.this, mIsDarkMode ? AlertDialog.THEME_DEVICE_DEFAULT_DARK : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
+                                .setTitle("删除 " + p.displayName + "？")
+                                .setMessage("删除 " + p.displayName + " 会移除其配置和存储的 API 密钥。")
+                                .setPositiveButton("删除", new DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        store.deleteProvider(p.id);
+                                        refreshAgentStatusLabel();
+                                        renderConfiguredProvidersList();
+                                        Toast.makeText(BrowserActivity.this, "已删除供应商: " + p.displayName, Toast.LENGTH_SHORT).show();
+                                    }
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                        }
+                    }
+                );
+                actionRow.addView(btnDel);
+            }
+
+            card.addView(actionRow);
+            mListItemsContainer.addView(card);
+        }
+
+        // Bottom prominent button to add provider
+        TextView btnAddBottom = new TextView(this);
+        btnAddBottom.setText("+ 添加模型供应商 (默认供应商目录 / 自定义接口)");
+        btnAddBottom.setTextColor(Color.WHITE);
+        btnAddBottom.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        btnAddBottom.setTypeface(Typeface.DEFAULT_BOLD);
+        btnAddBottom.setGravity(Gravity.CENTER);
+        btnAddBottom.setPadding(dp(12), dp(11), dp(12), dp(11));
+        btnAddBottom.setBackground(pillBg(accent, 0, 10));
+        btnAddBottom.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showAddProviderView(false);
+            }
+        });
+        mListItemsContainer.addView(btnAddBottom, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+    }
+
+    /**
+     * DSH-Style "Add Model Provider" View with Segmented Mode Switch:
+     * Mode 0: 内置默认供应商 (Catalog Providers: DeepSeek, OpenAI, Kimi, Zhipu, Qwen, Claude, Gemini, etc.)
+     * Mode 1: 自定义供应商 API (Custom OpenAI-Compatible Provider)
+     */
+    private void showAddProviderView(final boolean customMode) {
+        if (mAgentLoop == null) return;
+        hideKeyboard();
+        mTvListDialogTitle.setText("添加模型供应商");
+        mBtnListAction.setVisibility(View.VISIBLE);
+        int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+        mBtnListAction.update(AcidIcons.ICON_BACK, "返回列表", mutedCol);
+        mBtnListAction.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showModelProviderConfigSheet();
+            }
+        });
+
+        mListItemsContainer.removeAllViews();
+
+        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int borderCol = mIsDarkMode ? DARK_BORDER : LIGHT_BORDER;
+        int textCol = mIsDarkMode ? DARK_TEXT : LIGHT_TEXT;
+        int blue = Color.parseColor("#0284C7");
+
+        // Segmented Mode Switch: [第三方默认供应商] vs [自定义模型 API]
+        LinearLayout segBar = new LinearLayout(this);
+        segBar.setOrientation(LinearLayout.HORIZONTAL);
+        segBar.setPadding(dp(3), dp(3), dp(3), dp(3));
+        segBar.setBackground(pillBg(cardBg, borderCol, 10));
+        LinearLayout.LayoutParams segLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        segLp.bottomMargin = dp(8);
+        segBar.setLayoutParams(segLp);
+
+        TextView tabCatalog = new TextView(this);
+        tabCatalog.setText("默认供应商目录 (10)");
+        tabCatalog.setGravity(Gravity.CENTER);
+        tabCatalog.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        tabCatalog.setTypeface(!customMode ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        tabCatalog.setPadding(dp(8), dp(8), dp(8), dp(8));
+        tabCatalog.setTextColor(!customMode ? Color.WHITE : textCol);
+        tabCatalog.setBackground(!customMode ? pillBg(blue, 0, 8) : null);
+        tabCatalog.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (customMode) showAddProviderView(false);
+            }
+        });
+        segBar.addView(tabCatalog, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView tabCustom = new TextView(this);
+        tabCustom.setText("自定义供应商 API");
+        tabCustom.setGravity(Gravity.CENTER);
+        tabCustom.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        tabCustom.setTypeface(customMode ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        tabCustom.setPadding(dp(8), dp(8), dp(8), dp(8));
+        tabCustom.setTextColor(customMode ? Color.WHITE : textCol);
+        tabCustom.setBackground(customMode ? pillBg(blue, 0, 8) : null);
+        tabCustom.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (!customMode) showAddProviderView(true);
+            }
+        });
+        segBar.addView(tabCustom, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        mListItemsContainer.addView(segBar);
+
+        // One-line purpose description beneath segmented switch (per DSH README)
+        TextView hint = new TextView(this);
+        hint.setText(!customMode
+            ? "从内置目录中选择 DeepSeek、OpenAI、Kimi、智谱 GLM、通义千问等主流提供商，填入 API 密钥即可装载使用。"
+            : "连接中转站、自部署服务 (Ollama / vLLM) 或其他兼容 OpenAI 协议的接口，需填写供应商名称、API 地址和模型。");
+        hint.setTextColor(mutedCol);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        hint.setPadding(dp(2), 0, dp(2), dp(10));
+        mListItemsContainer.addView(hint);
+
+        if (!customMode) {
+            renderBuiltinCatalogPresetsList();
+        } else {
+            AcidModelStore.ConfiguredProvider draftCustom = new AcidModelStore.ConfiguredProvider(
+                "", "", true, "", ""
+            );
+            renderProviderEditorForm(draftCustom, null, true);
+        }
+    }
+
+    private void renderBuiltinCatalogPresetsList() {
+        final AcidModelStore store = mAgentLoop.getModelStore();
+        List<AcidModelStore.CatalogProviderPreset> presets = AcidModelStore.getBuiltinCatalogPresets();
+
+        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int borderCol = mIsDarkMode ? DARK_BORDER : LIGHT_BORDER;
+        int textCol = mIsDarkMode ? DARK_TEXT : LIGHT_TEXT;
+        int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        int blue = Color.parseColor("#0284C7");
+
+        for (int i = 0; i < presets.size(); i++) {
+            final AcidModelStore.CatalogProviderPreset preset = presets.get(i);
+            final AcidModelStore.ConfiguredProvider existing = store.getProvider(preset.id);
+            boolean isLoaded = (existing != null);
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackground(cardBorderBg(cardBg, isLoaded ? accent : borderCol, 1, 10));
+            card.setPadding(dp(12), dp(10), dp(12), dp(10));
+            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            cLp.bottomMargin = dp(8);
+            card.setLayoutParams(cLp);
+
+            LinearLayout rowTop = new LinearLayout(this);
+            rowTop.setOrientation(LinearLayout.HORIZONTAL);
+            rowTop.setGravity(Gravity.CENTER_VERTICAL);
+
+            TextView tvTitle = new TextView(this);
+            tvTitle.setText(preset.displayName);
+            tvTitle.setTextColor(textCol);
+            tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+            tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+            LinearLayout.LayoutParams ttLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            rowTop.addView(tvTitle, ttLp);
+
+            TextView tvAction = new TextView(this);
+            tvAction.setText(isLoaded ? "已装载 · 点击编辑" : "+ 选择并配置");
+            tvAction.setTextColor(isLoaded ? accent : blue);
+            tvAction.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            tvAction.setTypeface(Typeface.DEFAULT_BOLD);
+            tvAction.setPadding(dp(8), dp(3), dp(8), dp(3));
+            tvAction.setBackground(pillBg(
+                isLoaded ? Color.argb(26, 0, 186, 118) : Color.argb(26, 2, 132, 199),
+                0, 6
+            ));
+            rowTop.addView(tvAction);
+            card.addView(rowTop);
+
+            TextView tvDesc = new TextView(this);
+            tvDesc.setText(preset.description);
+            tvDesc.setTextColor(mutedCol);
+            tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            tvDesc.setPadding(0, dp(3), 0, dp(2));
+            card.addView(tvDesc);
+
+            StringBuilder mListStr = new StringBuilder("预设模型: ");
+            for (int j = 0; j < preset.defaultModels.size(); j++) {
+                if (j > 0) mListStr.append(", ");
+                mListStr.append(preset.defaultModels.get(j).name);
+            }
+            TextView tvModels = new TextView(this);
+            tvModels.setText(mListStr.toString());
+            tvModels.setTextColor(blue);
+            tvModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.8f);
+            card.addView(tvModels);
+
+            card.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showEditProviderView(existing, preset);
+                }
+            });
+
+            mListItemsContainer.addView(card);
+        }
+    }
+
+    /**
+     * Detailed Provider Editor View (Used for configuring a Catalog Provider, editing an existing Provider,
+     * or creating a Custom Provider).
+     */
+    private void showEditProviderView(
+        final AcidModelStore.ConfiguredProvider existing,
+        final AcidModelStore.CatalogProviderPreset preset
+    ) {
+        if (mAgentLoop == null) return;
+        hideKeyboard();
+
+        String title = existing != null
+            ? ("编辑 " + existing.displayName)
+            : (preset != null ? ("配置 " + preset.displayName) : "创建自定义供应商");
+        mTvListDialogTitle.setText(title);
+        mBtnListAction.setVisibility(View.VISIBLE);
+        int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+        mBtnListAction.update(AcidIcons.ICON_BACK, "返回", mutedCol);
+        mBtnListAction.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showModelProviderConfigSheet();
+            }
+        });
+
+        mListItemsContainer.removeAllViews();
+
+        AcidModelStore.ConfiguredProvider workingDraft;
+        if (existing != null) {
+            workingDraft = new AcidModelStore.ConfiguredProvider(
+                existing.id, existing.displayName, existing.isCustom, existing.baseUrl, existing.apiKey
+            );
+            for (AcidModelStore.ModelEntry m : existing.models) {
+                workingDraft.models.add(m.copy());
+            }
+        } else if (preset != null) {
+            workingDraft = new AcidModelStore.ConfiguredProvider(
+                preset.id, preset.displayName, false, preset.defaultBaseUrl, ""
+            );
+            for (AcidModelStore.ModelEntry m : preset.defaultModels) {
+                workingDraft.models.add(m.copy());
+            }
+        } else {
+            workingDraft = new AcidModelStore.ConfiguredProvider("", "", true, "", "");
+        }
+
+        renderProviderEditorForm(workingDraft, preset, false);
+    }
+
+    private void renderProviderEditorForm(
+        final AcidModelStore.ConfiguredProvider draft,
+        final AcidModelStore.CatalogProviderPreset preset,
+        final boolean embeddedInAddTab
+    ) {
+        final AcidModelStore store = mAgentLoop.getModelStore();
+        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int inputBg = mIsDarkMode ? DARK_BG : Color.WHITE;
+        int borderCol = mIsDarkMode ? DARK_BORDER : LIGHT_BORDER;
+        final int textCol = mIsDarkMode ? DARK_TEXT : LIGHT_TEXT;
+        final int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+        final int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        final int blue = Color.parseColor("#0284C7");
+
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setBackground(cardBorderBg(cardBg, borderCol, 1, 12));
+        form.setPadding(dp(12), dp(12), dp(12), dp(12));
+
+        // 1. Provider Display Name (Editable for Custom, or shown as header for Built-in)
+        TextView lblName = new TextView(this);
+        lblName.setText(draft.isCustom ? "供应商显示名称 (必填):" : ("供应商: " + draft.displayName + " (ID: " + draft.id + ")"));
+        lblName.setTextColor(textCol);
+        lblName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        lblName.setTypeface(Typeface.DEFAULT_BOLD);
+        form.addView(lblName);
+
+        final EditText etDisplayName = new EditText(this);
+        etDisplayName.setSingleLine(true);
+        etDisplayName.setText(draft.displayName);
+        etDisplayName.setHint("例如: 我的中转网关 / Ollama 本地服务");
+        etDisplayName.setTextColor(textCol);
+        etDisplayName.setHintTextColor(mutedCol);
+        etDisplayName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        etDisplayName.setPadding(dp(10), dp(7), dp(10), dp(7));
+        etDisplayName.setBackground(pillBg(inputBg, borderCol, 8));
+        if (draft.isCustom) {
+            LinearLayout.LayoutParams dnLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            dnLp.topMargin = dp(4);
+            dnLp.bottomMargin = dp(8);
+            form.addView(etDisplayName, dnLp);
+        } else {
+            lblName.setPadding(0, 0, 0, dp(8));
+        }
+
+        // 2. API Key with Show/Hide Toggle (per DSH settings-models API Key field)
+        LinearLayout keyLabelRow = new LinearLayout(this);
+        keyLabelRow.setOrientation(LinearLayout.HORIZONTAL);
+        keyLabelRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView lblKey = new TextView(this);
+        lblKey.setText("API 密钥 (API Key):");
+        lblKey.setTextColor(textCol);
+        lblKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        lblKey.setTypeface(Typeface.DEFAULT_BOLD);
+        keyLabelRow.addView(lblKey, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        final TextView btnToggleKeyVis = new TextView(this);
+        btnToggleKeyVis.setText("显示密钥");
+        btnToggleKeyVis.setTextColor(blue);
+        btnToggleKeyVis.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        btnToggleKeyVis.setPadding(dp(6), dp(2), dp(6), dp(2));
+        keyLabelRow.addView(btnToggleKeyVis);
+        form.addView(keyLabelRow);
+
+        final EditText etApiKey = new EditText(this);
+        etApiKey.setSingleLine(true);
+        etApiKey.setText(draft.apiKey);
+        etApiKey.setHint(preset != null ? ("输入 API Key (" + preset.envKeyHint + ")") : "输入 sk-... (本地免鉴权接口可留空)");
+        etApiKey.setTextColor(textCol);
+        etApiKey.setHintTextColor(mutedCol);
+        etApiKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        etApiKey.setPadding(dp(10), dp(7), dp(10), dp(7));
+        etApiKey.setBackground(pillBg(inputBg, borderCol, 8));
+        etApiKey.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        LinearLayout.LayoutParams keyLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        keyLp.topMargin = dp(4);
+        keyLp.bottomMargin = dp(8);
+        form.addView(etApiKey, keyLp);
+
+        btnToggleKeyVis.setOnClickListener(new View.OnClickListener() {
+            private boolean revealed = false;
+            @Override
+            public void onClick(View v) {
+                revealed = !revealed;
+                etApiKey.setTransformationMethod(revealed
+                    ? HideReturnsTransformationMethod.getInstance()
+                    : PasswordTransformationMethod.getInstance());
+                btnToggleKeyVis.setText(revealed ? "隐藏密钥" : "显示密钥");
+                etApiKey.setSelection(etApiKey.getText().length());
+            }
+        });
+
+        // 3. Base URL
+        TextView lblUrl = new TextView(this);
+        lblUrl.setText("API 地址 (Base URL - OpenAI 兼容接口):");
+        lblUrl.setTextColor(textCol);
+        lblUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        lblUrl.setTypeface(Typeface.DEFAULT_BOLD);
+        form.addView(lblUrl);
+
+        final EditText etBaseUrl = new EditText(this);
+        etBaseUrl.setSingleLine(true);
+        etBaseUrl.setText(draft.baseUrl);
+        etBaseUrl.setHint(preset != null ? preset.defaultBaseUrl : "https://gateway.example/v1");
+        etBaseUrl.setTextColor(textCol);
+        etBaseUrl.setHintTextColor(mutedCol);
+        etBaseUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        etBaseUrl.setPadding(dp(10), dp(7), dp(10), dp(7));
+        etBaseUrl.setBackground(pillBg(inputBg, borderCol, 8));
+        LinearLayout.LayoutParams urlLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        urlLp.topMargin = dp(4);
+        urlLp.bottomMargin = dp(10);
+        form.addView(etBaseUrl, urlLp);
+
+        // 4. Models Catalog Section inside Provider Editor
+        LinearLayout modelHeaderRow = new LinearLayout(this);
+        modelHeaderRow.setOrientation(LinearLayout.HORIZONTAL);
+        modelHeaderRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView lblModels = new TextView(this);
+        lblModels.setText("装载的模型列表");
+        lblModels.setTextColor(textCol);
+        lblModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        lblModels.setTypeface(Typeface.DEFAULT_BOLD);
+        modelHeaderRow.addView(lblModels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        if (preset != null) {
+            TextView btnResetModels = new TextView(this);
+            btnResetModels.setText("恢复默认模型");
+            btnResetModels.setTextColor(blue);
+            btnResetModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            btnResetModels.setPadding(dp(6), dp(2), dp(6), dp(2));
+            modelHeaderRow.addView(btnResetModels);
+            final LinearLayout modelsListBoxRef = new LinearLayout(this);
+            btnResetModels.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    draft.models.clear();
+                    for (AcidModelStore.ModelEntry m : preset.defaultModels) {
+                        draft.models.add(m.copy());
+                    }
+                    renderDraftModelsList(modelsListBoxRef, draft);
+                    Toast.makeText(BrowserActivity.this, "已恢复预设模型目录", Toast.LENGTH_SHORT).show();
+                }
+            });
+            form.addView(modelHeaderRow);
+
+            // Action bar for models: [+ 手动添加模型]  [从接口获取可用模型 (/models)]
+            form.addView(buildModelDiscoveryActionBar(draft, etBaseUrl, etApiKey, modelsListBoxRef));
+            modelsListBoxRef.setOrientation(LinearLayout.VERTICAL);
+            form.addView(modelsListBoxRef);
+            renderDraftModelsList(modelsListBoxRef, draft);
+        } else {
+            form.addView(modelHeaderRow);
+            final LinearLayout modelsListBox = new LinearLayout(this);
+            modelsListBox.setOrientation(LinearLayout.VERTICAL);
+            form.addView(buildModelDiscoveryActionBar(draft, etBaseUrl, etApiKey, modelsListBox));
+            form.addView(modelsListBox);
+            renderDraftModelsList(modelsListBox, draft);
+        }
+
+        // 5. Save / Apply Button
+        TextView btnSave = new TextView(this);
+        btnSave.setText(draft.isCustom && draft.id.isEmpty() ? "创建并装载供应商" : "保存并装载供应商");
+        btnSave.setTextColor(Color.WHITE);
+        btnSave.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        btnSave.setTypeface(Typeface.DEFAULT_BOLD);
+        btnSave.setGravity(Gravity.CENTER);
+        btnSave.setPadding(dp(12), dp(11), dp(12), dp(11));
+        btnSave.setBackground(pillBg(accent, 0, 10));
+        LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        saveLp.topMargin = dp(12);
+        btnSave.setLayoutParams(saveLp);
+
+        btnSave.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String dispName = draft.isCustom ? etDisplayName.getText().toString().trim() : draft.displayName;
+                if (dispName.isEmpty()) {
+                    Toast.makeText(BrowserActivity.this, "请填写供应商显示名称", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String url = etBaseUrl.getText().toString().trim();
+                if (url.isEmpty() && preset != null) {
+                    url = preset.defaultBaseUrl;
+                }
+                if (url.isEmpty() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+                    Toast.makeText(BrowserActivity.this, "请输入有效的 HTTP/HTTPS API 地址", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (draft.models.isEmpty()) {
+                    Toast.makeText(BrowserActivity.this, "至少需要添加 1 个模型", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                draft.displayName = dispName;
+                if (draft.id.isEmpty()) {
+                    draft.id = "custom-" + System.currentTimeMillis();
+                }
+                draft.baseUrl = url;
+                draft.apiKey = etApiKey.getText().toString().trim();
+
+                store.upsertProvider(draft);
+                // Automatically select the first model of this newly saved provider
+                store.selectModel(draft.id, draft.models.get(0).id, null);
+                refreshAgentStatusLabel();
+                Toast.makeText(BrowserActivity.this, "已保存并装载: " + draft.displayName, Toast.LENGTH_SHORT).show();
+                showModelProviderConfigSheet();
+            }
+        });
+        form.addView(btnSave);
+
+        mListItemsContainer.addView(form);
+    }
+
+    private LinearLayout buildModelDiscoveryActionBar(
+        final AcidModelStore.ConfiguredProvider draft,
+        final EditText etBaseUrl,
+        final EditText etApiKey,
+        final LinearLayout modelsListBox
+    ) {
+        int blue = Color.parseColor("#0284C7");
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(0, dp(6), 0, dp(6));
+
+        // Button 1: Manual Add Model (+ 添加模型)
+        TextView btnManualAdd = new TextView(this);
+        btnManualAdd.setText("+ 手动添加模型");
+        btnManualAdd.setTextColor(accent);
+        btnManualAdd.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        btnManualAdd.setTypeface(Typeface.DEFAULT_BOLD);
+        btnManualAdd.setGravity(Gravity.CENTER);
+        btnManualAdd.setPadding(dp(8), dp(6), dp(8), dp(6));
+        btnManualAdd.setBackground(pillBg(Color.argb(24, 0, 186, 118), accent, 8));
+        btnManualAdd.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showManualAddModelDialog(draft, modelsListBox);
+            }
+        });
+        LinearLayout.LayoutParams b1Lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        b1Lp.rightMargin = dp(4);
+        bar.addView(btnManualAdd, b1Lp);
+
+        // Button 2: Fetch Available Models from Endpoint (获取可用模型 /models)
+        final TextView btnFetch = new TextView(this);
+        btnFetch.setText("从接口获取模型 (/models)");
+        btnFetch.setTextColor(blue);
+        btnFetch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        btnFetch.setTypeface(Typeface.DEFAULT_BOLD);
+        btnFetch.setGravity(Gravity.CENTER);
+        btnFetch.setPadding(dp(8), dp(6), dp(8), dp(6));
+        btnFetch.setBackground(pillBg(Color.argb(24, 2, 132, 199), blue, 8));
+        btnFetch.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String url = etBaseUrl.getText().toString().trim();
+                String key = etApiKey.getText().toString().trim();
+                if (url.isEmpty()) {
+                    Toast.makeText(BrowserActivity.this, "请先填写 API 地址，再获取可用模型", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                btnFetch.setText("正在询问提供商...");
+                btnFetch.setEnabled(false);
+                AcidModelStore.discoverModelsAsync(url, key, new AcidModelStore.ModelDiscoveryCallback() {
+                    @Override
+                    public void onModelsDiscovered(final List<AcidModelStore.ModelEntry> discovered) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                btnFetch.setText("从接口获取模型 (/models)");
+                                btnFetch.setEnabled(true);
+                                showDiscoveredModelsPickerDialog(draft, discovered, modelsListBox);
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onDiscoveryFailed(final String errorMsg) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                btnFetch.setText("从接口获取模型 (/models)");
+                                btnFetch.setEnabled(true);
+                                Toast.makeText(BrowserActivity.this, "获取失败: " + errorMsg, Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    }
+                });
+            }
+        });
+        LinearLayout.LayoutParams b2Lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        b2Lp.leftMargin = dp(4);
+        bar.addView(btnFetch, b2Lp);
+
+        return bar;
+    }
+
+    private void renderDraftModelsList(final LinearLayout container, final AcidModelStore.ConfiguredProvider draft) {
+        container.removeAllViews();
+        int rowBg = mIsDarkMode ? DARK_BG : Color.WHITE;
+        int borderCol = mIsDarkMode ? DARK_BORDER : LIGHT_BORDER;
+        int textCol = mIsDarkMode ? DARK_TEXT : LIGHT_TEXT;
+        int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+        int blue = Color.parseColor("#0284C7");
+
+        if (draft.models.isEmpty()) {
+            TextView tvEmpty = new TextView(this);
+            tvEmpty.setText("尚未添加模型，请点击上方 [+ 手动添加模型] 或 [从接口获取模型]。");
+            tvEmpty.setTextColor(mutedCol);
+            tvEmpty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            tvEmpty.setPadding(dp(4), dp(8), dp(4), dp(8));
+            container.addView(tvEmpty);
+            return;
+        }
+
+        for (int i = 0; i < draft.models.size(); i++) {
+            final int index = i;
+            final AcidModelStore.ModelEntry m = draft.models.get(i);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(8), dp(7), dp(8), dp(7));
+            row.setBackground(pillBg(rowBg, borderCol, 8));
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            rLp.bottomMargin = dp(5);
+
+            LinearLayout textColView = new LinearLayout(this);
+            textColView.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+
+            TextView tvName = new TextView(this);
+            tvName.setText(m.name);
+            tvName.setTextColor(textCol);
+            tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+            tvName.setTypeface(Typeface.DEFAULT_BOLD);
+            tvName.setSingleLine(true);
+            textColView.addView(tvName);
+
+            TextView tvId = new TextView(this);
+            tvId.setText("ID: " + m.id);
+            tvId.setTextColor(mutedCol);
+            tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            tvId.setSingleLine(true);
+            textColView.addView(tvId);
+
+            row.addView(textColView, tcLp);
+
+            // Toggle whether this model supports reasoning effort (思考深度)
+            TextView btnReasonToggle = new TextView(this);
+            btnReasonToggle.setText(m.supportsReasoning ? "思考深度: 开" : "思考深度: 关");
+            btnReasonToggle.setTextColor(m.supportsReasoning ? blue : mutedCol);
+            btnReasonToggle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            btnReasonToggle.setTypeface(m.supportsReasoning ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            btnReasonToggle.setPadding(dp(7), dp(3), dp(7), dp(3));
+            btnReasonToggle.setBackground(pillBg(
+                m.supportsReasoning ? Color.argb(26, 2, 132, 199) : Color.TRANSPARENT,
+                m.supportsReasoning ? blue : borderCol, 6
+            ));
+            btnReasonToggle.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    m.supportsReasoning = !m.supportsReasoning;
+                    renderDraftModelsList(container, draft);
+                }
+            });
+            row.addView(btnReasonToggle);
+
+            // Remove model button
+            LinearLayout delBox = new LinearLayout(this);
+            delBox.setGravity(Gravity.CENTER);
+            delBox.setPadding(dp(6), dp(4), dp(2), dp(4));
+            AcidIcons.SvgIconView delIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_CLOSE, mutedCol, 13);
+            delBox.addView(delIcon);
+            delBox.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    draft.models.remove(index);
+                    renderDraftModelsList(container, draft);
+                }
+            });
+            row.addView(delBox);
+
+            container.addView(row, rLp);
+        }
+    }
+
+    private void showManualAddModelDialog(final AcidModelStore.ConfiguredProvider draft, final LinearLayout modelsListBox) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(18), dp(12), dp(18), dp(8));
 
-        TextView tvUrl = new TextView(this);
-        tvUrl.setText("API Base URL (OpenAI 兼容接口):");
-        tvUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        box.addView(tvUrl);
+        TextView tvId = new TextView(this);
+        tvId.setText("模型 ID (必填，请求接口时发送的 model 字段):");
+        tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        box.addView(tvId);
 
-        final EditText etUrl = new EditText(this);
-        etUrl.setSingleLine(true);
-        etUrl.setText(mAgentLoop.getBaseUrl());
-        etUrl.setHint("https://api.deepseek.com/v1");
-        etUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        box.addView(etUrl);
+        final EditText etId = new EditText(this);
+        etId.setSingleLine(true);
+        etId.setHint("例如: deepseek-reasoner / gpt-4.1 / claude-sonnet-4");
+        etId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        box.addView(etId);
 
-        TextView tvKey = new TextView(this);
-        tvKey.setText("API Key:");
-        tvKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        tvKey.setPadding(0, dp(8), 0, 0);
-        box.addView(tvKey);
+        TextView tvName = new TextView(this);
+        tvName.setText("显示名称 (选填，留空则使用模型 ID):");
+        tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tvName.setPadding(0, dp(8), 0, 0);
+        box.addView(tvName);
 
-        final EditText etKey = new EditText(this);
-        etKey.setSingleLine(true);
-        etKey.setText(mAgentLoop.getApiKey());
-        etKey.setHint("sk-...");
-        etKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        box.addView(etKey);
+        final EditText etName = new EditText(this);
+        etName.setSingleLine(true);
+        etName.setHint("例如: DeepSeek R1 思考模型");
+        etName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        box.addView(etName);
 
-        TextView tvModel = new TextView(this);
-        tvModel.setText("Model Name:");
-        tvModel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        tvModel.setPadding(0, dp(8), 0, 0);
-        box.addView(tvModel);
-
-        final EditText etModel = new EditText(this);
-        etModel.setSingleLine(true);
-        etModel.setText(mAgentLoop.getModelName());
-        etModel.setHint("deepseek-chat / gpt-4o / claude-3-5-sonnet");
-        etModel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        box.addView(etModel);
+        final android.widget.CheckBox cbReasoning = new android.widget.CheckBox(this);
+        cbReasoning.setText("支持调节思考深度 (Reasoning Effort)");
+        cbReasoning.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        cbReasoning.setChecked(true);
+        box.addView(cbReasoning);
 
         new AlertDialog.Builder(this, mIsDarkMode ? AlertDialog.THEME_DEVICE_DEFAULT_DARK : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
-            .setTitle("Acid Agent 模型配置")
+            .setTitle("手动添加模型")
             .setView(box)
-            .setPositiveButton("保存配置", new DialogInterface.OnClickListener() {
+            .setPositiveButton("添加", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface dialog, int which) {
-                    mAgentLoop.saveConfig(
-                        etUrl.getText().toString(),
-                        etKey.getText().toString(),
-                        etModel.getText().toString()
-                    );
-                    if (mTvAgentLoopStatus != null) {
-                        mTvAgentLoopStatus.setText(mAgentLoop.getModelName());
+                    String id = etId.getText().toString().trim();
+                    if (id.isEmpty()) {
+                        Toast.makeText(BrowserActivity.this, "模型 ID 不能为空", Toast.LENGTH_SHORT).show();
+                        return;
                     }
-                    Toast.makeText(BrowserActivity.this, "模型配置已保存", Toast.LENGTH_SHORT).show();
+                    String name = etName.getText().toString().trim();
+                    if (name.isEmpty()) name = id;
+                    if (draft.findModel(id) != null) {
+                        Toast.makeText(BrowserActivity.this, "该模型 ID 已存在", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    draft.models.add(new AcidModelStore.ModelEntry(id, name, cbReasoning.isChecked()));
+                    renderDraftModelsList(modelsListBox, draft);
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    private void showDiscoveredModelsPickerDialog(
+        final AcidModelStore.ConfiguredProvider draft,
+        final List<AcidModelStore.ModelEntry> discovered,
+        final LinearLayout modelsListBox
+    ) {
+        final String[] labels = new String[discovered.size()];
+        final boolean[] checked = new boolean[discovered.size()];
+        for (int i = 0; i < discovered.size(); i++) {
+            AcidModelStore.ModelEntry m = discovered.get(i);
+            labels[i] = m.id + (m.supportsReasoning ? " [支持思考]" : "");
+            checked[i] = (draft.findModel(m.id) != null);
+        }
+
+        new AlertDialog.Builder(this, mIsDarkMode ? AlertDialog.THEME_DEVICE_DEFAULT_DARK : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
+            .setTitle("选择要装载的模型 (共发现 " + discovered.size() + " 个)")
+            .setMultiChoiceItems(labels, checked, new DialogInterface.OnMultiChoiceClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which, boolean isChecked) {
+                    checked[which] = isChecked;
+                }
+            })
+            .setPositiveButton("添加所选", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    int added = 0;
+                    for (int i = 0; i < discovered.size(); i++) {
+                        if (checked[i]) {
+                            AcidModelStore.ModelEntry m = discovered.get(i);
+                            if (draft.findModel(m.id) == null) {
+                                draft.models.add(m.copy());
+                                added++;
+                            }
+                        }
+                    }
+                    renderDraftModelsList(modelsListBox, draft);
+                    Toast.makeText(BrowserActivity.this, "已添加 " + added + " 个模型", Toast.LENGTH_SHORT).show();
                 }
             })
             .setNegativeButton("取消", null)
