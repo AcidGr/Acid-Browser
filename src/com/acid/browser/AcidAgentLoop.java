@@ -18,12 +18,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Autonomous In-App Agent Loop Engine for Acid Browser.
- * - Connects directly to any OpenAI-compatible Chat Completions endpoint (DeepSeek, OpenAI, OpenRouter, local gateway, etc.)
- * - Executes multi-step ReAct / Tool-Calling loops up to 35 steps per turn
- * - Sliding-Window Context Pruner: retains full DOM observations only for the latest 2 browser tool results
- * - Supports DeepSeek R1 / Reasoner `reasoning_content` preservation
- * - Coordinates with AgentOverlayView for breathing border and Human Takeover pause/resume
+ * Autonomous In-App Agent Loop Engine for Acid Browser (Multi-Session Edition).
+ * - Persists every session's UI bubbles (User, Thinking, Tool Call with full args & result, Assistant Markdown)
+ *   and pruned OpenAI API message history via AcidSessionStore.
+ * - Connects directly to any OpenAI-compatible Chat Completions endpoint.
+ * - Supports DeepSeek R1 / Reasoner `reasoning_content` and inline `<think>` blocks.
  */
 public class AcidAgentLoop {
 
@@ -38,21 +37,17 @@ public class AcidAgentLoop {
 
     public interface AgentLoopListener {
         void onLoopStateChanged(boolean running, boolean pausedForTakeover, int step);
-        void onUserMessage(String text);
-        void onThinking(String reasoningText);
-        void onToolCall(String toolName, String argsSummary);
-        void onToolResult(String toolName, String resultPreview);
-        void onAssistantReply(String content);
-        void onLoopError(String errorMsg);
+        void onSessionLoaded(AcidSessionStore.AgentSession session);
+        void onUiItemAdded(AcidSessionStore.UiMessageItem item);
+        void onUiItemUpdated(AcidSessionStore.UiMessageItem item);
     }
 
     private final Context mContext;
     private final BrowserController mController;
     private final AcidSandboxTools mSandboxTools;
+    private final AcidSessionStore mSessionStore;
     private final AgentLoopListener mListener;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
-
-    private final List<JSONObject> mConversationHistory = new ArrayList<JSONObject>();
     private final JSONArray mToolsSchema;
 
     private volatile boolean mRunning = false;
@@ -64,8 +59,17 @@ public class AcidAgentLoop {
         mContext = context;
         mController = controller;
         mSandboxTools = new AcidSandboxTools(controller);
+        mSessionStore = new AcidSessionStore(context);
         mListener = listener;
         mToolsSchema = AcidSandboxTools.buildToolsSchema();
+    }
+
+    public AcidSessionStore getSessionStore() {
+        return mSessionStore;
+    }
+
+    public AcidSessionStore.AgentSession getActiveSession() {
+        return mSessionStore.getActiveSession();
     }
 
     // =========================================================================
@@ -103,10 +107,49 @@ public class AcidAgentLoop {
         return mPausedForTakeover;
     }
 
-    public void clearConversation() {
+    // =========================================================================
+    // Multi-Session Management Operations
+    // =========================================================================
+
+    public void startNewSession() {
         stopLoop();
-        synchronized (mConversationHistory) {
-            mConversationHistory.clear();
+        final AcidSessionStore.AgentSession s = mSessionStore.createNewSession();
+        if (mListener != null) {
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    mListener.onSessionLoaded(s);
+                }
+            });
+        }
+    }
+
+    public void switchSession(String sessionId) {
+        stopLoop();
+        final AcidSessionStore.AgentSession s = mSessionStore.switchToSession(sessionId);
+        if (mListener != null && s != null) {
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    mListener.onSessionLoaded(s);
+                }
+            });
+        }
+    }
+
+    public void deleteSession(String sessionId) {
+        if (mRunning && getActiveSession() != null && getActiveSession().id.equals(sessionId)) {
+            stopLoop();
+        }
+        mSessionStore.deleteSession(sessionId);
+        final AcidSessionStore.AgentSession active = mSessionStore.getActiveSession();
+        if (mListener != null) {
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    mListener.onSessionLoaded(active);
+                }
+            });
         }
     }
 
@@ -136,13 +179,13 @@ public class AcidAgentLoop {
      */
     public void submitUserTask(final String userPrompt) {
         if (mRunning) {
-            notifyError("Agent 正在运行中，请先停止当前任务。");
+            addErrorItem("Agent 正在运行中，请先点击停止按钮中断当前任务。");
             return;
         }
         String apiKey = getApiKey();
         String baseUrl = getBaseUrl();
         if (apiKey.isEmpty() && !baseUrl.contains("127.0.0.1") && !baseUrl.contains("localhost")) {
-            notifyError("未配置 API Key！请先点击右上角 [模型设置] 填入 API Key。");
+            addErrorItem("尚未配置 API Key！请点击面板右上角 [模型设置] 填入 API Key（如 DeepSeek / OpenAI 兼容接口）。");
             return;
         }
 
@@ -150,13 +193,24 @@ public class AcidAgentLoop {
         mPausedForTakeover = false;
         mRunning = true;
 
-        notifyUserMessage(userPrompt);
+        final AcidSessionStore.AgentSession session = mSessionStore.getActiveSession();
+        mSessionStore.updateTitleIfDefault(userPrompt);
 
-        // Attach live current browser snapshot summary to the user message so step 1 has immediate context
+        // Create and display User UI bubble
+        AcidSessionStore.UiMessageItem userItem = new AcidSessionStore.UiMessageItem();
+        userItem.type = AcidSessionStore.TYPE_USER;
+        userItem.text = userPrompt;
+        userItem.timestamp = System.currentTimeMillis();
+        synchronized (mSessionStore) {
+            session.uiItems.add(userItem);
+            mSessionStore.saveActiveSession();
+        }
+        notifyItemAdded(userItem);
+
         mWorkerThread = new Thread(new Runnable() {
             @Override
             public void run() {
-                runAgentLoopInternal(userPrompt);
+                runAgentLoopInternal(session, userPrompt);
             }
         }, "AcidAgentLoopThread");
         mWorkerThread.start();
@@ -181,12 +235,12 @@ public class AcidAgentLoop {
             "- **Desktop vs Mobile Identity**: If a mobile webpage blocks content, hides buttons, or forces app download banners, immediately call `browser(action='set_mode', mode='desktop')` to switch to 1280px PC mode.\n" +
             "- **Sandbox & Local Reports**: You can save scraped data, write local HTML pages into the workspace via `write`, and display them directly in the browser via `browser(action='navigate', url='workspace://report.html')`.\n" +
             "- **Userscript Self-Programming**: All `.js` files in `userscripts/` inside your workspace are automatically injected into every webpage. You can write custom userscripts to modify pages or block annoyances.\n" +
-            "- **Human-in-the-Loop Takeover**: When encountering login passwords, SMS codes, CAPTCHAs, or payment confirmations, call `browser(action='request_takeover', reason='...')` and stop so the user can take over.";
+            "- **Human-in-the-Loop Takeover**: When encountering login passwords, SMS codes, CAPTCHAs, or payment confirmations, call `browser(action='request_takeover', reason='...')` and stop so the user can take over.\n" +
+            "- Format your final explanations clearly using Markdown (headings, bold, lists, code blocks).";
     }
 
-    private void runAgentLoopInternal(String userPrompt) {
+    private void runAgentLoopInternal(AcidSessionStore.AgentSession session, String userPrompt) {
         try {
-            // Switch WebView overlay to AI driving mode (breathing border + anti-touch lock)
             mMainHandler.post(new Runnable() {
                 @Override
                 public void run() {
@@ -194,49 +248,56 @@ public class AcidAgentLoop {
                 }
             });
 
-            // Capture initial page context
             JSONObject initObs = mController.observeSync(mController.isSomEnabled(), true, false);
             String initSnapshot = initObs != null ? initObs.optString("compactText", "") : "";
 
-            synchronized (mConversationHistory) {
+            synchronized (mSessionStore) {
                 JSONObject userMsg = new JSONObject();
                 userMsg.put("role", "user");
                 userMsg.put("content", userPrompt +
                     (initSnapshot.isEmpty() ? "" : "\n\n[Current Browser State]\n" + initSnapshot));
-                mConversationHistory.add(userMsg);
+                session.apiMessages.add(userMsg);
+                mSessionStore.saveActiveSession();
             }
 
             for (int step = 1; step <= MAX_STEPS_PER_TURN; step++) {
                 if (mStopRequested) break;
                 notifyState(true, false, step);
 
-                JSONArray payloadMessages = buildPrunedMessagesForRequest();
+                JSONArray payloadMessages = buildPrunedMessagesForRequest(session);
                 JSONObject responseMsg = callChatCompletionsApi(payloadMessages);
 
                 if (mStopRequested || responseMsg == null) break;
 
                 String reasoning = responseMsg.optString("reasoning_content", "");
-                if (reasoning != null && !reasoning.trim().isEmpty()) {
-                    notifyThinking(reasoning.trim());
-                }
-
                 String content = responseMsg.isNull("content") ? "" : responseMsg.optString("content", "");
-                // Extract inline <think>...</think> if model emits it inside content
+
                 if (content.contains("<think>") && content.contains("</think>")) {
                     int s = content.indexOf("<think>");
                     int e = content.indexOf("</think>");
                     if (e > s) {
                         String inlineThink = content.substring(s + 7, e).trim();
                         if (!inlineThink.isEmpty() && (reasoning == null || reasoning.isEmpty())) {
-                            notifyThinking(inlineThink);
+                            reasoning = inlineThink;
                         }
                         content = (content.substring(0, s) + content.substring(e + 8)).trim();
                     }
                 }
 
+                if (reasoning != null && !reasoning.trim().isEmpty()) {
+                    AcidSessionStore.UiMessageItem thinkItem = new AcidSessionStore.UiMessageItem();
+                    thinkItem.type = AcidSessionStore.TYPE_THINKING;
+                    thinkItem.text = reasoning.trim();
+                    thinkItem.timestamp = System.currentTimeMillis();
+                    synchronized (mSessionStore) {
+                        session.uiItems.add(thinkItem);
+                    }
+                    notifyItemAdded(thinkItem);
+                }
+
                 JSONArray toolCalls = responseMsg.optJSONArray("tool_calls");
 
-                // Store assistant message into conversation history
+                // Save assistant API message
                 JSONObject assistantEntry = new JSONObject();
                 assistantEntry.put("role", "assistant");
                 if (!content.isEmpty()) {
@@ -250,20 +311,29 @@ public class AcidAgentLoop {
                 if (toolCalls != null && toolCalls.length() > 0) {
                     assistantEntry.put("tool_calls", toolCalls);
                 }
-                synchronized (mConversationHistory) {
-                    mConversationHistory.add(assistantEntry);
+                synchronized (mSessionStore) {
+                    session.apiMessages.add(assistantEntry);
                 }
 
                 if (!content.isEmpty()) {
-                    notifyAssistantReply(content);
+                    AcidSessionStore.UiMessageItem replyItem = new AcidSessionStore.UiMessageItem();
+                    replyItem.type = AcidSessionStore.TYPE_ASSISTANT;
+                    replyItem.text = content;
+                    replyItem.timestamp = System.currentTimeMillis();
+                    synchronized (mSessionStore) {
+                        session.uiItems.add(replyItem);
+                    }
+                    notifyItemAdded(replyItem);
                 }
 
-                // If no tool calls, the agent has finished its turn!
+                synchronized (mSessionStore) {
+                    mSessionStore.saveActiveSession();
+                }
+
                 if (toolCalls == null || toolCalls.length() == 0) {
                     break;
                 }
 
-                // Execute each tool call sequentially
                 boolean takeoverTriggered = false;
                 for (int i = 0; i < toolCalls.length(); i++) {
                     if (mStopRequested) break;
@@ -274,23 +344,47 @@ public class AcidAgentLoop {
                     String rawArgs = fn != null ? fn.optString("arguments", "{}") : "{}";
 
                     JSONObject parsedArgs;
+                    String prettyArgs;
                     try {
                         parsedArgs = new JSONObject(rawArgs);
+                        prettyArgs = parsedArgs.toString(2);
                     } catch (Exception e) {
                         parsedArgs = new JSONObject();
+                        prettyArgs = rawArgs;
                     }
 
-                    notifyToolCall(toolName, summarizeToolArgs(toolName, parsedArgs));
+                    // Create Tool Call UI bubble in running state
+                    AcidSessionStore.UiMessageItem toolUiItem = new AcidSessionStore.UiMessageItem();
+                    toolUiItem.type = AcidSessionStore.TYPE_TOOL;
+                    toolUiItem.toolCallId = callId;
+                    toolUiItem.toolName = toolName;
+                    toolUiItem.toolSummary = summarizeToolArgs(toolName, parsedArgs);
+                    toolUiItem.toolArgsJson = prettyArgs;
+                    toolUiItem.toolResult = "正在执行...";
+                    toolUiItem.isRunning = true;
+                    toolUiItem.timestamp = System.currentTimeMillis();
+                    synchronized (mSessionStore) {
+                        session.uiItems.add(toolUiItem);
+                    }
+                    notifyItemAdded(toolUiItem);
+
+                    // Execute tool
                     AcidSandboxTools.ToolExecResult execRes = mSandboxTools.executeTool(toolName, parsedArgs);
-                    notifyToolResult(toolName, summarizeToolOutput(execRes.outputText));
+
+                    // Update Tool Call UI bubble with complete result
+                    toolUiItem.isRunning = false;
+                    toolUiItem.toolResult = execRes.outputText;
+                    toolUiItem.isError = execRes.outputText != null && execRes.outputText.startsWith("Error:");
+                    notifyItemUpdated(toolUiItem);
 
                     JSONObject toolMsg = new JSONObject();
                     toolMsg.put("role", "tool");
                     toolMsg.put("tool_call_id", callId);
                     toolMsg.put("name", toolName);
                     toolMsg.put("content", execRes.outputText);
-                    synchronized (mConversationHistory) {
-                        mConversationHistory.add(toolMsg);
+                    synchronized (mSessionStore) {
+                        session.apiMessages.add(toolMsg);
+                        mSessionStore.saveActiveSession();
                     }
 
                     if (execRes.requestedTakeover) {
@@ -306,7 +400,7 @@ public class AcidAgentLoop {
             }
         } catch (final Exception e) {
             if (!mStopRequested) {
-                notifyError("Loop Error: " + e.getMessage());
+                addErrorItem("请求异常: " + e.getMessage());
             }
         } finally {
             mRunning = false;
@@ -325,23 +419,31 @@ public class AcidAgentLoop {
         }
     }
 
-    /**
-     * Sliding-Window Context Pruner:
-     * Keeps full DOM observations only for the most recent 2 browser tool results;
-     * older browser observations are compacted to a 2-line summary so 35-step loops never overflow context.
-     */
-    private JSONArray buildPrunedMessagesForRequest() throws Exception {
+    private void addErrorItem(String errorMsg) {
+        AcidSessionStore.AgentSession session = mSessionStore.getActiveSession();
+        AcidSessionStore.UiMessageItem errItem = new AcidSessionStore.UiMessageItem();
+        errItem.type = AcidSessionStore.TYPE_ERROR;
+        errItem.text = errorMsg;
+        errItem.isError = true;
+        errItem.timestamp = System.currentTimeMillis();
+        synchronized (mSessionStore) {
+            session.uiItems.add(errItem);
+            mSessionStore.saveActiveSession();
+        }
+        notifyItemAdded(errItem);
+    }
+
+    private JSONArray buildPrunedMessagesForRequest(AcidSessionStore.AgentSession session) throws Exception {
         JSONArray arr = new JSONArray();
         JSONObject sys = new JSONObject();
         sys.put("role", "system");
         sys.put("content", buildSystemPrompt());
         arr.put(sys);
 
-        synchronized (mConversationHistory) {
-            // Find indices of all `browser` tool outputs
+        synchronized (mSessionStore) {
             List<Integer> browserToolIndices = new ArrayList<Integer>();
-            for (int i = 0; i < mConversationHistory.size(); i++) {
-                JSONObject m = mConversationHistory.get(i);
+            for (int i = 0; i < session.apiMessages.size(); i++) {
+                JSONObject m = session.apiMessages.get(i);
                 if ("tool".equals(m.optString("role")) && "browser".equals(m.optString("name"))) {
                     browserToolIndices.add(i);
                 }
@@ -350,13 +452,12 @@ public class AcidAgentLoop {
                 ? browserToolIndices.get(browserToolIndices.size() - 2)
                 : -1;
 
-            for (int i = 0; i < mConversationHistory.size(); i++) {
-                JSONObject orig = mConversationHistory.get(i);
+            for (int i = 0; i < session.apiMessages.size(); i++) {
+                JSONObject orig = session.apiMessages.get(i);
                 if (i < keepThreshold && "tool".equals(orig.optString("role")) && "browser".equals(orig.optString("name"))) {
                     JSONObject pruned = new JSONObject(orig.toString());
                     String full = orig.optString("content", "");
-                    String firstLines = compactOldObservation(full);
-                    pruned.put("content", firstLines);
+                    pruned.put("content", compactOldObservation(full));
                     arr.put(pruned);
                 } else {
                     arr.put(orig);
@@ -443,15 +544,17 @@ public class AcidAgentLoop {
         return new String(baos.toByteArray(), StandardCharsets.UTF_8);
     }
 
-    private String summarizeToolArgs(String name, JSONObject args) {
+    public static String summarizeToolArgs(String name, JSONObject args) {
         if ("browser".equals(name)) {
-            String act = args.optString("action", "");
-            if ("navigate".equals(act)) return "navigate -> " + args.optString("url");
-            if ("click".equals(act)) return "click [" + args.optString("ref", args.optString("x") + "," + args.optString("y")) + "]";
-            if ("fill".equals(act)) return "fill [" + args.optString("ref") + "] = \"" + args.optString("text") + "\"";
-            if ("select".equals(act)) return "select [" + args.optString("ref") + "] = \"" + args.optString("text") + "\"";
-            if ("scroll".equals(act)) return "scroll " + args.optString("direction", "down");
-            if ("set_mode".equals(act)) return "set_mode -> " + args.optString("mode");
+            String act = args.optString("action", "observe");
+            if ("navigate".equals(act)) return "navigate · " + args.optString("url");
+            if ("click".equals(act)) return "click · [" + args.optString("ref", args.optString("x") + "," + args.optString("y")) + "]";
+            if ("fill".equals(act)) return "fill · [" + args.optString("ref") + "] \"" + args.optString("text") + "\"";
+            if ("select".equals(act)) return "select · [" + args.optString("ref") + "] \"" + args.optString("text") + "\"";
+            if ("scroll".equals(act)) return "scroll · " + args.optString("direction", "down");
+            if ("set_mode".equals(act)) return "set_mode · " + args.optString("mode");
+            if ("tabs".equals(act)) return "tabs · " + args.optString("tab_action", "list");
+            if ("eval".equals(act)) return "eval · JS";
             return act;
         }
         if ("read".equals(name) || "write".equals(name) || "edit".equals(name)) {
@@ -459,28 +562,10 @@ public class AcidAgentLoop {
         }
         if ("bash".equals(name)) {
             String cmd = args.optString("command", "");
-            return cmd.length() > 70 ? cmd.substring(0, 70) + "..." : cmd;
+            return cmd.length() > 45 ? cmd.substring(0, 45) + "..." : cmd;
         }
         return args.toString();
     }
-
-    private String summarizeToolOutput(String out) {
-        if (out == null) return "";
-        String[] lines = out.split("\n");
-        StringBuilder sb = new StringBuilder();
-        int maxLines = Math.min(lines.length, 6);
-        for (int i = 0; i < maxLines; i++) {
-            sb.append(lines[i]).append("\n");
-        }
-        if (lines.length > maxLines) {
-            sb.append("... (+").append(lines.length - maxLines).append(" lines)");
-        }
-        return sb.toString().trim();
-    }
-
-    // =========================================================================
-    // UI Dispatch Helpers
-    // =========================================================================
 
     private void notifyState(final boolean running, final boolean paused, final int step) {
         if (mListener == null) return;
@@ -492,62 +577,22 @@ public class AcidAgentLoop {
         });
     }
 
-    private void notifyUserMessage(final String text) {
+    private void notifyItemAdded(final AcidSessionStore.UiMessageItem item) {
         if (mListener == null) return;
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
-                mListener.onUserMessage(text);
+                mListener.onUiItemAdded(item);
             }
         });
     }
 
-    private void notifyThinking(final String text) {
+    private void notifyItemUpdated(final AcidSessionStore.UiMessageItem item) {
         if (mListener == null) return;
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
-                mListener.onThinking(text);
-            }
-        });
-    }
-
-    private void notifyToolCall(final String tool, final String summary) {
-        if (mListener == null) return;
-        mMainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                mListener.onToolCall(tool, summary);
-            }
-        });
-    }
-
-    private void notifyToolResult(final String tool, final String preview) {
-        if (mListener == null) return;
-        mMainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                mListener.onToolResult(tool, preview);
-            }
-        });
-    }
-
-    private void notifyAssistantReply(final String content) {
-        if (mListener == null) return;
-        mMainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                mListener.onAssistantReply(content);
-            }
-        });
-    }
-
-    private void notifyError(final String err) {
-        if (mListener == null) return;
-        mMainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                mListener.onLoopError(err);
+                mListener.onUiItemUpdated(item);
             }
         });
     }

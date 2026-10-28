@@ -18,6 +18,7 @@ import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -37,8 +38,10 @@ import org.json.JSONObject;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Modern Clean White Browser Edition (Phase 3.1):
@@ -104,7 +107,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AcidIcons.SvgIconView mSearchIcon;
     private EditText mEtUrl;
     private AcidIcons.SvgIconView mBtnReload;
-    private AcidIcons.BadgeButton mBtnSom;
+    private LinearLayout mBtnTopAgent;
+    private AcidIcons.SvgIconView mIconTopAgent;
     private View mProgressBar;
 
     // Center Viewport
@@ -158,16 +162,17 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private LinearLayout mListItemsContainer;
     private AcidIcons.BadgeButton mBtnListAction;
 
-    // Inspector / Agent Console Drawer
+    // DSH-Style Floating Agent Window
     private LinearLayout mDrawerPanel;
+    private View mAgentHeaderBar;
+    private TextView mTvAgentSessionTitle;
     private TextView mTvAgentLoopStatus;
+    private ScrollView mChatScrollView;
+    private LinearLayout mChatStreamContainer;
+    private LinearLayout mAgentInputBar;
     private EditText mEtAgentTaskInput;
     private AcidIcons.BadgeButton mBtnAgentSendStop;
-    private EditText mEtTargetRef;
-    private EditText mEtFillText;
-    private TextView mTvConsoleOutput;
-    private ScrollView mConsoleScroll;
-    private final StringBuilder mLogBuffer = new StringBuilder();
+    private final Map<String, ToolCardHolder> mToolCardHolders = new HashMap<String, ToolCardHolder>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -186,58 +191,57 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mAgentLoop = new AcidAgentLoop(this, mController, new AcidAgentLoop.AgentLoopListener() {
             @Override
             public void onLoopStateChanged(boolean running, boolean pausedForTakeover, int step) {
+                int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+                int muted = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
                 if (mTvAgentLoopStatus != null) {
                     if (running) {
-                        mTvAgentLoopStatus.setText("Acid Agent 运行中 · Step " + step);
-                        mTvAgentLoopStatus.setTextColor(Color.parseColor("#00FF88"));
+                        mTvAgentLoopStatus.setText("运行中 · Step " + step);
+                        mTvAgentLoopStatus.setTextColor(accent);
                     } else if (pausedForTakeover) {
-                        mTvAgentLoopStatus.setText("等待人工接管协助...");
+                        mTvAgentLoopStatus.setText("等待人工接管协助");
                         mTvAgentLoopStatus.setTextColor(COLOR_AMBER);
                     } else {
-                        mTvAgentLoopStatus.setText("Acid Agent (" + mAgentLoop.getModelName() + ")");
-                        mTvAgentLoopStatus.setTextColor(Color.parseColor("#E2E8F0"));
+                        mTvAgentLoopStatus.setText(mAgentLoop.getModelName());
+                        mTvAgentLoopStatus.setTextColor(muted);
                     }
+                }
+                updateTopAgentButton(running, pausedForTakeover);
+                if (mTvAgentSessionTitle != null && mAgentLoop.getActiveSession() != null) {
+                    mTvAgentSessionTitle.setText(mAgentLoop.getActiveSession().title);
                 }
                 if (mBtnAgentSendStop != null) {
                     if (running) {
                         mBtnAgentSendStop.update(AcidIcons.ICON_CLOSE, "停止", Color.parseColor("#EF4444"));
                     } else if (pausedForTakeover) {
-                        mBtnAgentSendStop.update(AcidIcons.ICON_AGENT, "继续", Color.parseColor("#00FF88"));
+                        mBtnAgentSendStop.update(AcidIcons.ICON_AGENT, "继续", accent);
                     } else {
-                        mBtnAgentSendStop.update(AcidIcons.ICON_AGENT, "执行", Color.parseColor("#00FF88"));
+                        mBtnAgentSendStop.update(AcidIcons.ICON_SEND, "发送", accent);
                     }
                 }
             }
 
             @Override
-            public void onUserMessage(String text) {
-                appendConsole("\n[USER TASK] " + text);
+            public void onSessionLoaded(AcidSessionStore.AgentSession session) {
+                renderSessionChatStream(session);
             }
 
             @Override
-            public void onThinking(String reasoningText) {
-                appendConsole("[THINK] " + reasoningText);
+            public void onUiItemAdded(AcidSessionStore.UiMessageItem item) {
+                if (mTvAgentSessionTitle != null && mAgentLoop.getActiveSession() != null) {
+                    mTvAgentSessionTitle.setText(mAgentLoop.getActiveSession().title);
+                }
+                appendUiMessageItemView(item, true);
             }
 
             @Override
-            public void onToolCall(String toolName, String argsSummary) {
-                appendConsole("[CALL -> " + toolName + "] " + argsSummary);
-            }
-
-            @Override
-            public void onToolResult(String toolName, String resultPreview) {
-                appendConsole("[RESULT <- " + toolName + "]\n" + resultPreview);
-            }
-
-            @Override
-            public void onAssistantReply(String content) {
-                appendConsole("[AGENT REPLY]\n" + content);
-            }
-
-            @Override
-            public void onLoopError(String errorMsg) {
-                appendConsole("[ERROR] " + errorMsg);
-                Toast.makeText(BrowserActivity.this, errorMsg, Toast.LENGTH_LONG).show();
+            public void onUiItemUpdated(AcidSessionStore.UiMessageItem item) {
+                if (item != null && item.toolCallId != null) {
+                    ToolCardHolder holder = mToolCardHolders.get(item.toolCallId);
+                    if (holder != null) {
+                        holder.bind(item, mIsDarkMode);
+                    }
+                }
+                scrollChatToBottom();
             }
         });
 
@@ -245,6 +249,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mHttpServer.start();
 
         applyTheme(mIsDarkMode);
+        renderSessionChatStream(mAgentLoop.getActiveSession());
         handleIncomingIntent(getIntent());
     }
 
@@ -385,15 +390,20 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         searchLp.setMargins(dp(6), 0, dp(6), 0);
         mTopBar.addView(mSearchContainer, searchLp);
 
-        // SoM Toggle Badge Button on Top Bar right
-        mBtnSom = new AcidIcons.BadgeButton(this, AcidIcons.ICON_SOM, "SoM", LIGHT_MUTED, new View.OnClickListener() {
+        // Agent Trigger Icon Button on Top Bar right (replaces SoM, no text, dynamic status color)
+        mBtnTopAgent = new LinearLayout(this);
+        mBtnTopAgent.setGravity(Gravity.CENTER);
+        int pad = dp(6);
+        mBtnTopAgent.setPadding(pad, pad, pad, pad);
+        mIconTopAgent = new AcidIcons.SvgIconView(this, AcidIcons.ICON_AGENT, LIGHT_ICON, 19);
+        mBtnTopAgent.addView(mIconTopAgent);
+        mBtnTopAgent.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                boolean nextSom = !mController.isSomEnabled();
-                mController.setSomEnabled(nextSom);
+                toggleAgentFloatingWindow();
             }
         });
-        mTopBar.addView(mBtnSom);
+        mTopBar.addView(mBtnTopAgent);
 
         mMainContentLayout.addView(mTopBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -424,12 +434,16 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mTabsOverviewLayout.setVisibility(View.GONE);
         mCenterFrame.addView(mTabsOverviewLayout, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        mMainContentLayout.addView(mCenterFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        // --- Collapsible Inspector & Agent Loop Drawer ---
+        // Floating Agent Conversation Window (Overlays WebView without compressing viewport!)
         mDrawerPanel = buildInspectorDrawer();
         mDrawerPanel.setVisibility(View.GONE);
-        mMainContentLayout.addView(mDrawerPanel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(290)));
+        FrameLayout.LayoutParams floatPanelLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(380), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL
+        );
+        floatPanelLp.setMargins(dp(10), dp(10), dp(10), dp(10));
+        mCenterFrame.addView(mDrawerPanel, floatPanelLp);
+
+        mMainContentLayout.addView(mCenterFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // --- Bottom 5-Button Toolbar: [Back] [Forward] [Home (Center)] [Tabs] [Menu (Right)] ---
         mBottomDivider = new View(this);
@@ -772,14 +786,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         row2.addView(mMenuItemDownload, itemLp6);
 
         mMenuItemAgent = new MenuCardItem(
-            this, AcidIcons.ICON_AGENT, "Acid Agent", "内置自主Loop",
+            this, AcidIcons.ICON_AGENT, "Acid Agent", "悬浮对话窗",
             LIGHT_ACCENT, LIGHT_TEXT, LIGHT_MUTED, LIGHT_MENU_ITEM_BG,
             new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     closeMenuSheet();
-                    boolean show = mDrawerPanel.getVisibility() != View.VISIBLE;
-                    mDrawerPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+                    toggleAgentFloatingWindow();
                 }
             }
         );
@@ -921,6 +934,39 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mMenuCard.setBackground(cardGd);
         mMenuTitle.setTextColor(text);
         mBtnMenuClose.setColor(muted);
+
+        // Agent Floating Window styling (Elevated Card with High-Contrast Border and Tinted Body)
+        if (mDrawerPanel != null) {
+            int floatBg = dark ? Color.parseColor("#0F172A") : Color.parseColor("#F1F5F9");
+            int floatBorder = dark ? Color.parseColor("#334155") : Color.parseColor("#94A3B8");
+            mDrawerPanel.setBackground(cardBorderBg(floatBg, floatBorder, 2, 16));
+        }
+        if (mAgentHeaderBar != null) {
+            GradientDrawable headGd = new GradientDrawable();
+            headGd.setColor(dark ? DARK_BAR : Color.parseColor("#FFFFFF"));
+            float hr = dp(14);
+            headGd.setCornerRadii(new float[]{hr, hr, hr, hr, 0, 0, 0, 0});
+            mAgentHeaderBar.setBackground(headGd);
+        }
+        if (mTvAgentSessionTitle != null) {
+            mTvAgentSessionTitle.setTextColor(text);
+        }
+        if (mAgentInputBar != null) {
+            GradientDrawable inGd = new GradientDrawable();
+            inGd.setColor(dark ? DARK_BAR : Color.parseColor("#FFFFFF"));
+            float ir = dp(14);
+            inGd.setCornerRadii(new float[]{0, 0, 0, 0, ir, ir, ir, ir});
+            mAgentInputBar.setBackground(inGd);
+        }
+        if (mEtAgentTaskInput != null) {
+            mEtAgentTaskInput.setBackground(pillBg(searchBg, searchBorder, 18));
+            mEtAgentTaskInput.setTextColor(text);
+            mEtAgentTaskInput.setHintTextColor(muted);
+        }
+        updateTopAgentButton(mAgentLoop != null && mAgentLoop.isRunning(), mAgentLoop != null && mAgentLoop.isPausedForTakeover());
+        if (mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
+            renderSessionChatStream(mAgentLoop.getActiveSession());
+        }
     }
 
     // =========================================================================
@@ -1562,55 +1608,159 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     // =========================================================================
-    // Collapsible Agent Loop & Inspector Drawer
+    // DSH-Style Floating Agent Window (Zero WebView Compression)
     // =========================================================================
 
-    private LinearLayout buildInspectorDrawer() {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(Color.parseColor("#0F172A"));
-        panel.setPadding(dp(8), dp(6), dp(8), dp(6));
+    private void openAgentFloatingWindow() {
+        if (mDrawerPanel != null) {
+            mDrawerPanel.setVisibility(View.VISIBLE);
+        }
+        scrollChatToBottom();
+    }
 
-        // 1. Header Row: Status + [模型配置] + [清空] + [Observe]
+    private void closeAgentFloatingWindow() {
+        hideKeyboard();
+        if (mDrawerPanel != null) {
+            mDrawerPanel.setVisibility(View.GONE);
+        }
+    }
+
+    private void toggleAgentFloatingWindow() {
+        if (mDrawerPanel == null) return;
+        if (mDrawerPanel.getVisibility() == View.VISIBLE) {
+            closeAgentFloatingWindow();
+        } else {
+            openAgentFloatingWindow();
+        }
+    }
+
+    private void updateTopAgentButton(boolean running, boolean pausedForTakeover) {
+        if (mIconTopAgent == null || mBtnTopAgent == null) return;
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        if (running) {
+            mIconTopAgent.setColor(accent);
+            int bg = Color.argb(32, Color.red(accent), Color.green(accent), Color.blue(accent));
+            mBtnTopAgent.setBackground(pillBg(bg, accent, 12));
+        } else if (pausedForTakeover) {
+            mIconTopAgent.setColor(COLOR_AMBER);
+            int bg = Color.argb(32, 245, 158, 11);
+            mBtnTopAgent.setBackground(pillBg(bg, COLOR_AMBER, 12));
+        } else {
+            int iconCol = mIsDarkMode ? DARK_ICON : LIGHT_ICON;
+            mIconTopAgent.setColor(iconCol);
+            mBtnTopAgent.setBackground(null);
+        }
+    }
+
+    private LinearLayout buildInspectorDrawer() {
+        final LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        int floatBg = mIsDarkMode ? Color.parseColor("#0F172A") : Color.parseColor("#F1F5F9");
+        int floatBorder = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#94A3B8");
+        panel.setBackground(cardBorderBg(floatBg, floatBorder, 2, 16));
+        if (Build.VERSION.SDK_INT >= 21) {
+            panel.setElevation(dp(16));
+        }
+        // Prevent touches inside floating window from leaking through to WebView underneath
+        panel.setClickable(true);
+
+        // 1. Header Bar (Draggable to reposition the floating window vertically):
+        // [Agent Icon + Title + Model Subtitle] | [Sessions] [New] [Settings] [Minimize to Pill]
         LinearLayout headerRow = new LinearLayout(this);
+        mAgentHeaderBar = headerRow;
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
         headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        GradientDrawable headGd = new GradientDrawable();
+        headGd.setColor(LIGHT_BAR);
+        float hr = dp(15);
+        headGd.setCornerRadii(new float[]{hr, hr, hr, hr, 0, 0, 0, 0});
+        headerRow.setBackground(headGd);
+        headerRow.setPadding(dp(12), dp(8), dp(8), dp(8));
 
-        AcidIcons.SvgIconView agentIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_AGENT, Color.parseColor("#00FF88"), 15);
-        headerRow.addView(agentIcon);
+        // Allow vertical dragging of the floating window by dragging the header bar
+        headerRow.setOnTouchListener(new View.OnTouchListener() {
+            private float downRawY;
+            private float startTransY;
+            private boolean dragging;
 
-        mTvAgentLoopStatus = new TextView(this);
-        mTvAgentLoopStatus.setText("Acid Agent 就绪 (browser + read/write/edit/bash)");
-        mTvAgentLoopStatus.setTextColor(Color.parseColor("#E2E8F0"));
-        mTvAgentLoopStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        mTvAgentLoopStatus.setTypeface(Typeface.DEFAULT_BOLD);
-        mTvAgentLoopStatus.setSingleLine(true);
-        mTvAgentLoopStatus.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        stLp.leftMargin = dp(5);
-        headerRow.addView(mTvAgentLoopStatus, stLp);
-
-        AcidIcons.BadgeButton btnObserve = new AcidIcons.BadgeButton(this, AcidIcons.ICON_EYE, "Observe", Color.parseColor("#00E5FF"), new View.OnClickListener() {
             @Override
-            public void onClick(View v) {
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        final JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
-                        runOnUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                String compact = obs.optString("compactText", obs.toString());
-                                appendConsole("--- [OBSERVE SNAPSHOT] ---\n" + compact);
-                            }
-                        });
-                    }
-                }).start();
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downRawY = event.getRawY();
+                        startTransY = panel.getTranslationY();
+                        dragging = false;
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        float dy = event.getRawY() - downRawY;
+                        if (Math.abs(dy) > dp(6)) {
+                            dragging = true;
+                        }
+                        if (dragging) {
+                            float nextY = Math.min(dp(40), Math.max(-dp(260), startTransY + dy));
+                            panel.setTranslationY(nextY);
+                        }
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        if (!dragging) {
+                            showAgentSessionsSheet();
+                        }
+                        return true;
+                }
+                return false;
             }
         });
-        headerRow.addView(btnObserve);
 
-        AcidIcons.BadgeButton btnConfig = new AcidIcons.BadgeButton(this, AcidIcons.ICON_TERMINAL, "模型设置", Color.parseColor("#F59E0B"), new View.OnClickListener() {
+        AcidIcons.SvgIconView agentIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_AGENT, LIGHT_ACCENT, 18);
+        headerRow.addView(agentIcon);
+
+        LinearLayout titleCol = new LinearLayout(this);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams titleColLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        titleColLp.leftMargin = dp(8);
+        titleColLp.rightMargin = dp(6);
+
+        mTvAgentSessionTitle = new TextView(this);
+        mTvAgentSessionTitle.setText("新对话");
+        mTvAgentSessionTitle.setTextColor(LIGHT_TEXT);
+        mTvAgentSessionTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        mTvAgentSessionTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        mTvAgentSessionTitle.setSingleLine(true);
+        mTvAgentSessionTitle.setEllipsize(TextUtils.TruncateAt.END);
+        titleCol.addView(mTvAgentSessionTitle);
+
+        mTvAgentLoopStatus = new TextView(this);
+        mTvAgentLoopStatus.setText("deepseek-chat · 就绪");
+        mTvAgentLoopStatus.setTextColor(LIGHT_MUTED);
+        mTvAgentLoopStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        mTvAgentLoopStatus.setSingleLine(true);
+        mTvAgentLoopStatus.setEllipsize(TextUtils.TruncateAt.END);
+        titleCol.addView(mTvAgentLoopStatus);
+
+        headerRow.addView(titleCol, titleColLp);
+
+        // Button: Session History List
+        AcidIcons.BadgeButton btnSessions = new AcidIcons.BadgeButton(this, AcidIcons.ICON_CHAT_LIST, "会话", Color.parseColor("#0284C7"), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showAgentSessionsSheet();
+            }
+        });
+        headerRow.addView(btnSessions);
+
+        // Button: New Session (+)
+        AcidIcons.BadgeButton btnNewSession = new AcidIcons.BadgeButton(this, AcidIcons.ICON_PLUS, "新对话", LIGHT_ACCENT, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mAgentLoop != null) {
+                    mAgentLoop.startNewSession();
+                }
+            }
+        });
+        headerRow.addView(btnNewSession);
+
+        // Button: Model Config Settings
+        LinearLayout btnConfig = AcidIcons.createToolbarIconBtn(this, AcidIcons.ICON_SETTINGS, LIGHT_MUTED, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 showAgentConfigDialog();
@@ -1618,128 +1768,54 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
         headerRow.addView(btnConfig);
 
-        AcidIcons.BadgeButton btnClear = new AcidIcons.BadgeButton(this, AcidIcons.ICON_TRASH, "清空", Color.parseColor("#94A3B8"), new View.OnClickListener() {
+        // Button: Close Floating Window
+        LinearLayout btnCloseDrawer = AcidIcons.createToolbarIconBtn(this, AcidIcons.ICON_CLOSE, LIGHT_MUTED, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (mAgentLoop != null) {
-                    mAgentLoop.clearConversation();
-                }
-                mLogBuffer.setLength(0);
-                mTvConsoleOutput.setText("会话与控制台已清空。\n在下方输入自然语言任务，Acid Agent 将自动调用 browser / read / write / edit / bash 完成闭环。");
+                closeAgentFloatingWindow();
             }
         });
-        headerRow.addView(btnClear);
+        headerRow.addView(btnCloseDrawer);
 
         panel.addView(headerRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // 2. Manual Quick-Debug Row (Optional ref click / fill)
-        LinearLayout actionRow = new LinearLayout(this);
-        actionRow.setOrientation(LinearLayout.HORIZONTAL);
-        actionRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams actRowLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        actRowLp.topMargin = dp(4);
+        View headerDivider = new View(this);
+        headerDivider.setBackgroundColor(LIGHT_BORDER);
+        panel.addView(headerDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
 
-        mEtTargetRef = new EditText(this);
-        mEtTargetRef.setText("e1");
-        mEtTargetRef.setHint("e1");
-        mEtTargetRef.setTextColor(Color.parseColor("#00FF88"));
-        mEtTargetRef.setHintTextColor(Color.parseColor("#64748B"));
-        mEtTargetRef.setSingleLine(true);
-        mEtTargetRef.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        mEtTargetRef.setPadding(dp(6), dp(2), dp(6), dp(2));
-        mEtTargetRef.setBackground(pillBg(Color.parseColor("#1E293B"), Color.parseColor("#334155"), 4));
-        LinearLayout.LayoutParams refLp = new LinearLayout.LayoutParams(dp(42), ViewGroup.LayoutParams.WRAP_CONTENT);
-        actionRow.addView(mEtTargetRef, refLp);
+        // 2. Chat Stream ScrollView
+        mChatScrollView = new ScrollView(this);
+        mChatStreamContainer = new LinearLayout(this);
+        mChatStreamContainer.setOrientation(LinearLayout.VERTICAL);
+        mChatStreamContainer.setPadding(dp(12), dp(10), dp(12), dp(10));
+        mChatScrollView.addView(mChatStreamContainer, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        panel.addView(mChatScrollView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        AcidIcons.BadgeButton btnClickRef = new AcidIcons.BadgeButton(this, AcidIcons.ICON_CLICK, "Click", Color.parseColor("#00E5FF"), new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                final String ref = mEtTargetRef.getText().toString().trim();
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        final JSONObject res = mController.clickRefSync(ref, true);
-                        runOnUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                appendConsole("Click(" + ref + ") -> " + res.toString());
-                            }
-                        });
-                    }
-                }).start();
-            }
-        });
-        actionRow.addView(btnClickRef);
+        View inputDivider = new View(this);
+        inputDivider.setBackgroundColor(LIGHT_BORDER);
+        panel.addView(inputDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
 
-        mEtFillText = new EditText(this);
-        mEtFillText.setText("Acid Agent");
-        mEtFillText.setHint("手动测试填充文本...");
-        mEtFillText.setTextColor(Color.WHITE);
-        mEtFillText.setHintTextColor(Color.parseColor("#64748B"));
-        mEtFillText.setSingleLine(true);
-        mEtFillText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        mEtFillText.setPadding(dp(6), dp(2), dp(6), dp(2));
-        mEtFillText.setBackground(pillBg(Color.parseColor("#1E293B"), Color.parseColor("#334155"), 4));
-        LinearLayout.LayoutParams fillLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        fillLp.setMargins(dp(4), 0, dp(2), 0);
-        actionRow.addView(mEtFillText, fillLp);
-
-        AcidIcons.BadgeButton btnFillRef = new AcidIcons.BadgeButton(this, AcidIcons.ICON_FILL, "Fill", Color.parseColor("#F59E0B"), new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                final String ref = mEtTargetRef.getText().toString().trim();
-                final String txt = mEtFillText.getText().toString();
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        final JSONObject res = mController.fillSync(ref, txt, true, false);
-                        runOnUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                appendConsole("Fill(" + ref + ") -> " + res.toString());
-                            }
-                        });
-                    }
-                }).start();
-            }
-        });
-        actionRow.addView(btnFillRef);
-
-        panel.addView(actionRow, actRowLp);
-
-        // 3. Console & Agent Trace ScrollView
-        mConsoleScroll = new ScrollView(this);
-        mTvConsoleOutput = new TextView(this);
-        mTvConsoleOutput.setTypeface(Typeface.MONOSPACE);
-        mTvConsoleOutput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        mTvConsoleOutput.setTextColor(Color.parseColor("#00FF88"));
-        mTvConsoleOutput.setPadding(dp(6), dp(6), dp(6), dp(6));
-        mTvConsoleOutput.setText(
-            "Acid Built-in Agent Loop Ready.\n" +
-            "Tools: browser | read | write | edit | bash\n" +
-            "1. 点击右上角 [模型设置] 填入 API Key (支持 DeepSeek / OpenAI 兼容接口)\n" +
-            "2. 在下方输入指令，Agent 将在浏览器与沙盒内自主循环完成任务。"
-        );
-        mConsoleScroll.addView(mTvConsoleOutput);
-
-        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        scrollLp.topMargin = dp(4);
-        scrollLp.bottomMargin = dp(4);
-        panel.addView(mConsoleScroll, scrollLp);
-
-        // 4. Bottom Natural Language Task Input Row
-        LinearLayout promptRow = new LinearLayout(this);
-        promptRow.setOrientation(LinearLayout.HORIZONTAL);
-        promptRow.setGravity(Gravity.CENTER_VERTICAL);
+        // 3. Bottom Composer Input Bar
+        mAgentInputBar = new LinearLayout(this);
+        mAgentInputBar.setOrientation(LinearLayout.HORIZONTAL);
+        mAgentInputBar.setGravity(Gravity.CENTER_VERTICAL);
+        GradientDrawable inGd = new GradientDrawable();
+        inGd.setColor(LIGHT_BAR);
+        float ir = dp(15);
+        inGd.setCornerRadii(new float[]{0, 0, 0, 0, ir, ir, ir, ir});
+        mAgentInputBar.setBackground(inGd);
+        mAgentInputBar.setPadding(dp(10), dp(6), dp(10), dp(6));
 
         mEtAgentTaskInput = new EditText(this);
-        mEtAgentTaskInput.setHint("输入让 Acid Agent 自主执行的网页或沙盒任务...");
-        mEtAgentTaskInput.setHintTextColor(Color.parseColor("#64748B"));
-        mEtAgentTaskInput.setTextColor(Color.WHITE);
+        mEtAgentTaskInput.setHint("向 Acid Agent 发送网页或沙盒任务...");
+        mEtAgentTaskInput.setHintTextColor(LIGHT_MUTED);
+        mEtAgentTaskInput.setTextColor(LIGHT_TEXT);
         mEtAgentTaskInput.setSingleLine(true);
-        mEtAgentTaskInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        mEtAgentTaskInput.setPadding(dp(8), dp(5), dp(8), dp(5));
-        mEtAgentTaskInput.setBackground(pillBg(Color.parseColor("#1E293B"), Color.parseColor("#334155"), 6));
+        mEtAgentTaskInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        mEtAgentTaskInput.setPadding(dp(12), dp(6), dp(12), dp(6));
+        mEtAgentTaskInput.setBackground(pillBg(LIGHT_SEARCH_BG, LIGHT_SEARCH_BORDER, 18));
         mEtAgentTaskInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
         mEtAgentTaskInput.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
@@ -1752,26 +1828,550 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         });
         LinearLayout.LayoutParams promptInputLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        promptRow.addView(mEtAgentTaskInput, promptInputLp);
+        promptInputLp.rightMargin = dp(6);
+        mAgentInputBar.addView(mEtAgentTaskInput, promptInputLp);
 
-        mBtnAgentSendStop = new AcidIcons.BadgeButton(this, AcidIcons.ICON_AGENT, "执行", Color.parseColor("#00FF88"), new View.OnClickListener() {
+        mBtnAgentSendStop = new AcidIcons.BadgeButton(this, AcidIcons.ICON_SEND, "发送", LIGHT_ACCENT, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 triggerAgentSubmitOrStop();
             }
         });
-        promptRow.addView(mBtnAgentSendStop);
+        mAgentInputBar.addView(mBtnAgentSendStop);
 
-        panel.addView(promptRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        panel.addView(mAgentInputBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         return panel;
+    }
+
+    private void renderSessionChatStream(AcidSessionStore.AgentSession session) {
+        if (mChatStreamContainer == null) return;
+        mChatStreamContainer.removeAllViews();
+        mToolCardHolders.clear();
+
+        if (session != null && mTvAgentSessionTitle != null) {
+            mTvAgentSessionTitle.setText(session.title);
+        }
+        if (mTvAgentLoopStatus != null && mAgentLoop != null && !mAgentLoop.isRunning()) {
+            mTvAgentLoopStatus.setText(mAgentLoop.getModelName());
+        }
+
+        if (session == null || session.uiItems.isEmpty()) {
+            addEmptyChatWelcomeCard();
+            return;
+        }
+
+        for (AcidSessionStore.UiMessageItem item : session.uiItems) {
+            appendUiMessageItemView(item, false);
+        }
+        scrollChatToBottom();
+    }
+
+    private void addEmptyChatWelcomeCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#FFFFFF");
+        int borderCol = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#E2E8F0");
+        int textCol = mIsDarkMode ? DARK_TEXT : LIGHT_TEXT;
+        int mutedCol = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+
+        card.setBackground(cardBorderBg(cardBg, borderCol, 1, 12));
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        TextView title = new TextView(this);
+        title.setText("Acid Agent 自主智能体");
+        title.setTextColor(textCol);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(title);
+
+        TextView desc = new TextView(this);
+        desc.setText("内置 browser (网页感知与操控)、read、write、edit、bash 五大沙盒工具。您可以直接发送指令让它跨网页调研、填写表单、编写油猴脚本或生成本地数据报告。");
+        desc.setTextColor(mutedCol);
+        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        desc.setPadding(0, dp(4), 0, dp(8));
+        card.addView(desc);
+
+        // Quick-prompt chips
+        LinearLayout chipRow = new LinearLayout(this);
+        chipRow.setOrientation(LinearLayout.HORIZONTAL);
+        addQuickPromptChip(chipRow, "分析当前网页结构与核心内容");
+        addQuickPromptChip(chipRow, "测试当前页面的表单填写与点击");
+        card.addView(chipRow);
+
+        mChatStreamContainer.addView(card, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+    }
+
+    private void addQuickPromptChip(LinearLayout parent, final String promptText) {
+        TextView chip = new TextView(this);
+        chip.setText(promptText);
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        chip.setTextColor(accent);
+        chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        chip.setPadding(dp(8), dp(4), dp(8), dp(4));
+        int bg = Color.argb(24, Color.red(accent), Color.green(accent), Color.blue(accent));
+        chip.setBackground(pillBg(bg, accent, 12));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        lp.rightMargin = dp(6);
+        chip.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mEtAgentTaskInput.setText(promptText);
+                triggerAgentSubmitOrStop();
+            }
+        });
+        parent.addView(chip, lp);
+    }
+
+    private void appendUiMessageItemView(AcidSessionStore.UiMessageItem item, boolean autoScroll) {
+        if (mChatStreamContainer == null || item == null) return;
+        // Remove welcome card if it is the only child and session just received its first item
+        if (mChatStreamContainer.getChildCount() == 1 && mAgentLoop != null &&
+            mAgentLoop.getActiveSession() != null && mAgentLoop.getActiveSession().uiItems.size() == 1) {
+            mChatStreamContainer.removeAllViews();
+        }
+
+        String type = item.type != null ? item.type : AcidSessionStore.TYPE_ASSISTANT;
+        if (AcidSessionStore.TYPE_USER.equals(type)) {
+            mChatStreamContainer.addView(buildUserBubbleView(item));
+        } else if (AcidSessionStore.TYPE_THINKING.equals(type)) {
+            mChatStreamContainer.addView(buildThinkingCardView(item));
+        } else if (AcidSessionStore.TYPE_TOOL.equals(type)) {
+            ToolCardHolder holder = new ToolCardHolder(this);
+            holder.bind(item, mIsDarkMode);
+            if (item.toolCallId != null && !item.toolCallId.isEmpty()) {
+                mToolCardHolders.put(item.toolCallId, holder);
+            }
+            mChatStreamContainer.addView(holder.rootView);
+        } else if (AcidSessionStore.TYPE_ERROR.equals(type)) {
+            mChatStreamContainer.addView(buildErrorBubbleView(item));
+        } else {
+            mChatStreamContainer.addView(buildAssistantMarkdownBubbleView(item));
+        }
+
+        if (autoScroll) {
+            scrollChatToBottom();
+        }
+    }
+
+    private View buildUserBubbleView(AcidSessionStore.UiMessageItem item) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.END);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        rowLp.topMargin = dp(6);
+        rowLp.bottomMargin = dp(6);
+        row.setLayoutParams(rowLp);
+
+        TextView bubble = new TextView(this);
+        bubble.setText(item.text);
+        bubble.setTextColor(Color.WHITE);
+        bubble.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        bubble.setPadding(dp(12), dp(8), dp(12), dp(8));
+        bubble.setBackground(pillBg(Color.parseColor("#0284C7"), 0, 14));
+        bubble.setMaxWidth(dp(280));
+        bubble.setTextIsSelectable(true);
+
+        row.addView(bubble, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        return row;
+    }
+
+    private View buildThinkingCardView(AcidSessionStore.UiMessageItem item) {
+        final LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int bg = mIsDarkMode ? Color.parseColor("#162032") : Color.parseColor("#F1F5F9");
+        int border = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#E2E8F0");
+        int muted = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+
+        card.setBackground(cardBorderBg(bg, border, 1, 8));
+        card.setPadding(dp(10), dp(6), dp(10), dp(6));
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        cardLp.bottomMargin = dp(5);
+        card.setLayoutParams(cardLp);
+
+        // Header row (click to expand/collapse)
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+
+        AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_AGENT, muted, 13);
+        head.addView(icon);
+
+        TextView title = new TextView(this);
+        String preview = item.text != null ? item.text.replace("\n", " ").trim() : "";
+        if (preview.length() > 36) preview = preview.substring(0, 36) + "...";
+        title.setText("思考过程 · " + preview);
+        title.setTextColor(muted);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tLp.leftMargin = dp(6);
+        head.addView(title, tLp);
+
+        final AcidIcons.SvgIconView chevron = new AcidIcons.SvgIconView(this, AcidIcons.ICON_CHEVRON_DOWN, muted, 14);
+        head.addView(chevron);
+        card.addView(head);
+
+        final TextView body = new TextView(this);
+        body.setText(item.text);
+        body.setTextColor(muted);
+        body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        body.setPadding(0, dp(6), 0, dp(2));
+        body.setVisibility(View.GONE);
+        body.setTextIsSelectable(true);
+        card.addView(body);
+
+        head.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                boolean expand = body.getVisibility() != View.VISIBLE;
+                body.setVisibility(expand ? View.VISIBLE : View.GONE);
+                chevron.setIcon(expand ? AcidIcons.ICON_CHEVRON_UP : AcidIcons.ICON_CHEVRON_DOWN);
+            }
+        });
+
+        return card;
+    }
+
+    private View buildAssistantMarkdownBubbleView(AcidSessionStore.UiMessageItem item) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int bg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#FFFFFF");
+        int border = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#E2E8F0");
+
+        card.setBackground(cardBorderBg(bg, border, 1, 12));
+        card.setPadding(dp(12), dp(10), dp(12), dp(8));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        lp.topMargin = dp(4);
+        lp.bottomMargin = dp(6);
+        card.setLayoutParams(lp);
+
+        AcidMarkdownView.renderInto(card, item.text, mIsDarkMode);
+        return card;
+    }
+
+    private View buildErrorBubbleView(AcidSessionStore.UiMessageItem item) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        int errCol = Color.parseColor("#EF4444");
+        int bg = Color.argb(24, 239, 68, 68);
+        card.setBackground(cardBorderBg(bg, errCol, 1, 8));
+        card.setPadding(dp(10), dp(8), dp(10), dp(8));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        lp.bottomMargin = dp(6);
+        card.setLayoutParams(lp);
+
+        TextView tv = new TextView(this);
+        tv.setText(item.text);
+        tv.setTextColor(errCol);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        card.addView(tv);
+        return card;
+    }
+
+    /**
+     * DSH-Style Expandable Tool Call Card Component:
+     * Shows [Tool Icon] + [Tool Name Badge] + [One-line Args Summary] + [Status Pill] + [Chevron].
+     * Tapping expands full JSON Arguments and Tool Execution Output.
+     */
+    private class ToolCardHolder {
+        public final LinearLayout rootView;
+        private final AcidIcons.SvgIconView mToolIcon;
+        private final TextView mTvToolName;
+        private final TextView mTvSummary;
+        private final TextView mTvStatusBadge;
+        private final AcidIcons.SvgIconView mChevron;
+        private final LinearLayout mDetailContainer;
+        private final TextView mTvArgsCode;
+        private final TextView mTvResultCode;
+
+        public ToolCardHolder(Context ctx) {
+            rootView = new LinearLayout(ctx);
+            rootView.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams rootLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            rootLp.bottomMargin = dp(5);
+            rootView.setLayoutParams(rootLp);
+
+            LinearLayout header = new LinearLayout(ctx);
+            header.setOrientation(LinearLayout.HORIZONTAL);
+            header.setGravity(Gravity.CENTER_VERTICAL);
+            header.setPadding(dp(10), dp(7), dp(10), dp(7));
+
+            mToolIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_GLOBE, LIGHT_ACCENT, 14);
+            header.addView(mToolIcon);
+
+            mTvToolName = new TextView(ctx);
+            mTvToolName.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+            mTvToolName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            nameLp.leftMargin = dp(5);
+            header.addView(mTvToolName, nameLp);
+
+            mTvSummary = new TextView(ctx);
+            mTvSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            mTvSummary.setSingleLine(true);
+            mTvSummary.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams sumLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            sumLp.leftMargin = dp(6);
+            sumLp.rightMargin = dp(6);
+            header.addView(mTvSummary, sumLp);
+
+            mTvStatusBadge = new TextView(ctx);
+            mTvStatusBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+            mTvStatusBadge.setTypeface(Typeface.DEFAULT_BOLD);
+            mTvStatusBadge.setPadding(dp(6), dp(2), dp(6), dp(2));
+            header.addView(mTvStatusBadge);
+
+            mChevron = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CHEVRON_DOWN, LIGHT_MUTED, 14);
+            LinearLayout.LayoutParams chLp = new LinearLayout.LayoutParams(dp(14), dp(14));
+            chLp.leftMargin = dp(4);
+            header.addView(mChevron, chLp);
+
+            rootView.addView(header);
+
+            // Expandable detail box (Input Args + Output Result)
+            mDetailContainer = new LinearLayout(ctx);
+            mDetailContainer.setOrientation(LinearLayout.VERTICAL);
+            mDetailContainer.setPadding(dp(10), dp(4), dp(10), dp(8));
+            mDetailContainer.setVisibility(View.GONE);
+
+            TextView lblArgs = new TextView(ctx);
+            lblArgs.setText("调用参数 (Arguments):");
+            lblArgs.setTextColor( Color.parseColor("#64748B"));
+            lblArgs.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            lblArgs.setTypeface(Typeface.DEFAULT_BOLD);
+            mDetailContainer.addView(lblArgs);
+
+            mTvArgsCode = new TextView(ctx);
+            mTvArgsCode.setTypeface(Typeface.MONOSPACE);
+            mTvArgsCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            mTvArgsCode.setTextColor(Color.parseColor("#E2E8F0"));
+            mTvArgsCode.setBackground(pillBg(Color.parseColor("#0F172A"), Color.parseColor("#334155"), 6));
+            mTvArgsCode.setPadding(dp(8), dp(6), dp(8), dp(6));
+            mTvArgsCode.setTextIsSelectable(true);
+            LinearLayout.LayoutParams argsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            argsLp.topMargin = dp(3);
+            argsLp.bottomMargin = dp(6);
+            mDetailContainer.addView(mTvArgsCode, argsLp);
+
+            TextView lblRes = new TextView(ctx);
+            lblRes.setText("返回结果 (Output):");
+            lblRes.setTextColor(Color.parseColor("#64748B"));
+            lblRes.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            lblRes.setTypeface(Typeface.DEFAULT_BOLD);
+            mDetailContainer.addView(lblRes);
+
+            mTvResultCode = new TextView(ctx);
+            mTvResultCode.setTypeface(Typeface.MONOSPACE);
+            mTvResultCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.8f);
+            mTvResultCode.setTextColor(Color.parseColor("#A7F3D0"));
+            mTvResultCode.setBackground(pillBg(Color.parseColor("#0F172A"), Color.parseColor("#334155"), 6));
+            mTvResultCode.setPadding(dp(8), dp(6), dp(8), dp(6));
+            mTvResultCode.setTextIsSelectable(true);
+            LinearLayout.LayoutParams resLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            resLp.topMargin = dp(3);
+            mDetailContainer.addView(mTvResultCode, resLp);
+
+            rootView.addView(mDetailContainer);
+
+            header.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    boolean expand = mDetailContainer.getVisibility() != View.VISIBLE;
+                    mDetailContainer.setVisibility(expand ? View.VISIBLE : View.GONE);
+                    mChevron.setIcon(expand ? AcidIcons.ICON_CHEVRON_UP : AcidIcons.ICON_CHEVRON_DOWN);
+                }
+            });
+        }
+
+        public void bind(AcidSessionStore.UiMessageItem item, boolean dark) {
+            int cardBg = dark ? Color.parseColor("#1E293B") : Color.parseColor("#FFFFFF");
+            int borderCol = dark ? Color.parseColor("#334155") : Color.parseColor("#E2E8F0");
+            int textCol = dark ? DARK_TEXT : LIGHT_TEXT;
+            int mutedCol = dark ? DARK_MUTED : LIGHT_MUTED;
+            int accent = dark ? DARK_ACCENT : LIGHT_ACCENT;
+
+            rootView.setBackground(cardBorderBg(cardBg, borderCol, 1, 8));
+
+            String tName = item.toolName != null ? item.toolName : "tool";
+            int iconId = AcidIcons.ICON_GLOBE;
+            int toolColor = accent;
+            if ("bash".equals(tName)) {
+                iconId = AcidIcons.ICON_TERMINAL;
+                toolColor = Color.parseColor("#8B5CF6");
+            } else if ("read".equals(tName) || "write".equals(tName) || "edit".equals(tName)) {
+                iconId = AcidIcons.ICON_FILE;
+                toolColor = Color.parseColor("#0284C7");
+            }
+            mToolIcon.setIcon(iconId);
+            mToolIcon.setColor(toolColor);
+
+            mTvToolName.setText(tName);
+            mTvToolName.setTextColor(toolColor);
+
+            mTvSummary.setText(item.toolSummary != null ? item.toolSummary : "");
+            mTvSummary.setTextColor(textCol);
+
+            if (item.isRunning) {
+                mTvStatusBadge.setText("执行中");
+                mTvStatusBadge.setTextColor(COLOR_AMBER);
+                mTvStatusBadge.setBackground(pillBg(Color.argb(30, 245, 158, 11), COLOR_AMBER, 4));
+            } else if (item.isError) {
+                int errCol = Color.parseColor("#EF4444");
+                mTvStatusBadge.setText("失败");
+                mTvStatusBadge.setTextColor(errCol);
+                mTvStatusBadge.setBackground(pillBg(Color.argb(30, 239, 68, 68), errCol, 4));
+            } else {
+                mTvStatusBadge.setText("完成");
+                mTvStatusBadge.setTextColor(accent);
+                mTvStatusBadge.setBackground(pillBg(Color.argb(26, Color.red(accent), Color.green(accent), Color.blue(accent)), 0, 4));
+            }
+
+            mChevron.setColor(mutedCol);
+            mTvArgsCode.setText(item.toolArgsJson != null ? item.toolArgsJson : "{}");
+            String resText = item.toolResult != null ? item.toolResult : "";
+            if (resText.length() > 3500) {
+                resText = resText.substring(0, 3500) + "\n... [内容已截断，共 " + item.toolResult.length() + " 字符]";
+            }
+            mTvResultCode.setText(resText);
+        }
+    }
+
+    private void scrollChatToBottom() {
+        if (mChatScrollView == null) return;
+        mChatScrollView.post(new Runnable() {
+            @Override
+            public void run() {
+                mChatScrollView.fullScroll(View.FOCUS_DOWN);
+            }
+        });
+    }
+
+    /**
+     * Opens the Multi-Session Switcher BottomSheet using the custom ListDialogOverlay.
+     */
+    private void showAgentSessionsSheet() {
+        if (mAgentLoop == null) return;
+        mTvListDialogTitle.setText("Agent 会话管理");
+        mBtnListAction.setVisibility(View.VISIBLE);
+        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
+        mBtnListAction.update(AcidIcons.ICON_PLUS, "新建对话", accent);
+        mBtnListAction.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                closeListDialog();
+                mAgentLoop.startNewSession();
+            }
+        });
+
+        renderAgentSessionListItems();
+        mListDialogOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void renderAgentSessionListItems() {
+        mListItemsContainer.removeAllViews();
+        final List<AcidSessionStore.SessionMeta> sessions = mAgentLoop.getSessionStore().listSessions();
+        final AcidSessionStore.AgentSession active = mAgentLoop.getActiveSession();
+
+        for (int i = 0; i < sessions.size(); i++) {
+            final AcidSessionStore.SessionMeta meta = sessions.get(i);
+            boolean isCurrent = active != null && active.id.equals(meta.id);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(10), dp(10), dp(10), dp(10));
+            int rowBg = isCurrent ? Color.parseColor("#E0F2FE") : LIGHT_MENU_ITEM_BG;
+            int rowBorder = isCurrent ? COLOR_TAB_ACTIVE_BORDER : 0;
+            row.setBackground(pillBg(rowBg, rowBorder, 8));
+            LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            rLp.bottomMargin = dp(6);
+
+            AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(
+                this, AcidIcons.ICON_CHAT_LIST, isCurrent ? COLOR_TAB_ACTIVE_BORDER : LIGHT_ACCENT, 17
+            );
+            row.addView(icon);
+
+            LinearLayout textCol = new LinearLayout(this);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            tLp.leftMargin = dp(8);
+            tLp.rightMargin = dp(8);
+
+            TextView title = new TextView(this);
+            title.setText(meta.title + (isCurrent ? " (当前)" : ""));
+            title.setTextColor(LIGHT_TEXT);
+            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setSingleLine(true);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            textCol.addView(title);
+
+            TextView sub = new TextView(this);
+            sub.setText(meta.getFormattedTime() + " · " + meta.messageCount + " 条记录");
+            sub.setTextColor(LIGHT_MUTED);
+            sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            textCol.addView(sub);
+
+            row.addView(textCol, tLp);
+
+            LinearLayout delBox = new LinearLayout(this);
+            delBox.setGravity(Gravity.CENTER);
+            delBox.setPadding(dp(6), dp(6), dp(6), dp(6));
+            AcidIcons.SvgIconView delIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_TRASH, LIGHT_MUTED, 14);
+            delBox.addView(delIcon);
+            delBox.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    mAgentLoop.deleteSession(meta.id);
+                    renderAgentSessionListItems();
+                }
+            });
+            row.addView(delBox);
+
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    closeListDialog();
+                    mAgentLoop.switchSession(meta.id);
+                }
+            });
+
+            mListItemsContainer.addView(row, rLp);
+        }
     }
 
     private void triggerAgentSubmitOrStop() {
         if (mAgentLoop == null) return;
         if (mAgentLoop.isRunning()) {
             mAgentLoop.stopLoop();
-            appendConsole("[STOP] 已手动中止 Agent 循环。");
+            Toast.makeText(this, "已停止当前 Agent 任务", Toast.LENGTH_SHORT).show();
             return;
         }
         if (mAgentLoop.isPausedForTakeover()) {
@@ -1832,7 +2432,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         etModel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
         box.addView(etModel);
 
-        new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        new AlertDialog.Builder(this, mIsDarkMode ? AlertDialog.THEME_DEVICE_DEFAULT_DARK : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
             .setTitle("Acid Agent 模型配置")
             .setView(box)
             .setPositiveButton("保存配置", new DialogInterface.OnClickListener() {
@@ -1844,7 +2444,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         etModel.getText().toString()
                     );
                     if (mTvAgentLoopStatus != null) {
-                        mTvAgentLoopStatus.setText("Acid Agent (" + mAgentLoop.getModelName() + ")");
+                        mTvAgentLoopStatus.setText(mAgentLoop.getModelName());
                     }
                     Toast.makeText(BrowserActivity.this, "模型配置已保存", Toast.LENGTH_SHORT).show();
                 }
@@ -1854,18 +2454,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     private void appendConsole(String text) {
-        String time = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
-        mLogBuffer.append("[").append(time).append("] ").append(text).append("\n");
-        if (mLogBuffer.length() > 12000) {
-            mLogBuffer.delete(0, mLogBuffer.length() - 9000);
-        }
-        mTvConsoleOutput.setText(mLogBuffer.toString());
-        mConsoleScroll.post(new Runnable() {
-            @Override
-            public void run() {
-                mConsoleScroll.fullScroll(View.FOCUS_DOWN);
-            }
-        });
+        // Internal controller debug logs stay silent in chat stream to keep UI clean
     }
 
     private void hideKeyboard() {
@@ -1924,11 +2513,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void run() {
                 int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
                 int muted = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
-                if (somEnabled) {
-                    mBtnSom.update(AcidIcons.ICON_SOM, "SoM:ON", accent);
-                } else {
-                    mBtnSom.update(AcidIcons.ICON_SOM, "SoM", muted);
-                }
+                updateTopAgentButton(
+                    mAgentLoop != null && mAgentLoop.isRunning(),
+                    mAgentLoop != null && mAgentLoop.isPausedForTakeover()
+                );
 
                 int blocked = mController.getBlockedDeepLinksCount();
                 if (controlMode == AgentOverlayView.MODE_AGENT) {
@@ -2004,7 +2592,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             return;
         }
         if (mDrawerPanel != null && mDrawerPanel.getVisibility() == View.VISIBLE) {
-            mDrawerPanel.setVisibility(View.GONE);
+            closeAgentFloatingWindow();
             return;
         }
         BrowserController.TabSession tab = mController != null ? mController.getActiveTab() : null;
