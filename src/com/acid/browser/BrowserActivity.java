@@ -1,8 +1,11 @@
 package com.acid.browser;
 
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -92,6 +95,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AgentModelSelectorSheet mModelSelectorSheet;
     private ModelProviderConfigSheet mProviderConfigSheet;
     private AcidBottomSheetView mAboutSheet;
+    private AcidBottomSheetView mDownloadConfirmSheet;
+    private BroadcastReceiver mDownloadReceiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -106,6 +111,16 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mController = new BrowserController(this, mWebViewContainer, mOverlayView, this);
         mController.setDarkMode(mIsDarkMode);
+        mController.setDataStore(mDataStore);
+
+        if (Build.VERSION.SDK_INT >= 23) {
+            if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    android.Manifest.permission.READ_EXTERNAL_STORAGE
+                }, 101);
+            }
+        }
 
         // 1. Initialize Tabs Overview View
         mTabsOverview = new TabsOverviewView(this, mController);
@@ -269,6 +284,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
+        mDownloadConfirmSheet = new AcidBottomSheetView(this);
+        mDownloadConfirmSheet.setTitle("下载确认");
+        mRootContainer.addView(mDownloadConfirmSheet, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
         mListsSheet = new BrowserListsSheet(this, mDataStore, mController, new BrowserListsSheet.OnListActionListener() {
             @Override
             public void onNavigateUrl(String url) {
@@ -312,6 +333,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mHttpServer = new HttpControlServer(mController, HttpControlServer.DEFAULT_PORT);
         mHttpServer.start();
+
+        mDownloadReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) {
+                    long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                    if (mController != null) {
+                        mController.onDownloadCompleted(id);
+                    }
+                    if (mListsSheet != null && mListsSheet.isShowing()) {
+                        mListsSheet.refreshDownloads();
+                    }
+                }
+            }
+        };
+        registerReceiver(mDownloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
 
         applyTheme(mIsDarkMode);
         if (mAgentLoop != null && mAgentFloatingView != null) {
@@ -747,6 +784,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mModelSelectorSheet != null) mModelSelectorSheet.applyTheme(dark);
         if (mProviderConfigSheet != null) mProviderConfigSheet.applyTheme(dark);
         if (mAboutSheet != null) mAboutSheet.applyTheme(dark);
+        if (mDownloadConfirmSheet != null) mDownloadConfirmSheet.applyTheme(dark);
     }
 
     private void updateTopAgentButton(boolean running, boolean pausedForTakeover) {
@@ -907,6 +945,218 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mAboutSheet.show();
     }
 
+    private void showDownloadConfirmDialog(
+        final String url,
+        final String fileName,
+        final String userAgent,
+        final String contentDisposition,
+        final String mimeType,
+        final long contentLength
+    ) {
+        if (mDownloadConfirmSheet == null) return;
+        mDownloadConfirmSheet.setTitle("下载确认");
+        mDownloadConfirmSheet.hideAction();
+        mDownloadConfirmSheet.setWrapContentHeight();
+
+        LinearLayout container = mDownloadConfirmSheet.getContentContainer();
+        container.removeAllViews();
+
+        int accent = AcidTheme.accent(mIsDarkMode);
+        int text = AcidTheme.text(mIsDarkMode);
+        int muted = AcidTheme.muted(mIsDarkMode);
+        int cardBg = AcidTheme.cardItemBg(mIsDarkMode);
+        int border = AcidTheme.border(mIsDarkMode);
+        int searchBg = AcidTheme.searchBg(mIsDarkMode);
+        int searchBorder = AcidTheme.searchBorder(mIsDarkMode);
+        int itemBg = AcidTheme.menuItemBg(mIsDarkMode);
+
+        // Main Card
+        LinearLayout infoCard = new LinearLayout(this);
+        infoCard.setOrientation(LinearLayout.VERTICAL);
+        infoCard.setPadding(dp(16), dp(16), dp(16), dp(16));
+        infoCard.setBackground(AcidTheme.cardBorderBg(this, cardBg, border, 1, 14));
+        LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        iLp.bottomMargin = dp(14);
+        infoCard.setLayoutParams(iLp);
+
+        // Header inside card: Download icon + Title
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        AcidIcons.SvgIconView dlIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_DOWNLOAD, accent, 24);
+        titleRow.addView(dlIcon);
+
+        TextView tvCardTitle = new TextView(this);
+        tvCardTitle.setText("新建下载任务");
+        tvCardTitle.setTextColor(text);
+        tvCardTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        tvCardTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCardTitle.setPadding(dp(10), 0, 0, 0);
+        titleRow.addView(tvCardTitle);
+        infoCard.addView(titleRow);
+
+        // Editable File Name Field
+        TextView lblName = new TextView(this);
+        lblName.setText("文件名 (可自定义修改)");
+        lblName.setTextColor(muted);
+        lblName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        lblName.setTypeface(Typeface.DEFAULT_BOLD);
+        lblName.setPadding(0, dp(12), 0, dp(6));
+        infoCard.addView(lblName);
+
+        final EditText etFileName = new EditText(this);
+        etFileName.setText(fileName);
+        etFileName.setTextColor(text);
+        etFileName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        etFileName.setSingleLine(true);
+        etFileName.setPadding(dp(12), dp(10), dp(12), dp(10));
+        etFileName.setBackground(AcidTheme.pillBg(this, searchBg, searchBorder, 8));
+        infoCard.addView(etFileName);
+
+        // Details Block
+        LinearLayout details = new LinearLayout(this);
+        details.setOrientation(LinearLayout.VERTICAL);
+        details.setPadding(0, dp(12), 0, 0);
+
+        // 1. File size line
+        TextView tvSize = new TextView(this);
+        tvSize.setText("预估大小: " + BrowserController.DownloadItem.formatSize(contentLength) + (mimeType != null && !mimeType.isEmpty() ? " (" + mimeType + ")" : ""));
+        tvSize.setTextColor(muted);
+        tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        details.addView(tvSize);
+
+        // 2. Storage Directory with [浏览目录] button
+        LinearLayout pathRow = new LinearLayout(this);
+        pathRow.setOrientation(LinearLayout.HORIZONTAL);
+        pathRow.setGravity(Gravity.CENTER_VERTICAL);
+        pathRow.setPadding(0, dp(8), 0, 0);
+
+        TextView tvPath = new TextView(this);
+        tvPath.setText("存储位置: /storage/emulated/0/Download/");
+        tvPath.setTextColor(muted);
+        tvPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        pathRow.addView(tvPath, pLp);
+
+        TextView btnBrowseDir = new TextView(this);
+        btnBrowseDir.setText("浏览目录");
+        btnBrowseDir.setTextColor(AcidTheme.COLOR_BLUE);
+        btnBrowseDir.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        btnBrowseDir.setTypeface(Typeface.DEFAULT_BOLD);
+        btnBrowseDir.setBackground(AcidTheme.pillBg(this, itemBg, searchBorder, 6));
+        btnBrowseDir.setPadding(dp(8), dp(4), dp(8), dp(4));
+        btnBrowseDir.setClickable(true);
+        btnBrowseDir.setFocusable(true);
+        btnBrowseDir.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mController != null) {
+                    mController.openDownloadFolder();
+                }
+            }
+        });
+        pathRow.addView(btnBrowseDir);
+        details.addView(pathRow);
+
+        // 3. Source URL with [复制链接] button
+        LinearLayout urlRow = new LinearLayout(this);
+        urlRow.setOrientation(LinearLayout.HORIZONTAL);
+        urlRow.setGravity(Gravity.CENTER_VERTICAL);
+        urlRow.setPadding(0, dp(8), 0, 0);
+
+        TextView tvUrl = new TextView(this);
+        tvUrl.setText("来源网址: " + url);
+        tvUrl.setTextColor(muted);
+        tvUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvUrl.setSingleLine(true);
+        tvUrl.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        uLp.rightMargin = dp(8);
+        urlRow.addView(tvUrl, uLp);
+
+        TextView btnCopyUrl = new TextView(this);
+        btnCopyUrl.setText("复制链接");
+        btnCopyUrl.setTextColor(accent);
+        btnCopyUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        btnCopyUrl.setTypeface(Typeface.DEFAULT_BOLD);
+        btnCopyUrl.setBackground(AcidTheme.pillBg(this, itemBg, searchBorder, 6));
+        btnCopyUrl.setPadding(dp(8), dp(4), dp(8), dp(4));
+        btnCopyUrl.setClickable(true);
+        btnCopyUrl.setFocusable(true);
+        btnCopyUrl.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mController != null) {
+                    mController.copyToClipboard(url);
+                }
+            }
+        });
+        urlRow.addView(btnCopyUrl);
+        details.addView(urlRow);
+
+        infoCard.addView(details);
+        container.addView(infoCard);
+
+        // Action Buttons Row (Cancel / Download)
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.CENTER);
+        btnRow.setPadding(0, dp(2), 0, dp(2));
+
+        TextView btnCancel = new TextView(this);
+        btnCancel.setText("取消");
+        btnCancel.setTextColor(muted);
+        btnCancel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        btnCancel.setTypeface(Typeface.DEFAULT_BOLD);
+        btnCancel.setGravity(Gravity.CENTER);
+        btnCancel.setBackground(AcidTheme.pillBg(this, itemBg, 0, 10));
+        btnCancel.setPadding(0, dp(12), 0, dp(12));
+        btnCancel.setClickable(true);
+        btnCancel.setFocusable(true);
+        btnCancel.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mDownloadConfirmSheet.dismiss();
+            }
+        });
+
+        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        cancelLp.rightMargin = dp(8);
+        btnRow.addView(btnCancel, cancelLp);
+
+        TextView btnConfirm = new TextView(this);
+        btnConfirm.setText("立即下载");
+        btnConfirm.setTextColor(Color.WHITE);
+        btnConfirm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        btnConfirm.setTypeface(Typeface.DEFAULT_BOLD);
+        btnConfirm.setGravity(Gravity.CENTER);
+        btnConfirm.setBackground(AcidTheme.pillBg(this, accent, 0, 10));
+        btnConfirm.setPadding(0, dp(12), 0, dp(12));
+        btnConfirm.setClickable(true);
+        btnConfirm.setFocusable(true);
+        btnConfirm.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mDownloadConfirmSheet.dismiss();
+                if (mController != null) {
+                    String customName = etFileName.getText() != null ? etFileName.getText().toString().trim() : "";
+                    if (customName.isEmpty()) customName = fileName;
+                    mController.startDownload(url, customName, userAgent, contentDisposition, mimeType, contentLength);
+                }
+            }
+        });
+
+        LinearLayout.LayoutParams confirmLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        confirmLp.leftMargin = dp(8);
+        btnRow.addView(btnConfirm, confirmLp);
+
+        container.addView(btnRow);
+        mDownloadConfirmSheet.show();
+    }
+
     private void hideKeyboard() {
         try {
             InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
@@ -1014,7 +1264,28 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
+    public void onDownloadRequested(
+        final String url,
+        final String fileName,
+        final String userAgent,
+        final String contentDisposition,
+        final String mimeType,
+        final long contentLength
+    ) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                showDownloadConfirmDialog(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
+            }
+        });
+    }
+
+    @Override
     public void onBackPressed() {
+        if (mDownloadConfirmSheet != null && mDownloadConfirmSheet.isShowing()) {
+            mDownloadConfirmSheet.dismiss();
+            return;
+        }
         if (mAboutSheet != null && mAboutSheet.isShowing()) {
             mAboutSheet.dismiss();
             return;
@@ -1055,6 +1326,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     @Override
     protected void onDestroy() {
+        if (mDownloadReceiver != null) {
+            try {
+                unregisterReceiver(mDownloadReceiver);
+            } catch (Exception ignored) {}
+        }
         if (mAgentLoop != null) {
             mAgentLoop.stopLoop();
         }

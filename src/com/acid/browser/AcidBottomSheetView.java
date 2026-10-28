@@ -127,6 +127,14 @@ public class AcidBottomSheetView extends FrameLayout {
         }
     }
 
+    public void setWrapContentHeight() {
+        ViewGroup.LayoutParams lp = mScrollView.getLayoutParams();
+        if (lp != null) {
+            lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+            mScrollView.setLayoutParams(lp);
+        }
+    }
+
     public void setTitle(String title) {
         mTitleView.setText(title != null ? title : "");
     }
