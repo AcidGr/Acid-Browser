@@ -982,6 +982,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mAboutSheet.show();
     }
 
+    public static final String UPDATE_PROBE_URL = "https://api.github.com/repos/AcidGr/Acid-Browser/releases/latest";
+
     private void checkAppUpdate(final TextView triggerBtn) {
         if (triggerBtn != null) {
             triggerBtn.setText("正在检查...");
@@ -992,39 +994,27 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         new Thread(new Runnable() {
             @Override
             public void run() {
-                String[] candidateEndpoints = new String[]{
-                    "https://api.github.com/repos/AcidGr/Acid-Browser/releases/latest",
-                    "https://api.github.com/repos/AcidGr/Acid-Browser/releases/latest"
-                };
-
                 String jsonStr = null;
-                String activeHost = null;
-
-                for (String endpoint : candidateEndpoints) {
-                    try {
-                        java.net.URL u = new java.net.URL(endpoint);
-                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
-                        conn.setConnectTimeout(3000);
-                        conn.setReadTimeout(3000);
-                        conn.setRequestMethod("GET");
-                        if (conn.getResponseCode() == 200) {
-                            java.io.InputStream in = conn.getInputStream();
-                            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                            byte[] buf = new byte[1024];
-                            int len;
-                            while ((len = in.read(buf)) != -1) {
-                                bos.write(buf, 0, len);
-                            }
-                            in.close();
-                            jsonStr = new String(bos.toByteArray(), "UTF-8");
-                            activeHost = endpoint.contains("github.com") ? "github.com" : "github.com";
-                            break;
+                try {
+                    java.net.URL u = new java.net.URL(UPDATE_PROBE_URL);
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
+                    conn.setConnectTimeout(5000);
+                    conn.setReadTimeout(5000);
+                    conn.setRequestMethod("GET");
+                    if (conn.getResponseCode() == 200) {
+                        java.io.InputStream in = conn.getInputStream();
+                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                        byte[] buf = new byte[1024];
+                        int len;
+                        while ((len = in.read(buf)) != -1) {
+                            bos.write(buf, 0, len);
                         }
-                    } catch (Exception ignored) {}
-                }
+                        in.close();
+                        jsonStr = new String(bos.toByteArray(), "UTF-8");
+                    }
+                } catch (Exception ignored) {}
 
                 final String resultJson = jsonStr;
-                final String matchedHost = activeHost;
 
                 runOnUiThread(new Runnable() {
                     @Override
@@ -1035,7 +1025,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         }
 
                         if (resultJson == null) {
-                            Toast.makeText(BrowserActivity.this, "连接华为云服务器失败\n请确认安全组 8888 端口或 Tailscale 状态", Toast.LENGTH_LONG).show();
+                            Toast.makeText(BrowserActivity.this, "连接更新服务器失败 (github.com:8888)\n请确认华为云安全组是否已放通 TCP 8888 端口", Toast.LENGTH_LONG).show();
                             return;
                         }
 
@@ -1046,10 +1036,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                             String downloadUrl = obj.optString("downloadUrl", "");
                             String apkSize = obj.optString("apkSize", "");
                             String changelog = obj.optString("changelog", "");
-
-                            if (matchedHost != null && !downloadUrl.contains(matchedHost)) {
-                                downloadUrl = downloadUrl.replace("github.com", matchedHost).replace("github.com", matchedHost);
-                            }
 
                             int currentCode = 0;
                             String currentName = "0.2.0";
