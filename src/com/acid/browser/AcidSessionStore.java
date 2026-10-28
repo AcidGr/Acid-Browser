@@ -274,17 +274,16 @@ public class AcidSessionStore {
             }
             root.put("uiItems", uiArr);
 
-            // Compact old browser observations before writing apiMessages to disk
+            // Save apiMessages to disk preserving full content
             JSONArray apiArr = new JSONArray();
             int n = s.apiMessages.size();
             for (int i = 0; i < n; i++) {
                 JSONObject msg = s.apiMessages.get(i);
-                if (i < n - 4 && "tool".equals(msg.optString("role")) && "browser".equals(msg.optString("name"))) {
+                // Safety bound: only guard against runaway massive single payloads (>64KB)
+                String c = msg.optString("content", "");
+                if (c.length() > 65536) {
                     JSONObject copy = new JSONObject(msg.toString());
-                    String c = copy.optString("content", "");
-                    if (c.length() > 400) {
-                        copy.put("content", c.substring(0, 320) + "\n...[Historical Page Snapshot Compacted]...");
-                    }
+                    copy.put("content", c.substring(0, 32768) + "\n...[Content truncated at 32KB on disk]...\n" + c.substring(c.length() - 8192));
                     apiArr.put(copy);
                 } else {
                     apiArr.put(msg);

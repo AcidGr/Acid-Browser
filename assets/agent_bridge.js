@@ -139,7 +139,8 @@
     const INTERACTIVE_ROLES = new Set([
         'button', 'link', 'textbox', 'searchbox', 'combobox', 'listbox',
         'option', 'checkbox', 'radio', 'switch', 'tab', 'menuitem',
-        'menuitemcheckbox', 'menuitemradio', 'slider', 'spinbutton'
+        'menuitemcheckbox', 'menuitemradio', 'slider', 'spinbutton',
+        'row', 'gridcell', 'listitem', 'treeitem', 'article'
     ]);
     const IGNORED_TAGS = new Set([
         'script', 'style', 'noscript', 'meta', 'link', 'head', 'svg', 'path', 'defs', 'symbol'
@@ -237,9 +238,13 @@
         }
 
         if (style && style.cursor === 'pointer') {
-            const textLen = (el.innerText || '').trim().length;
-            if (textLen > 0 && textLen <= 120 && el.children.length <= 6) {
-                return true;
+            const rect = el.getBoundingClientRect();
+            // Allow clickable cards, table rows, and list items (avoid huge page wrappers > 280px high)
+            if (rect.height > 0 && rect.height <= 280 && rect.width > 0) {
+                const textLen = (el.innerText || '').trim().length;
+                if (textLen > 0 && textLen <= 350) {
+                    return true;
+                }
             }
         }
         return false;
@@ -268,23 +273,53 @@
 
     function extractElementLabel(el) {
         let labelText = '';
-        if (el.labels && el.labels.length > 0) {
+        // 1. Check aria-labelledby
+        const labelledBy = el.getAttribute('aria-labelledby');
+        if (labelledBy) {
+            const parts = labelledBy.trim().split(/\s+/);
+            const collected = [];
+            for (let p = 0; p < parts.length; p++) {
+                const target = document.getElementById(parts[p]);
+                if (target) {
+                    const t = cleanText(target.innerText || target.textContent, 50);
+                    if (t) collected.push(t);
+                }
+            }
+            if (collected.length > 0) {
+                labelText = cleanText(collected.join(' - '), 80);
+            }
+        }
+
+        // 2. Check native <label>
+        if (!labelText && el.labels && el.labels.length > 0) {
             labelText = cleanText(el.labels[0].innerText || el.labels[0].textContent, 60);
-        } else if (el.id) {
+        } else if (!labelText && el.id) {
             try {
                 const lbl = document.querySelector('label[for="' + el.id.replace(/"/g, '\\"') + '"]');
                 if (lbl) labelText = cleanText(lbl.innerText || lbl.textContent, 60);
             } catch (e) {}
         }
+
+        // 3. Check aria-label / title / placeholder / alt
         const aria = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('alt');
-        const inner = (el.tagName && el.tagName.toLowerCase() === 'select')
+
+        // 4. Check inner text or child SVG title
+        let inner = (el.tagName && el.tagName.toLowerCase() === 'select')
             ? ''
-            : cleanText(el.innerText || el.textContent, 80);
+            : cleanText(el.innerText || el.textContent, 90);
+
+        if (!inner && !aria && !labelText) {
+            const svgTitle = el.querySelector && el.querySelector('svg title, svg[aria-label]');
+            if (svgTitle) {
+                inner = cleanText(svgTitle.textContent || svgTitle.getAttribute('aria-label'), 60);
+            }
+        }
+
         const primary = inner || labelText || aria || el.name || el.id || '';
         if (primary && aria && primary !== aria && !primary.includes(aria)) {
             return cleanText(primary + ' (' + aria + ')', 100);
         }
-        return cleanText(primary, 80);
+        return cleanText(primary, 90);
     }
 
     // 6. Set-of-Marks (SoM) Overlay Renderer
@@ -357,6 +392,23 @@
         const items = [];
         let counter = 0;
 
+        function isRedundantNestedChild(el, label, rect) {
+            if (!label) return false;
+            for (let k = items.length - 1; k >= 0 && k >= items.length - 4; k--) {
+                const prev = items[k];
+                if (prev.label && (prev.label === label || prev.label.includes(label))) {
+                    const pb = prev.box;
+                    if (rect.left >= pb.x - 4 && rect.top >= pb.y - 4 &&
+                        rect.right <= pb.x + pb.width + 4 && rect.bottom <= pb.y + pb.height + 4) {
+                        const t = (el.tagName || '').toLowerCase();
+                        if (t === 'input' || t === 'select' || t === 'textarea') return false;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         function walk(node) {
             if (!node || counter >= maxElements) return;
             if (node.nodeType !== Node.ELEMENT_NODE) return;
@@ -375,64 +427,88 @@
 
                 if ((!viewportOnly || inExtendedVp) && isElementInteractive(el, style)) {
                     if (!inVp || isTopMostAtCenter(el, rect)) {
-                        counter++;
-                        const ref = 'e' + counter;
-                        refMap[ref] = el;
-                        const role = (el.getAttribute('role') || '').toLowerCase() || tag;
+                        const role = (el.getAttribute('role') || '').toLowerCase().trim() || tag;
                         const label = extractElementLabel(el);
-                        refMetaMap[ref] = {
-                            tag: tag,
-                            role: role,
-                            label: cleanText(label, 80),
-                            id: el.id || '',
-                            className: (el.className || '').toString().trim(),
-                            name: el.getAttribute('name') || '',
-                            href: el.getAttribute('href') || ''
-                        };
-                        const inputType = tag === 'input' ? (el.type || 'text').toLowerCase() : undefined;
-                        const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
-                        const checked = (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) ? !!el.checked : undefined;
 
-                        let val = undefined;
-                        if (tag === 'input' || tag === 'textarea' || tag === 'select') {
-                            val = isSensitiveInput(el) ? '***' : cleanText(el.value, 60);
-                        }
+                        // Skip pure redundant nested duplicates (e.g. <span> inside <button> with same text)
+                        // and unlabeled generic wrappers
+                        if (!isRedundantNestedChild(el, label, rect) &&
+                            (label || tag !== 'div' && tag !== 'span' || role !== tag)) {
+                            counter++;
+                            const ref = 'e' + counter;
+                            refMap[ref] = el;
+                            refMetaMap[ref] = {
+                                tag: tag,
+                                role: role,
+                                label: cleanText(label, 80),
+                                id: el.id || '',
+                                className: (el.className || '').toString().trim(),
+                                name: el.getAttribute('name') || '',
+                                href: el.getAttribute('href') || ''
+                            };
+                            const inputType = tag === 'input' ? (el.type || 'text').toLowerCase() : undefined;
+                            const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
+                            const checked = (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) ? !!el.checked : undefined;
+                            const ariaExp = el.getAttribute('aria-expanded');
+                            const ariaSel = el.getAttribute('aria-selected');
+                            const expanded = ariaExp !== null ? ariaExp === 'true' : undefined;
+                            const selected = ariaSel !== null ? ariaSel === 'true' : undefined;
 
-                        let href = undefined;
-                        if (tag === 'a' && el.href) {
-                            href = cleanText(el.getAttribute('href') || el.href, 100);
-                        }
-
-                        let optionsList = undefined;
-                        if (tag === 'select' && el.options) {
-                            optionsList = [];
-                            for (let k = 0; k < Math.min(el.options.length, 15); k++) {
-                                const opt = el.options[k];
-                                optionsList.push(cleanText(opt.value + ':' + opt.text, 40));
+                            let val = undefined;
+                            if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+                                val = isSensitiveInput(el) ? '***' : cleanText(el.value, 60);
                             }
-                        }
 
-                        const meta = {
-                            ref: ref,
-                            tag: tag,
-                            role: role,
-                            type: inputType,
-                            label: label,
-                            value: val,
-                            href: href,
-                            options: optionsList,
-                            disabled: disabled,
-                            checked: checked,
-                            inViewport: inVp,
-                            box: {
-                                x: Math.round(rect.left),
-                                y: Math.round(rect.top),
-                                width: Math.round(rect.width),
-                                height: Math.round(rect.height)
+                            let href = undefined;
+                            if (tag === 'a' && el.href) {
+                                let rawHref = el.getAttribute('href') || el.href;
+                                if (rawHref && rawHref !== '#' && !rawHref.startsWith('javascript:')) {
+                                    if (rawHref.includes('?') && rawHref.length > 45) {
+                                        try {
+                                            const u = new URL(rawHref, location.href);
+                                            const q = u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('wd');
+                                            rawHref = q ? (u.pathname + '?q=' + encodeURIComponent(q)) : u.pathname;
+                                        } catch (e) {
+                                            rawHref = rawHref.split('?')[0];
+                                        }
+                                    }
+                                    href = cleanText(rawHref, 75);
+                                }
                             }
-                        };
-                        refMetaMap[ref] = meta;
-                        items.push(meta);
+
+                            let optionsList = undefined;
+                            if (tag === 'select' && el.options) {
+                                optionsList = [];
+                                for (let k = 0; k < Math.min(el.options.length, 15); k++) {
+                                    const opt = el.options[k];
+                                    optionsList.push(cleanText(opt.value + ':' + opt.text, 40));
+                                }
+                            }
+
+                            const meta = {
+                                ref: ref,
+                                tag: tag,
+                                role: role,
+                                type: inputType,
+                                label: label,
+                                value: val,
+                                href: href,
+                                options: optionsList,
+                                disabled: disabled,
+                                checked: checked,
+                                expanded: expanded,
+                                selected: selected,
+                                inViewport: inVp,
+                                box: {
+                                    x: Math.round(rect.left),
+                                    y: Math.round(rect.top),
+                                    width: Math.round(rect.width),
+                                    height: Math.round(rect.height)
+                                }
+                            };
+                            refMetaMap[ref] = meta;
+                            items.push(meta);
+                        }
                     }
                 }
             }
@@ -504,10 +580,14 @@
             if (it.label) desc += ' "' + it.label + '"';
             if (it.value !== undefined && it.value !== '') desc += ' value="' + it.value + '"';
             if (it.checked !== undefined) desc += ' checked=' + it.checked;
+            if (it.expanded !== undefined) desc += ' expanded=' + it.expanded;
+            if (it.selected !== undefined) desc += ' selected=' + it.selected;
             if (it.disabled) desc += ' [disabled]';
             if (it.href) desc += ' -> ' + it.href;
             if (it.options && it.options.length > 0) desc += ' options=[' + it.options.join(', ') + ']';
-            desc += ' @(' + it.box.x + ',' + it.box.y + ',' + it.box.width + 'x' + it.box.height + ')';
+            if (options.includeCoords || showSom) {
+                desc += ' @(' + it.box.x + ',' + it.box.y + ',' + it.box.width + 'x' + it.box.height + ')';
+            }
             lines.push('  ' + desc);
         }
 
