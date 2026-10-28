@@ -58,6 +58,7 @@ public final class AcidTheme {
     public static int iconDisabled(boolean dark) { return dark ? DARK_ICON_DISABLED : LIGHT_ICON_DISABLED; }
     public static int accent(boolean dark) { return dark ? DARK_ACCENT : LIGHT_ACCENT; }
     public static int menuItemBg(boolean dark) { return dark ? DARK_MENU_ITEM_BG : LIGHT_MENU_ITEM_BG; }
+    public static int cardItemBg(boolean dark) { return menuItemBg(dark); }
 
     public static int dp(Context context, float v) {
         return Math.round(v * context.getResources().getDisplayMetrics().density);

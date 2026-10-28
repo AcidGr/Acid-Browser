@@ -63,6 +63,8 @@ public class AcidIcons {
     public static final int ICON_FILE = 36;
     public static final int ICON_MODEL = 37;
     public static final int ICON_EDIT = 38;
+    public static final int ICON_INFO = 39;
+    public static final int ICON_INCOGNITO_OFF = 40;
 
     /**
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
@@ -463,6 +465,21 @@ public class AcidIcons {
             case ICON_EDIT:
                 // SVG Pencil Edit
                 p.addPath(parseSvgPath("M 16.5 3.5 L 20.5 7.5 L 8 20 H 4 V 16 L 16.5 3.5 Z M 14 6 L 18 10"));
+                break;
+
+            case ICON_INFO:
+                // SVG Info Circle + 'i'
+                p.addCircle(12f, 12f, 9f, Path.Direction.CW);
+                p.addCircle(12f, 8f, 1f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 12 11 V 16 M 11 11 H 12 M 11 16 H 13"));
+                break;
+
+            case ICON_INCOGNITO_OFF:
+                // SVG Incognito with slash
+                p.addPath(parseSvgPath("M 2 10 H 22 M 7 10 L 9.2 3.5 H 14.8 L 17 10"));
+                p.addCircle(7.5f, 15.5f, 3.5f, Path.Direction.CW);
+                p.addCircle(16.5f, 15.5f, 3.5f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 11 15.5 H 13 M 3 3 L 21 21"));
                 break;
 
             default:
