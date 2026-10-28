@@ -21,6 +21,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +56,13 @@ public class AgentFloatingView extends FrameLayout {
     private EditText mEtAgentTaskInput;
     private AcidIcons.BadgeButton mBtnAgentSendStop;
     private final Map<String, ToolCardHolder> mToolCardHolders = new HashMap<String, ToolCardHolder>();
+
+    private static final int INITIAL_RECENT_ITEMS_COUNT = 15;
+    private static final int LOAD_MORE_BATCH_SIZE = 25;
+    private int mRenderedStartIndex = 0;
+    private AcidSessionStore.AgentSession mCurrentRenderedSession = null;
+    private View mLoadEarlierHeaderCard = null;
+    private TextView mTvLoadEarlierSummary = null;
 
     private float mUserTargetY = -1;
     private boolean mHasUnreadAgentMessage = false;
@@ -401,6 +409,9 @@ public class AgentFloatingView extends FrameLayout {
         if (mChatStreamContainer == null) return;
         mChatStreamContainer.removeAllViews();
         mToolCardHolders.clear();
+        mLoadEarlierHeaderCard = null;
+        mTvLoadEarlierSummary = null;
+        mCurrentRenderedSession = session;
 
         if (session != null && mTvAgentSessionTitle != null) {
             mTvAgentSessionTitle.setText(session.title);
@@ -410,14 +421,115 @@ public class AgentFloatingView extends FrameLayout {
         }
 
         if (session == null || session.uiItems.isEmpty()) {
+            mRenderedStartIndex = 0;
             addEmptyChatWelcomeCard();
             return;
         }
 
-        for (AcidSessionStore.UiMessageItem item : session.uiItems) {
-            appendUiMessageItemView(item, false);
+        int total = session.uiItems.size();
+        if (total <= INITIAL_RECENT_ITEMS_COUNT) {
+            mRenderedStartIndex = 0;
+            for (int i = 0; i < total; i++) {
+                mChatStreamContainer.addView(createUiMessageItemView(session.uiItems.get(i)));
+            }
+        } else {
+            mRenderedStartIndex = total - INITIAL_RECENT_ITEMS_COUNT;
+            mChatStreamContainer.addView(buildLoadEarlierCard(mRenderedStartIndex));
+            for (int i = mRenderedStartIndex; i < total; i++) {
+                mChatStreamContainer.addView(createUiMessageItemView(session.uiItems.get(i)));
+            }
         }
         scrollChatToBottom();
+    }
+
+    private View buildLoadEarlierCard(final int foldedCount) {
+        Context ctx = getContext();
+        LinearLayout card = new LinearLayout(ctx);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        int bg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F1F5F9");
+        int border = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#CBD5E1");
+        int textCol = AcidTheme.accent(mIsDarkMode);
+        int mutedCol = AcidTheme.muted(mIsDarkMode);
+
+        card.setBackground(AcidTheme.cardBorderBg(ctx, bg, border, 1, 10));
+        int padH = AcidTheme.dp(ctx, 12);
+        int padV = AcidTheme.dp(ctx, 7);
+        card.setPadding(padH, padV, padH, padV);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        lp.topMargin = AcidTheme.dp(ctx, 2);
+        lp.bottomMargin = AcidTheme.dp(ctx, 8);
+        card.setLayoutParams(lp);
+
+        AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_HISTORY, textCol, 15);
+        card.addView(icon);
+
+        mTvLoadEarlierSummary = new TextView(ctx);
+        mTvLoadEarlierSummary.setText("已折叠 " + foldedCount + " 条更早历史记录 · 点击加载更多");
+        mTvLoadEarlierSummary.setTextColor(mutedCol);
+        mTvLoadEarlierSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        mTvLoadEarlierSummary.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tLp.leftMargin = AcidTheme.dp(ctx, 8);
+        card.addView(mTvLoadEarlierSummary, tLp);
+
+        TextView btnAll = new TextView(ctx);
+        btnAll.setText("全部展开");
+        btnAll.setTextColor(AcidTheme.COLOR_BLUE);
+        btnAll.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        int btnPadH = AcidTheme.dp(ctx, 6);
+        int btnPadV = AcidTheme.dp(ctx, 2);
+        btnAll.setPadding(btnPadH, btnPadV, btnPadH, btnPadV);
+        btnAll.setBackground(AcidTheme.pillBg(ctx, Color.argb(24, 2, 132, 199), AcidTheme.COLOR_BLUE, 6));
+        btnAll.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                loadEarlierMessages(true);
+            }
+        });
+        card.addView(btnAll);
+
+        card.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                loadEarlierMessages(false);
+            }
+        });
+
+        mLoadEarlierHeaderCard = card;
+        return card;
+    }
+
+    private void loadEarlierMessages(boolean loadAll) {
+        if (mCurrentRenderedSession == null || mRenderedStartIndex <= 0) return;
+        int nextStart = loadAll ? 0 : Math.max(0, mRenderedStartIndex - LOAD_MORE_BATCH_SIZE);
+        int loadCount = mRenderedStartIndex - nextStart;
+        if (loadCount <= 0) return;
+
+        List<View> viewsToInsert = new ArrayList<View>();
+        for (int i = nextStart; i < mRenderedStartIndex; i++) {
+            AcidSessionStore.UiMessageItem item = mCurrentRenderedSession.uiItems.get(i);
+            viewsToInsert.add(createUiMessageItemView(item));
+        }
+
+        int insertIndex = (mLoadEarlierHeaderCard != null) ? 1 : 0;
+        for (View v : viewsToInsert) {
+            mChatStreamContainer.addView(v, insertIndex++);
+        }
+
+        mRenderedStartIndex = nextStart;
+
+        if (mRenderedStartIndex == 0) {
+            if (mLoadEarlierHeaderCard != null) {
+                mChatStreamContainer.removeView(mLoadEarlierHeaderCard);
+                mLoadEarlierHeaderCard = null;
+                mTvLoadEarlierSummary = null;
+            }
+        } else if (mTvLoadEarlierSummary != null) {
+            mTvLoadEarlierSummary.setText("已折叠 " + mRenderedStartIndex + " 条更早历史记录 · 点击加载更多");
+        }
     }
 
     public void updateToolCard(AcidSessionStore.UiMessageItem item) {
@@ -497,26 +609,30 @@ public class AgentFloatingView extends FrameLayout {
             mChatStreamContainer.removeAllViews();
         }
 
+        mChatStreamContainer.addView(createUiMessageItemView(item));
+
+        if (autoScroll) {
+            scrollChatToBottom();
+        }
+    }
+
+    private View createUiMessageItemView(AcidSessionStore.UiMessageItem item) {
         String type = item.type != null ? item.type : AcidSessionStore.TYPE_ASSISTANT;
         if (AcidSessionStore.TYPE_USER.equals(type)) {
-            mChatStreamContainer.addView(buildUserBubbleView(item));
+            return buildUserBubbleView(item);
         } else if (AcidSessionStore.TYPE_THINKING.equals(type)) {
-            mChatStreamContainer.addView(buildThinkingCardView(item));
+            return buildThinkingCardView(item);
         } else if (AcidSessionStore.TYPE_TOOL.equals(type)) {
             ToolCardHolder holder = new ToolCardHolder(getContext());
             holder.bind(item, mIsDarkMode);
             if (item.toolCallId != null && !item.toolCallId.isEmpty()) {
                 mToolCardHolders.put(item.toolCallId, holder);
             }
-            mChatStreamContainer.addView(holder.rootView);
+            return holder.rootView;
         } else if (AcidSessionStore.TYPE_ERROR.equals(type)) {
-            mChatStreamContainer.addView(buildErrorBubbleView(item));
+            return buildErrorBubbleView(item);
         } else {
-            mChatStreamContainer.addView(buildAssistantMarkdownBubbleView(item));
-        }
-
-        if (autoScroll) {
-            scrollChatToBottom();
+            return buildAssistantMarkdownBubbleView(item);
         }
     }
 
