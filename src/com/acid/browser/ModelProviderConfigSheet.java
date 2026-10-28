@@ -965,7 +965,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         cbReasoning.setChecked(true);
         box.addView(cbReasoning);
 
-        new AlertDialog.Builder(ctx, mIsDarkMode ? AlertDialog.THEME_DEVICE_DEFAULT_DARK : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
+        AcidTheme.dialogBuilder(ctx, mIsDarkMode)
             .setTitle("手动添加模型")
             .setView(box)
             .setPositiveButton("添加", new DialogInterface.OnClickListener() {
@@ -1004,7 +1004,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             checked[i] = (draft.findModel(m.id) != null);
         }
 
-        new AlertDialog.Builder(ctx, mIsDarkMode ? AlertDialog.THEME_DEVICE_DEFAULT_DARK : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT)
+        AcidTheme.dialogBuilder(ctx, mIsDarkMode)
             .setTitle("选择要装载的模型 (共发现 " + discovered.size() + " 个)")
             .setMultiChoiceItems(labels, checked, new DialogInterface.OnMultiChoiceClickListener() {
                 @Override
