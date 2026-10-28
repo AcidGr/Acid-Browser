@@ -463,6 +463,7 @@ public class AcidIcons {
         private int mIconId;
         private int mColor;
         private float mStrokeWidthDp = 1.9f;
+        private int mPreferredPx;
         private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private Path mBasePath;
         private final Path mScaledPath = new Path();
@@ -479,8 +480,20 @@ public class AcidIcons {
             mPaint.setStrokeJoin(Paint.Join.ROUND);
             mPaint.setColor(color);
 
-            int px = Math.round(sizeDp * context.getResources().getDisplayMetrics().density);
-            setLayoutParams(new LinearLayout.LayoutParams(px, px));
+            mPreferredPx = Math.round(sizeDp * context.getResources().getDisplayMetrics().density);
+            setLayoutParams(new LinearLayout.LayoutParams(mPreferredPx, mPreferredPx));
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int wMode = MeasureSpec.getMode(widthMeasureSpec);
+            int wSize = MeasureSpec.getSize(widthMeasureSpec);
+            int hMode = MeasureSpec.getMode(heightMeasureSpec);
+            int hSize = MeasureSpec.getSize(heightMeasureSpec);
+
+            int w = (wMode == MeasureSpec.EXACTLY) ? wSize : mPreferredPx;
+            int h = (hMode == MeasureSpec.EXACTLY) ? hSize : mPreferredPx;
+            setMeasuredDimension(w, h);
         }
 
         public void setIcon(int iconId) {

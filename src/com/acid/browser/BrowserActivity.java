@@ -406,20 +406,24 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         // Agent Trigger Icon Button on Top Bar right (dynamic status color + unread bubble)
         mBtnTopAgent = new FrameLayout(this);
-        int pad = dp(5);
-        mBtnTopAgent.setPadding(pad, pad, pad, pad);
+        int btnW = dp(34);
+        int btnH = dp(34);
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(btnW, btnH);
+        btnLp.gravity = Gravity.CENTER_VERTICAL;
+        btnLp.leftMargin = dp(2);
+        btnLp.rightMargin = dp(2);
+        mBtnTopAgent.setLayoutParams(btnLp);
 
+        int iconSize = dp(19);
         mIconTopAgent = new AcidIcons.SvgIconView(this, AcidIcons.ICON_AGENT, LIGHT_ICON, 19);
-        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER
-        );
+        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER);
         mBtnTopAgent.addView(mIconTopAgent, iconLp);
 
         // Unread notification badge: red circular bubble with white exclamation mark '!'
         mAgentUnreadBadge = new TextView(this);
         mAgentUnreadBadge.setText("!");
         mAgentUnreadBadge.setTextColor(Color.WHITE);
-        mAgentUnreadBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        mAgentUnreadBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8f);
         mAgentUnreadBadge.setTypeface(Typeface.DEFAULT_BOLD);
         mAgentUnreadBadge.setGravity(Gravity.CENTER);
         int badgeSize = dp(13);
