@@ -322,6 +322,17 @@
         return cleanText(primary, 90);
     }
 
+    function extractBadge(el) {
+        try {
+            const badgeEl = el.querySelector && el.querySelector('.badge, .count, .unread, [class*="badge"], [class*="count"], [aria-label*="未读"], [aria-label*="条"]');
+            if (badgeEl) {
+                const t = cleanText(badgeEl.innerText || badgeEl.textContent, 15);
+                if (t && t.length <= 10 && t !== extractElementLabel(el)) return t;
+            }
+        } catch (e) {}
+        return undefined;
+    }
+
     // 6. Set-of-Marks (SoM) Overlay Renderer
     function clearSomOverlay() {
         const existing = document.getElementById(SOM_OVERLAY_ID);
@@ -448,15 +459,21 @@
                             };
                             const inputType = tag === 'input' ? (el.type || 'text').toLowerCase() : undefined;
                             const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
+                            const readonly = !!el.readOnly || el.getAttribute('aria-readonly') === 'true';
                             const checked = (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) ? !!el.checked : undefined;
                             const ariaExp = el.getAttribute('aria-expanded');
                             const ariaSel = el.getAttribute('aria-selected');
                             const expanded = ariaExp !== null ? ariaExp === 'true' : undefined;
                             const selected = ariaSel !== null ? ariaSel === 'true' : undefined;
+                            const badge = extractBadge(el);
 
                             let val = undefined;
                             if (tag === 'input' || tag === 'textarea' || tag === 'select') {
                                 val = isSensitiveInput(el) ? '***' : cleanText(el.value, 60);
+                            } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+                                val = cleanText(el.innerText || el.textContent, 60);
+                            } else if (el.hasAttribute('aria-valuenow')) {
+                                val = el.getAttribute('aria-valuenow');
                             }
 
                             let href = undefined;
@@ -492,9 +509,11 @@
                                 type: inputType,
                                 label: label,
                                 value: val,
+                                badge: badge,
                                 href: href,
                                 options: optionsList,
                                 disabled: disabled,
+                                readonly: readonly ? true : undefined,
                                 checked: checked,
                                 expanded: expanded,
                                 selected: selected,
@@ -543,6 +562,20 @@
             walk(document.body);
         }
 
+        // Expose self-healing window.__refs for direct access via eval
+        try {
+            window.__refs = new Proxy(refMap, {
+                get: function(target, prop) {
+                    if (typeof prop !== 'string') return target[prop];
+                    const el = target[prop];
+                    if (el && el.isConnected) return el;
+                    const res = resolveTargetElement({ ref: prop });
+                    return res.ok ? res.el : undefined;
+                }
+            });
+            window.__refMeta = refMetaMap;
+        } catch (e) {}
+
         // Clear overlay before extracting body text so SoM badge numbers are not included in page excerpt
         clearSomOverlay();
         const bodyText = cleanText(document.body ? document.body.innerText : '', 1200);
@@ -578,13 +611,16 @@
             if (it.type) desc += '(' + it.type + ')';
             else if (it.role && it.role !== it.tag) desc += '(' + it.role + ')';
             if (it.label) desc += ' "' + it.label + '"';
+            if (it.badge) desc += ' badge="' + it.badge + '"';
             if (it.value !== undefined && it.value !== '') desc += ' value="' + it.value + '"';
             if (it.checked !== undefined) desc += ' checked=' + it.checked;
             if (it.expanded !== undefined) desc += ' expanded=' + it.expanded;
             if (it.selected !== undefined) desc += ' selected=' + it.selected;
             if (it.disabled) desc += ' [disabled]';
+            if (it.readonly) desc += ' [readonly]';
             if (it.href) desc += ' -> ' + it.href;
             if (it.options && it.options.length > 0) desc += ' options=[' + it.options.join(', ') + ']';
+            if (!it.inViewport) desc += ' [offscreen]';
             if (options.includeCoords || showSom) {
                 desc += ' @(' + it.box.x + ',' + it.box.y + ',' + it.box.width + 'x' + it.box.height + ')';
             }
@@ -795,6 +831,11 @@
         const offsetTop = vv ? vv.offsetTop : 0;
         const label = extractElementLabel(el);
 
+        const hitEl = document.elementFromPoint(cssX, cssY);
+        const occluded = !!(hitEl && hitEl !== el && !el.contains(hitEl) && !hitEl.contains(el));
+        const activeTagBefore = document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '';
+        const activeIdBefore = document.activeElement ? (document.activeElement.id || '') : '';
+
         return {
             ok: true,
             ref: ref,
@@ -807,11 +848,16 @@
             vvOffsetTop: offsetTop,
             dpr: window.devicePixelRatio || 1,
             revisionBefore: documentRevision,
+            urlBefore: location.href,
+            activeTagBefore: activeTagBefore,
+            activeIdBefore: activeIdBefore,
+            occluded: occluded,
             re_resolved: resolved.re_resolved,
             matchedBy: resolved.matchedBy,
             hit: {
                 tag: el.tagName || '',
                 text: cleanText(label, 60),
+                occluded: occluded,
                 rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)]
             }
         };
@@ -826,6 +872,9 @@
         const el = resolved.el;
         const ref = resolved.ref || 'target';
         const revBefore = documentRevision;
+        const urlBefore = location.href;
+        const activeBefore = (document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '') +
+            '#' + (document.activeElement ? (document.activeElement.id || '') : '');
         try {
             el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
         } catch (e) {}
@@ -848,18 +897,37 @@
             setTimeout(() => observe({ includeSom: true }), 120);
         }
 
+        const revAfter = documentRevision;
+        const urlAfter = location.href;
+        const activeAfter = (document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '') +
+            '#' + (document.activeElement ? (document.activeElement.id || '') : '');
+        const domChanged = revAfter > revBefore;
+        const urlChanged = urlBefore !== urlAfter;
+        const focusChanged = activeBefore !== activeAfter;
+        const effectChanged = domChanged || urlChanged || focusChanged;
+
         return {
             ok: true,
             ref: ref,
+            label: extractElementLabel(el),
             strategy: 'DOM_SYNTHETIC',
+            verified: effectChanged,
             revisionBefore: revBefore,
-            revisionAfter: documentRevision,
+            revisionAfter: revAfter,
             re_resolved: resolved.re_resolved,
             matchedBy: resolved.matchedBy,
             hit: {
+                ok: true,
                 tag: el.tagName || '',
                 text: cleanText(extractElementLabel(el), 60),
-                rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)]
+                occluded: false,
+                strategy: 'DOM_SYNTHETIC'
+            },
+            effect: {
+                changed: effectChanged,
+                dom_mutations: Math.max(0, revAfter - revBefore),
+                url_changed: urlChanged,
+                focus_changed: focusChanged
             }
         };
     }
@@ -1063,6 +1131,8 @@
             title: document.title || '',
             revision: documentRevision,
             msSinceLastMutation: Date.now() - lastMutationTime,
+            activeTag: document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '',
+            activeId: document.activeElement ? (document.activeElement.id || '') : '',
             somEnabled: somEnabled,
             desktopSpoofEnabled: desktopSpoofEnabled
         };
