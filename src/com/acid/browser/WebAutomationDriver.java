@@ -208,17 +208,8 @@ public class WebAutomationDriver {
         return "(function(){\n" +
             "var __acidCid=" + JSONObject.quote(callId) + ";\n" +
             "var __acidHost=window.__acidNativeHost;\n" +
-            EVAL_SERIALIZER_JS +
-            "function __acidSend(p){\n" +
-            "  if (__acidHost && __acidHost.resolve) { try { __acidHost.resolve(__acidCid, p); return; } catch(e){} }\n" +
-            "  (window.__acidEvalResults = window.__acidEvalResults || {})[__acidCid] = p;\n" +
-            "}\n" +
-            "function __acidErr(e){\n" +
-            "  var o={ok:false, error_code:'JS_EXCEPTION', error:String(e&&e.message||e), mode:" + JSONObject.quote(mode) + "};\n" +
-            "  if (e && e.name) o.name=e.name;\n" +
-            "  if (e && e.stack) o.stack=String(e.stack).split('\\n').slice(0,4).join('\\n');\n" +
-            "  return JSON.stringify(o);\n" +
-            "}\n" +
+            "var __acidPartial=undefined;\n" +
+            "window.__partial=function(v){ __acidPartial=v; return v; };\n" +
             "try {\n" +
             "  (async function(){\n" + body + "\n})().then(\n" +
             "    function(v){ var p; try { p=__acidSer(v," + JSONObject.quote(mode) + "); } catch(e){ p=__acidErr(e); } __acidSend(p); },\n" +
@@ -226,6 +217,27 @@ public class WebAutomationDriver {
             "} catch(e) { __acidSend(__acidErr(e)); }\n" +
             "return (__acidHost && __acidHost.resolve) ? " + JSONObject.quote(EVAL_PARSED_MARKER) + " : " +
             JSONObject.quote(EVAL_PARSED_NOHOST_MARKER) + ";\n" +
+            "function __acidSend(p){\n" +
+            "  if (__acidHost && __acidHost.resolve) { try { __acidHost.resolve(__acidCid, p); return; } catch(e){} }\n" +
+            "  (window.__acidEvalResults = window.__acidEvalResults || {})[__acidCid] = p;\n" +
+            "}\n" +
+            "function __acidErr(e){\n" +
+            "  var stack = String(e && e.stack || '');\n" +
+            "  var m = stack.match(/<anonymous>:(\\d+):(\\d+)/);\n" +
+            "  var line = m ? Math.max(1, parseInt(m[1], 10) - 7) : undefined;\n" +
+            "  var o={ok:false, error_code:'JS_EXCEPTION', error:String(e&&e.message||e), mode:" + JSONObject.quote(mode) + "};\n" +
+            "  if (line !== undefined) {\n" +
+            "    o.error_line = line;\n" +
+            "    o.error = (e && e.name ? e.name + ': ' : '') + String(e && e.message || e) + ' (line ' + line + ')';\n" +
+            "  }\n" +
+            "  if (typeof __acidPartial !== 'undefined') {\n" +
+            "    try { o.partial_result = JSON.parse(__acidSer(__acidPartial, 'partial')).result; } catch(ex){}\n" +
+            "  }\n" +
+            "  if (e && e.name) o.name=e.name;\n" +
+            "  if (e && e.stack) o.stack=stack.split('\\n').slice(0,4).join('\\n');\n" +
+            "  return JSON.stringify(o);\n" +
+            "}\n" +
+            EVAL_SERIALIZER_JS +
             "})()";
     }
 
@@ -385,31 +397,116 @@ public class WebAutomationDriver {
         return err;
     }
 
+    public void ensureBridgeInjectedSync() {
+        try {
+            String check = evaluateJsSync("(function(){ return (window.__acidBridge && window.__acidBridge.__initialized) ? 'ok' : 'missing'; })()", 800);
+            if (!"ok".equals(check)) {
+                UserscriptManager um = mHost.getUserscriptManager();
+                if (um != null) {
+                    final String bridgeJs = um.getBridgeJs();
+                    if (bridgeJs != null && !bridgeJs.isEmpty()) {
+                        final CountDownLatch latch = new CountDownLatch(1);
+                        mMainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                BrowserController.TabSession tab = mHost.getActiveTab();
+                                if (tab != null && tab.webView != null) {
+                                    tab.webView.evaluateJavascript(bridgeJs, null);
+                                }
+                                latch.countDown();
+                            }
+                        });
+                        latch.await(1000, TimeUnit.MILLISECONDS);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private JSONObject buildDegradedObservation() {
+        String degradedJs = "(function(){\n" +
+            "try {\n" +
+            "  var refs = window.__refs || {};\n" +
+            "  var nodes = document.querySelectorAll('a, button, input, select, textarea, [role=button], [role=link]');\n" +
+            "  var items = [];\n" +
+            "  var lines = [];\n" +
+            "  lines.push('Notice: [DEGRADED_JS_CHANNEL] Full agent_bridge unavailable on this page; auto-downgraded to inline JS channel. Element refs [e1..eN] and window.__refs remain usable.');\n" +
+            "  lines.push('Page: ' + (document.title || ''));\n" +
+            "  lines.push('URL: ' + location.href);\n" +
+            "  lines.push('Interactive Elements (' + Math.min(nodes.length, 60) + '):');\n" +
+            "  var count = 0;\n" +
+            "  for (var i = 0; i < nodes.length && count < 60; i++) {\n" +
+            "    var el = nodes[i];\n" +
+            "    var tag = el.tagName.toLowerCase();\n" +
+            "    var rect = el.getBoundingClientRect();\n" +
+            "    if (rect.width < 4 || rect.height < 4) continue;\n" +
+            "    count++;\n" +
+            "    var ref = 'e' + count;\n" +
+            "    refs[ref] = el;\n" +
+            "    var label = (el.innerText || el.getAttribute('aria-label') || el.name || el.value || '').replace(/\\s+/g, ' ').trim().substring(0, 60);\n" +
+            "    var desc = '  [' + ref + '] ' + tag + (label ? ' \"' + label + '\"' : '');\n" +
+            "    if (tag === 'a' && el.href) desc += ' -> ' + el.getAttribute('href');\n" +
+            "    lines.push(desc);\n" +
+            "    items.push({ ref: ref, tag: tag, label: label, inViewport: true });\n" +
+            "  }\n" +
+            "  window.__refs = refs;\n" +
+            "  return JSON.stringify({\n" +
+            "    ok: true,\n" +
+            "    degraded: true,\n" +
+            "    warning: 'Full agent_bridge unavailable; downgraded to basic JS extraction.',\n" +
+            "    url: location.href,\n" +
+            "    title: document.title || '',\n" +
+            "    elementCount: items.length,\n" +
+            "    elements: items,\n" +
+            "    compactText: lines.join('\\n')\n" +
+            "  });\n" +
+            "} catch(e) { return null; }\n" +
+            "})()";
+        String raw = evaluateJsSync(degradedJs, 2500);
+        if (raw != null && raw.startsWith("{")) {
+            try {
+                return new JSONObject(raw);
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
     public JSONObject observeSync(boolean includeSom, boolean viewportOnly, boolean includeScreenshot) {
+        ensureBridgeInjectedSync();
         try {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.observe({includeSom:" +
                 includeSom + ", viewportOnly:" + viewportOnly + "})); })()";
             String raw = evaluateJsSync(expr, 6000);
-            if (raw == null || raw.trim().isEmpty() || "null".equals(raw)) {
-                return buildFallbackObservation("SNAPSHOT_EMPTY_RESULT", "页面未返回有效观察数据，可能正在加载");
-            }
-            JSONObject obj = new JSONObject(raw);
-            AgentOverlayView overlay = mHost.getOverlayView();
-            int cMode = overlay != null ? overlay.getControlMode() : AgentOverlayView.MODE_HUMAN;
-            obj.put("controlMode", cMode == AgentOverlayView.MODE_AGENT ? "agent" : "human");
-            obj.put("blockedDeepLinks", mHost.getBlockedDeepLinksCount());
-            String lastBlocked = mHost.getLastBlockedDeepLink();
-            if (lastBlocked != null && !lastBlocked.isEmpty()) {
-                obj.put("lastBlockedDeepLink", lastBlocked);
-            }
-            if (includeScreenshot) {
-                String b64 = captureScreenshotBase64Sync(75);
-                if (b64 != null) {
-                    obj.put("screenshotBase64", b64);
+            if (raw != null && !raw.trim().isEmpty() && !"null".equals(raw)) {
+                JSONObject obj = new JSONObject(raw);
+                if (obj.optBoolean("ok", false)) {
+                    AgentOverlayView overlay = mHost.getOverlayView();
+                    int cMode = overlay != null ? overlay.getControlMode() : AgentOverlayView.MODE_HUMAN;
+                    obj.put("controlMode", cMode == AgentOverlayView.MODE_AGENT ? "agent" : "human");
+                    obj.put("blockedDeepLinks", mHost.getBlockedDeepLinksCount());
+                    String lastBlocked = mHost.getLastBlockedDeepLink();
+                    if (lastBlocked != null && !lastBlocked.isEmpty()) {
+                        obj.put("lastBlockedDeepLink", lastBlocked);
+                    }
+                    if (includeScreenshot) {
+                        String b64 = captureScreenshotBase64Sync(75);
+                        if (b64 != null) {
+                            obj.put("screenshotBase64", b64);
+                        }
+                    }
+                    return obj;
                 }
             }
-            return obj;
+            JSONObject degraded = buildDegradedObservation();
+            if (degraded != null) {
+                return degraded;
+            }
+            return buildFallbackObservation("SNAPSHOT_EMPTY_RESULT", "页面未返回有效观察数据，可能正在加载");
         } catch (Exception e) {
+            JSONObject degraded = buildDegradedObservation();
+            if (degraded != null) {
+                return degraded;
+            }
             return buildFallbackObservation("SNAPSHOT_PARSE_ERROR", "快照解析失败: " + e.getMessage());
         }
     }
@@ -421,6 +518,7 @@ public class WebAutomationDriver {
      * ok == satisfied; a timeout is ok:false + timed_out:true + error_code WAIT_TIMEOUT.
      */
     public JSONObject waitConditionSync(String condition, String target, long quietMs, long timeoutMs) {
+        ensureBridgeInjectedSync();
         long effectiveQuietMs = Math.max(50, quietMs > 0 ? quietMs : 300);
         long effectiveTimeout = Math.max(effectiveQuietMs, Math.min(30000, timeoutMs > 0 ? timeoutMs : 5000));
         long startTime = SystemClock.uptimeMillis();
@@ -604,6 +702,7 @@ public class WebAutomationDriver {
     }
 
     public JSONObject clickTargetSync(final JSONObject targetOpts, final boolean useNativeMotionEvent) {
+        ensureBridgeInjectedSync();
         try {
             String prepExpr = "(function(){ return JSON.stringify(window.__acidBridge.prepareClick(" +
                 (targetOpts != null ? targetOpts.toString() : "{}") + ")); })()";
@@ -618,9 +717,12 @@ public class WebAutomationDriver {
             final String targetRef = prep.optString("ref", "target");
             final String label = prep.optString("label", "");
             final int revBefore = prep.optInt("revisionBefore", 0);
+            final String urlBefore = prep.optString("urlBefore", "");
+            final String activeBefore = prep.optString("activeTagBefore", "") + "#" + prep.optString("activeIdBefore", "");
+            final boolean occluded = prep.optBoolean("occluded", false);
             final boolean reResolved = prep.optBoolean("re_resolved", false);
             final String matchedBy = prep.optString("matchedBy", "ref");
-            final JSONObject hit = prep.optJSONObject("hit");
+            final JSONObject hit = prep.optJSONObject("hit") != null ? prep.optJSONObject("hit") : new JSONObject();
 
             if (useNativeMotionEvent) {
                 final CountDownLatch tapLatch = new CountDownLatch(1);
@@ -659,37 +761,67 @@ public class WebAutomationDriver {
                 String stateRaw = evaluateJsSync("(function(){ return JSON.stringify(window.__acidBridge.getState()); })()", 2000);
                 JSONObject stateAfter = new JSONObject(stateRaw);
                 int revAfter = stateAfter.optInt("revision", revBefore);
-                boolean verified = (revAfter > revBefore);
+                String urlAfter = stateAfter.optString("url", urlBefore);
+                String activeAfter = stateAfter.optString("activeTag", "") + "#" + stateAfter.optString("activeId", "");
 
-                if (!verified) {
+                boolean domChanged = (revAfter > revBefore);
+                boolean urlChanged = !urlBefore.isEmpty() && !urlBefore.equals(urlAfter);
+                boolean focusChanged = !activeBefore.equals(activeAfter);
+                boolean effectChanged = domChanged || urlChanged || focusChanged;
+                String strategy = "ANDROID_NATIVE_MOTION_EVENT";
+
+                if (!effectChanged && !occluded) {
                     String fallbackRaw = evaluateJsSync(
                         "(function(){ return JSON.stringify(window.__acidBridge.jsClick(" +
                         (targetOpts != null ? targetOpts.toString() : "{}") + ")); })()",
                         2000
                     );
-                    JSONObject fb = new JSONObject(fallbackRaw);
-                    revAfter = fb.optInt("revisionAfter", revAfter);
-                    verified = true;
+                    try {
+                        JSONObject fb = new JSONObject(fallbackRaw);
+                        JSONObject fbEffect = fb.optJSONObject("effect");
+                        if (fbEffect != null) {
+                            effectChanged = fbEffect.optBoolean("changed", false);
+                            revAfter = fb.optInt("revisionAfter", revAfter);
+                            domChanged = fbEffect.optInt("dom_mutations", 0) > 0;
+                            urlChanged = fbEffect.optBoolean("url_changed", urlChanged);
+                            focusChanged = fbEffect.optBoolean("focus_changed", focusChanged);
+                        }
+                        strategy = "DOM_SYNTHETIC_FALLBACK";
+                    } catch (Exception ignored) {}
                 }
 
                 mHost.emitLog("[CLICK] [" + targetRef + "] \"" + label + "\" @(" +
                     Math.round(viewXRef.get()) + "," + Math.round(viewYRef.get()) + ")" +
                     (reResolved ? " (re-resolved via " + matchedBy + ")" : ""));
 
+                JSONObject effect = new JSONObject();
+                effect.put("changed", effectChanged);
+                effect.put("dom_mutations", Math.max(0, revAfter - revBefore));
+                effect.put("url_changed", urlChanged);
+                effect.put("focus_changed", focusChanged);
+
+                hit.put("strategy", strategy);
+                hit.put("ref", targetRef);
+                hit.put("occluded", occluded);
+                hit.put("ok", true);
+
+                boolean verified = effectChanged && !occluded;
+
                 JSONObject receipt = new JSONObject();
                 receipt.put("ok", true);
                 receipt.put("ref", targetRef);
                 receipt.put("label", label);
-                receipt.put("strategy", "ANDROID_NATIVE_MOTION_EVENT");
-                receipt.put("viewX", Math.round(viewXRef.get()));
-                receipt.put("viewY", Math.round(viewYRef.get()));
-                receipt.put("revisionBefore", revBefore);
-                receipt.put("revisionAfter", revAfter);
                 receipt.put("verified", verified);
                 receipt.put("re_resolved", reResolved);
                 receipt.put("matchedBy", matchedBy);
-                if (hit != null) {
-                    receipt.put("hit", hit);
+                receipt.put("hit", hit);
+                receipt.put("effect", effect);
+                if (!verified) {
+                    if (occluded) {
+                        receipt.put("hint", "目标元素中心点被上层其他浮层或弹窗遮挡 (occluded=true)，请先关闭遮挡层");
+                    } else {
+                        receipt.put("hint", "点击已派发，但页面未检测到DOM变动、URL变化或焦点切换 (effect.changed=false)，可能该元素无动作绑定或处于禁用状态");
+                    }
                 }
                 return receipt;
             } else {
@@ -761,6 +893,7 @@ public class WebAutomationDriver {
     }
 
     public JSONObject fillSync(JSONObject targetOpts, String text, boolean clear, boolean submit) {
+        ensureBridgeInjectedSync();
         try {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.fill(" +
                 (targetOpts != null ? targetOpts.toString() : "{}") + "," +

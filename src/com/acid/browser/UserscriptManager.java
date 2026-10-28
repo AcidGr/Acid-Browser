@@ -60,47 +60,36 @@ public class UserscriptManager {
         }
     }
 
+    public String getBridgeJs() {
+        return mBridgeJs;
+    }
+
     public void injectRuntimeAndUserscripts(WebView wv) {
         if (wv == null) return;
         try {
-            // 1. Inject Agent Bridge core runtime
+            // 1. Inject Agent Bridge core runtime directly via privileged evaluateJavascript
+            // (100% immune to page Content-Security-Policy script-src and TrustedHTML restrictions)
             if (!mBridgeJs.isEmpty()) {
-                String encodedBridge = Base64.encodeToString(mBridgeJs.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-                String injectBridge = "javascript:(function(){" +
-                    "if(!window.__acidBridgeInjected){" +
-                    "window.__acidBridgeInjected=true;" +
-                    "var s=document.createElement('script');" +
-                    "s.type='text/javascript';" +
-                    "s.setAttribute('data-acid-internal','true');" +
-                    "s.innerHTML=decodeURIComponent(escape(window.atob('" + encodedBridge + "')));" +
-                    "(document.head||document.documentElement).appendChild(s);" +
-                    "}" +
-                    "})()";
-                wv.evaluateJavascript(injectBridge, null);
+                wv.evaluateJavascript(mBridgeJs, null);
             }
 
-            // 2. Inject userscript plugins
+            // 2. Inject userscript plugins directly via IIFE wrappers (no DOM script elements)
             File[] files = mUserscriptsDir.listFiles();
             if (files != null) {
                 for (File f : files) {
                     if (f.isFile() && f.getName().endsWith(".js")) {
                         String code = readFileText(f);
                         if (!code.isEmpty()) {
-                            String encodedCode = Base64.encodeToString(code.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-                            String safeName = f.getName().replace("'", "\\'");
-                            String injectPlugin = "javascript:(function(){" +
-                                "try{" +
-                                "if(!window.__acidInjectedUserscripts)window.__acidInjectedUserscripts={};" +
-                                "if(!window.__acidInjectedUserscripts['" + safeName + "']){" +
-                                "window.__acidInjectedUserscripts['" + safeName + "']=true;" +
-                                "var s=document.createElement('script');" +
-                                "s.type='text/javascript';" +
-                                "s.setAttribute('data-acid-internal','true');" +
-                                "s.innerHTML=decodeURIComponent(escape(window.atob('" + encodedCode + "')));" +
-                                "(document.head||document.documentElement).appendChild(s);" +
-                                "}" +
-                                "}catch(e){console.error('[AcidUserscriptError]',e);}" +
-                                "})()";
+                            String safeName = f.getName();
+                            String injectPlugin = "(function(){\n" +
+                                "try {\n" +
+                                "  window.__acidInjectedUserscripts = window.__acidInjectedUserscripts || {};\n" +
+                                "  if (!window.__acidInjectedUserscripts[" + JSONObject.quote(safeName) + "]) {\n" +
+                                "    window.__acidInjectedUserscripts[" + JSONObject.quote(safeName) + "] = true;\n" +
+                                code + "\n" +
+                                "  }\n" +
+                                "} catch(e) { console.error('[AcidUserscriptError]', e); }\n" +
+                                "})();";
                             wv.evaluateJavascript(injectPlugin, null);
                         }
                     }
