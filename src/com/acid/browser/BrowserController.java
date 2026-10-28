@@ -596,7 +596,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if ("acid://home".equalsIgnoreCase(trimmed) || "about:home".equalsIgnoreCase(trimmed)) {
             return HOME_URL;
         }
-        if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("file://") || trimmed.startsWith("javascript:")) {
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("file://") || trimmed.startsWith("javascript:") || trimmed.startsWith("data:")) {
             return trimmed;
         }
         if (trimmed.contains(" ") || !trimmed.contains(".")) {

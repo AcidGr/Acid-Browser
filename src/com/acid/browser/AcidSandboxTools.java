@@ -152,6 +152,29 @@ public class AcidSandboxTools {
         return tools;
     }
 
+    /**
+     * Builds the standard MCP (Model Context Protocol) tools array.
+     * Each tool has {name, description, inputSchema}.
+     */
+    public static JSONArray buildMcpToolsList() {
+        JSONArray openaiTools = buildToolsSchema();
+        JSONArray mcpTools = new JSONArray();
+        for (int i = 0; i < openaiTools.length(); i++) {
+            JSONObject t = openaiTools.optJSONObject(i);
+            if (t == null) continue;
+            JSONObject fn = t.optJSONObject("function");
+            if (fn == null) continue;
+            try {
+                JSONObject mcpTool = new JSONObject();
+                mcpTool.put("name", fn.optString("name"));
+                mcpTool.put("description", fn.optString("description"));
+                mcpTool.put("inputSchema", fn.optJSONObject("parameters"));
+                mcpTools.put(mcpTool);
+            } catch (Exception ignored) {}
+        }
+        return mcpTools;
+    }
+
     private static JSONObject prop(String type, String description) throws Exception {
         JSONObject o = new JSONObject();
         o.put("type", type);
