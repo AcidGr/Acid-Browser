@@ -1,14 +1,18 @@
 package com.acid.browser;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
+
+import org.json.JSONObject;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
@@ -859,14 +863,47 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         tvName.setPadding(0, dp(8), 0, dp(2));
         hero.addView(tvName);
 
+        // Version Row with Version badge and [检查更新] button
+        LinearLayout versionRow = new LinearLayout(this);
+        versionRow.setOrientation(LinearLayout.HORIZONTAL);
+        versionRow.setGravity(Gravity.CENTER_VERTICAL);
+        versionRow.setPadding(0, dp(4), 0, 0);
+
+        String curVer = "v0.2.0";
+        try {
+            android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            curVer = "v" + pi.versionName;
+        } catch (Exception ignored) {}
+
         TextView tvVersion = new TextView(this);
-        tvVersion.setText("版本: v0.2.0");
+        tvVersion.setText("版本: " + curVer);
         tvVersion.setTextColor(accent);
         tvVersion.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvVersion.setTypeface(Typeface.DEFAULT_BOLD);
-        tvVersion.setPadding(dp(8), dp(2), dp(8), dp(2));
+        tvVersion.setPadding(dp(8), dp(3), dp(8), dp(3));
         tvVersion.setBackground(AcidTheme.pillBg(this, Color.argb(26, Color.red(accent), Color.green(accent), Color.blue(accent)), 0, 6));
-        hero.addView(tvVersion);
+        versionRow.addView(tvVersion);
+
+        final TextView btnCheckUpdate = new TextView(this);
+        btnCheckUpdate.setText("检查更新");
+        btnCheckUpdate.setTextColor(AcidTheme.COLOR_BLUE);
+        btnCheckUpdate.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        btnCheckUpdate.setTypeface(Typeface.DEFAULT_BOLD);
+        btnCheckUpdate.setBackground(AcidTheme.pillBg(this, cardBg, AcidTheme.searchBorder(mIsDarkMode), 6));
+        btnCheckUpdate.setPadding(dp(8), dp(3), dp(8), dp(3));
+        LinearLayout.LayoutParams cuLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cuLp.leftMargin = dp(8);
+        btnCheckUpdate.setLayoutParams(cuLp);
+        btnCheckUpdate.setClickable(true);
+        btnCheckUpdate.setFocusable(true);
+        btnCheckUpdate.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                checkAppUpdate(btnCheckUpdate);
+            }
+        });
+        versionRow.addView(btnCheckUpdate);
+        hero.addView(versionRow);
 
         container.addView(hero);
 
@@ -943,6 +980,155 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         container.addView(descCard);
 
         mAboutSheet.show();
+    }
+
+    private void checkAppUpdate(final TextView triggerBtn) {
+        if (triggerBtn != null) {
+            triggerBtn.setText("正在检查...");
+            triggerBtn.setEnabled(false);
+        }
+        Toast.makeText(this, "正在向服务器发送更新探针...", Toast.LENGTH_SHORT).show();
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String[] candidateEndpoints = new String[]{
+                    "https://api.github.com/repos/AcidGr/Acid-Browser/releases/latest",
+                    "https://api.github.com/repos/AcidGr/Acid-Browser/releases/latest"
+                };
+
+                String jsonStr = null;
+                String activeHost = null;
+
+                for (String endpoint : candidateEndpoints) {
+                    try {
+                        java.net.URL u = new java.net.URL(endpoint);
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
+                        conn.setConnectTimeout(3000);
+                        conn.setReadTimeout(3000);
+                        conn.setRequestMethod("GET");
+                        if (conn.getResponseCode() == 200) {
+                            java.io.InputStream in = conn.getInputStream();
+                            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                            byte[] buf = new byte[1024];
+                            int len;
+                            while ((len = in.read(buf)) != -1) {
+                                bos.write(buf, 0, len);
+                            }
+                            in.close();
+                            jsonStr = new String(bos.toByteArray(), "UTF-8");
+                            activeHost = endpoint.contains("github.com") ? "github.com" : "github.com";
+                            break;
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                final String resultJson = jsonStr;
+                final String matchedHost = activeHost;
+
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (triggerBtn != null) {
+                            triggerBtn.setText("检查更新");
+                            triggerBtn.setEnabled(true);
+                        }
+
+                        if (resultJson == null) {
+                            Toast.makeText(BrowserActivity.this, "连接华为云服务器失败\n请确认安全组 8888 端口或 Tailscale 状态", Toast.LENGTH_LONG).show();
+                            return;
+                        }
+
+                        try {
+                            JSONObject obj = new JSONObject(resultJson);
+                            int remoteCode = obj.optInt("versionCode", 0);
+                            String remoteName = obj.optString("versionName", "");
+                            String downloadUrl = obj.optString("downloadUrl", "");
+                            String apkSize = obj.optString("apkSize", "");
+                            String changelog = obj.optString("changelog", "");
+
+                            if (matchedHost != null && !downloadUrl.contains(matchedHost)) {
+                                downloadUrl = downloadUrl.replace("github.com", matchedHost).replace("github.com", matchedHost);
+                            }
+
+                            int currentCode = 0;
+                            String currentName = "0.2.0";
+                            try {
+                                android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+                                currentCode = pi.versionCode;
+                                currentName = pi.versionName;
+                            } catch (Exception ignored) {}
+
+                            if (remoteCode > currentCode) {
+                                showUpdateDialog(remoteName, remoteCode, apkSize, changelog, downloadUrl);
+                            } else {
+                                Toast.makeText(BrowserActivity.this, "当前已是最新版本 (v" + currentName + ")", Toast.LENGTH_SHORT).show();
+                            }
+                        } catch (Exception e) {
+                            Toast.makeText(BrowserActivity.this, "解析更新信息异常: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void showUpdateDialog(
+        final String remoteName,
+        final int remoteCode,
+        final String apkSize,
+        final String changelog,
+        final String downloadUrl
+    ) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("发现新版本 v" + remoteName);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(20);
+        content.setPadding(pad, dp(12), pad, dp(4));
+
+        TextView tvSize = new TextView(this);
+        tvSize.setText("安装包大小: " + (apkSize.isEmpty() ? "未知" : apkSize));
+        tvSize.setTextColor(AcidTheme.text(mIsDarkMode));
+        tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        tvSize.setTypeface(Typeface.DEFAULT_BOLD);
+        content.addView(tvSize);
+
+        TextView tvLogTitle = new TextView(this);
+        tvLogTitle.setText("更新日志:");
+        tvLogTitle.setTextColor(AcidTheme.accent(mIsDarkMode));
+        tvLogTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tvLogTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvLogTitle.setPadding(0, dp(10), 0, dp(4));
+        content.addView(tvLogTitle);
+
+        TextView tvLog = new TextView(this);
+        tvLog.setText(changelog.isEmpty() ? "修复已知问题，提升性能" : changelog);
+        tvLog.setTextColor(AcidTheme.muted(mIsDarkMode));
+        tvLog.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        tvLog.setLineSpacing(dp(3), 1f);
+        content.addView(tvLog);
+
+        builder.setView(content);
+
+        builder.setPositiveButton("立即更新", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                if (mController != null) {
+                    mController.startDownload(
+                        downloadUrl,
+                        "Acid-browser-v" + remoteName + ".apk",
+                        null,
+                        null,
+                        "application/vnd.android.package-archive",
+                        0
+                    );
+                }
+            }
+        });
+        builder.setNegativeButton("稍后再说", null);
+        builder.show();
     }
 
     private void showDownloadConfirmDialog(
