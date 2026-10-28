@@ -988,24 +988,47 @@
         };
     }
 
-    let lastCheckedRev = -1;
-    let lastCheckedRevTime = 0;
+    let waitBaselineStartTime = 0;
 
-    function checkCondition(cond, target, quietMs) {
+    function checkCondition(cond, target, quietMs, isFirst) {
         cond = (cond || '').toLowerCase();
         const now = Date.now();
+        const effectiveQuietMs = Math.max(50, typeof quietMs === 'number' ? quietMs : 300);
+
+        if (isFirst || !waitBaselineStartTime) {
+            waitBaselineStartTime = now;
+        }
+
+        const elapsedSinceStart = now - waitBaselineStartTime;
+        const elapsedSinceMutation = now - lastMutationTime;
+
+        if (cond === 'stable') {
+            const windowElapsedSatisfied = elapsedSinceStart >= effectiveQuietMs;
+            const quietSatisfied = elapsedSinceMutation >= effectiveQuietMs;
+            const satisfied = windowElapsedSatisfied && quietSatisfied;
+
+            return {
+                ok: true,
+                satisfied: satisfied,
+                msSinceMutation: elapsedSinceMutation,
+                windowElapsed: elapsedSinceStart,
+                quietMs: effectiveQuietMs,
+                revision: documentRevision
+            };
+        }
+
         if (cond === 'networkidle' || cond === 'load' || cond === 'complete') {
             const ready = document.readyState === 'complete';
-            const quiet = (now - lastMutationTime) >= (quietMs || 250);
-            return { ok: true, satisfied: ready && quiet, readyState: document.readyState };
-        }
-        if (cond === 'stable') {
-            const quiet = (now - lastMutationTime) >= (quietMs || 250);
-            const revisionUnchanged = (lastCheckedRev === documentRevision && (now - lastCheckedRevTime) >= 150);
-            lastCheckedRev = documentRevision;
-            lastCheckedRevTime = now;
-            const satisfied = quiet || revisionUnchanged;
-            return { ok: true, satisfied: satisfied, msSinceMutation: now - lastMutationTime, revision: documentRevision };
+            const windowElapsedSatisfied = elapsedSinceStart >= effectiveQuietMs;
+            const quietSatisfied = elapsedSinceMutation >= effectiveQuietMs;
+            return {
+                ok: true,
+                satisfied: ready && windowElapsedSatisfied && quietSatisfied,
+                readyState: document.readyState,
+                msSinceMutation: elapsedSinceMutation,
+                windowElapsed: elapsedSinceStart,
+                quietMs: effectiveQuietMs
+            };
         }
         if (cond === 'selector') {
             if (!target) return { ok: false, error: 'Target selector required' };

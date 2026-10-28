@@ -267,7 +267,8 @@ public class WebAutomationDriver {
     }
 
     public JSONObject waitConditionSync(String condition, String target, long quietMs, long timeoutMs) {
-        long effectiveTimeout = Math.max(500, Math.min(30000, timeoutMs > 0 ? timeoutMs : 5000));
+        long effectiveQuietMs = Math.max(50, quietMs > 0 ? quietMs : 300);
+        long effectiveTimeout = Math.max(effectiveQuietMs, Math.min(30000, timeoutMs > 0 ? timeoutMs : 5000));
         long startTime = SystemClock.uptimeMillis();
         long deadline = startTime + effectiveTimeout;
 
@@ -289,14 +290,18 @@ public class WebAutomationDriver {
         }
 
         boolean satisfied = false;
+        boolean isFirst = true;
         while (SystemClock.uptimeMillis() < deadline) {
             String checkExpr = "(function(){\n" +
                 "  if (!window.__acidBridge || !window.__acidBridge.checkCondition) return JSON.stringify({ok:false, error:'BRIDGE_NOT_READY'});\n" +
                 "  return JSON.stringify(window.__acidBridge.checkCondition(" +
                 JSONObject.quote(cond) + ", " +
                 (target != null ? JSONObject.quote(target) : "null") + ", " +
-                quietMs + "));\n" +
+                effectiveQuietMs + ", " +
+                isFirst + "));\n" +
                 "})()";
+            isFirst = false;
+
             String raw = evaluateJsSync(checkExpr, 1500);
             if (raw != null && !raw.isEmpty()) {
                 try {
@@ -308,7 +313,7 @@ public class WebAutomationDriver {
                 } catch (Exception ignored) {}
             }
             try {
-                Thread.sleep(180);
+                Thread.sleep(40);
             } catch (InterruptedException ignored) {
                 break;
             }
@@ -321,9 +326,10 @@ public class WebAutomationDriver {
             obs.put("wait_condition", cond);
             obs.put("wait_target", target != null ? target : "");
             obs.put("elapsed_ms", elapsed);
+            obs.put("quiet_ms", effectiveQuietMs);
             obs.put("timeout_ms", effectiveTimeout);
             if (!satisfied) {
-                obs.put("hint", "等待超时未满足条件，页面可能仍未更新或目标已消失");
+                obs.put("hint", "等待超时未满足条件，页面可能仍未更新或变动持续未达静默阈值 (" + effectiveQuietMs + "ms)");
             }
         } catch (Exception ignored) {}
         return obs;
