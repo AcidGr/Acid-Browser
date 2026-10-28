@@ -17,6 +17,8 @@
 Acid-broswer/
 ├── AndroidManifest.xml                  # 仅需 INTERNET 权限，支持 http/https 链接打开
 ├── build.sh                             # 一键极速编译、4字节对齐与签名脚本
+├── docs/
+│   └── agent-tool-issues-report-20261028.md  # Agent 工具链实测问题报告与优化建议 (13项问题诊断)
 ├── assets/
 │   ├── acid_logo.svg                    # 品牌定制 SVG 矢量图标源文件
 │   ├── agent_bridge.js                  # 注入式页面感知与动作执行引擎 (DOM 蒸馏 / SoM / React-safe Fill)
@@ -61,3 +63,11 @@ curl -s -X POST http://127.0.0.1:3090/api/click \
 curl -s -X POST http://127.0.0.1:3090/api/mode \
   -d '{"browserMode":"desktop","controlMode":"takeover","som":true,"reason":"请完成滑块验证"}'
 ```
+
+---
+
+## 三、 项目文档与诊断评估
+
+- **[Acid Browser Agent 工具链问题与优化建议报告 (2026-10-28)](docs/agent-tool-issues-report-20261028.md)**：
+  基于多站点真实复杂业务流（抖音登录与私信 / 抖音作品查询 / 百度贴吧通知 / 深圳天气 / Gmail 发信）的深度实测，全面梳理的 13 项工具问题、P0~P2 优先级矩阵、分工哲学反思与 API 演进草案。
+

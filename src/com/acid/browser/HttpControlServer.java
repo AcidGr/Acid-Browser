@@ -273,11 +273,26 @@ public class HttpControlServer {
             return mController.scrollSync(dir, amount, targetRef);
         }
 
+        if ("/api/wait".equals(path)) {
+            String cond = body.optString("condition", query.get("condition") != null ? query.get("condition") : "stable");
+            String target = body.optString("target", body.optString("selector", body.optString("text", query.get("target"))));
+            long quietMs = body.optLong("quiet_ms", body.optLong("ms", 300));
+            long timeoutMs = body.optLong("timeout_ms", 5000);
+            return mController.waitSync(cond, target, quietMs, timeoutMs);
+        }
+
         if ("/api/eval".equals(path)) {
-            String script = body.optString("script", body.optString("code", ""));
-            String wrapped = "(function(){ try { const r = (" + script + "); return JSON.stringify({ok:true, result:r}); } catch(e){ return JSON.stringify({ok:false, error:String(e)}); } })()";
-            String raw = mController.evaluateJsSync(wrapped, 5000);
-            return new JSONObject(raw);
+            String script = body.optString("script", body.optString("code", query.get("code")));
+            long timeout = body.optLong("timeout_ms", 10000);
+            String raw = mController.evaluateJsAsync(script, timeout);
+            try {
+                return new JSONObject(raw);
+            } catch (Exception e) {
+                JSONObject res = new JSONObject();
+                res.put("ok", true);
+                res.put("result", raw);
+                return res;
+            }
         }
 
         if ("/api/mode".equals(path)) {

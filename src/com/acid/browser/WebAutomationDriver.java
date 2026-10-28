@@ -9,6 +9,7 @@ import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebView;
 
@@ -17,6 +18,7 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.io.ByteArrayOutputStream;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,6 +45,40 @@ public class WebAutomationDriver {
     private final Context mContext;
     private final AutomationHost mHost;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+    private final AcidNativeHostBridge mNativeBridge = new AcidNativeHostBridge();
+
+    public static class AcidNativeHostBridge {
+        private final ConcurrentHashMap<String, AtomicReference<String>> mResults =
+            new ConcurrentHashMap<String, AtomicReference<String>>();
+        private final ConcurrentHashMap<String, CountDownLatch> mLatches =
+            new ConcurrentHashMap<String, CountDownLatch>();
+
+        public void prepareCall(String callId, CountDownLatch latch, AtomicReference<String> ref) {
+            mLatches.put(callId, latch);
+            mResults.put(callId, ref);
+        }
+
+        public void cleanupCall(String callId) {
+            mLatches.remove(callId);
+            mResults.remove(callId);
+        }
+
+        @JavascriptInterface
+        public void resolve(String callId, String jsonPayload) {
+            AtomicReference<String> ref = mResults.get(callId);
+            if (ref != null) {
+                ref.set(jsonPayload);
+            }
+            CountDownLatch latch = mLatches.get(callId);
+            if (latch != null) {
+                latch.countDown();
+            }
+        }
+    }
+
+    public AcidNativeHostBridge getNativeHostBridge() {
+        return mNativeBridge;
+    }
 
     public WebAutomationDriver(Context context, AutomationHost host) {
         mContext = context;
@@ -93,11 +129,113 @@ public class WebAutomationDriver {
         return ref.get();
     }
 
+    public String evaluateJsAsync(final String userCode, long timeoutMs) {
+        final String callId = "eval_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 10000);
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<String> resultRef = new AtomicReference<String>(null);
+        mNativeBridge.prepareCall(callId, latch, resultRef);
+
+        final String wrappedJs = "(function() {\n" +
+            "  var __cid = " + JSONObject.quote(callId) + ";\n" +
+            "  (async function() {\n" +
+            "    try {\n" +
+            "      var v = await (async function() { return (" + userCode + "); })();\n" +
+            "      if (v === undefined) v = null;\n" +
+            "      if (v && typeof v === 'object' && v instanceof Element) {\n" +
+            "        v = { tag: v.tagName, id: v.id || '', className: v.className || '', text: (v.innerText || '').substring(0, 150) };\n" +
+            "      }\n" +
+            "      var payload = JSON.stringify({ ok: true, result: v });\n" +
+            "      if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
+            "        window.__acidNativeHost.resolve(__cid, payload);\n" +
+            "      }\n" +
+            "    } catch (e) {\n" +
+            "      var errPayload = JSON.stringify({ ok: false, error: String(e && e.message || e) });\n" +
+            "      if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
+            "        window.__acidNativeHost.resolve(__cid, errPayload);\n" +
+            "      }\n" +
+            "    }\n" +
+            "  })();\n" +
+            "})();";
+
+        mMainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                BrowserController.TabSession activeTab = mHost.getActiveTab();
+                if (activeTab == null || activeTab.webView == null) {
+                    resultRef.set("{\"ok\":false,\"error\":\"NO_ACTIVE_TAB\"}");
+                    latch.countDown();
+                    return;
+                }
+                if (mHost.getUserscriptManager() != null) {
+                    mHost.getUserscriptManager().injectRuntimeAndUserscripts(activeTab.webView);
+                }
+                activeTab.webView.evaluateJavascript(wrappedJs, null);
+            }
+        });
+
+        try {
+            boolean done = latch.await(timeoutMs, TimeUnit.MILLISECONDS);
+            if (!done || resultRef.get() == null) {
+                return "{\"ok\":false,\"error\":\"ASYNC_TIMEOUT\",\"timeout_ms\":" + timeoutMs + "}";
+            }
+            return resultRef.get();
+        } catch (InterruptedException e) {
+            return "{\"ok\":false,\"error\":\"INTERRUPTED\"}";
+        } finally {
+            mNativeBridge.cleanupCall(callId);
+        }
+    }
+
+    private JSONObject buildFallbackObservation(String errorCode, String message) {
+        JSONObject err = new JSONObject();
+        try {
+            err.put("ok", false);
+            err.put("error_code", errorCode);
+            err.put("error", message);
+            err.put("retryable", true);
+            err.put("hint", "页面可能仍在加载中，请稍候重试或调用 browser(action='wait', condition='stable') 等待稳定");
+
+            final JSONObject partial = new JSONObject();
+            final CountDownLatch latch = new CountDownLatch(1);
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        BrowserController.TabSession tab = mHost.getActiveTab();
+                        if (tab != null && tab.webView != null) {
+                            partial.put("url", tab.webView.getUrl() != null ? tab.webView.getUrl() : tab.url);
+                            partial.put("title", tab.webView.getTitle() != null ? tab.webView.getTitle() : tab.title);
+                            partial.put("progress", tab.webView.getProgress());
+                            partial.put("isLoading", tab.isLoading);
+                        }
+                    } catch (Exception ignored) {}
+                    latch.countDown();
+                }
+            });
+            latch.await(500, TimeUnit.MILLISECONDS);
+            err.put("partial", partial);
+
+            String url = partial.optString("url", "about:blank");
+            String title = partial.optString("title", "");
+            String fallbackCompact = "=== [BROWSER STATE: " + errorCode + "] ===\n" +
+                "Status: 页面暂时不可观测 (" + message + ")\n" +
+                "URL: " + url + "\n" +
+                "Title: " + title + "\n" +
+                "Interactive Elements (0):\n" +
+                "(暂无可用交互句柄，页面仍在渲染中，建议使用 browser(action='wait') 确认稳定)";
+            err.put("compactText", fallbackCompact);
+        } catch (Exception ignored) {}
+        return err;
+    }
+
     public JSONObject observeSync(boolean includeSom, boolean viewportOnly, boolean includeScreenshot) {
         try {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.observe({includeSom:" +
                 includeSom + ", viewportOnly:" + viewportOnly + "})); })()";
             String raw = evaluateJsSync(expr, 6000);
+            if (raw == null || raw.trim().isEmpty() || "null".equals(raw)) {
+                return buildFallbackObservation("SNAPSHOT_EMPTY_RESULT", "页面未返回有效观察数据，可能正在加载");
+            }
             JSONObject obj = new JSONObject(raw);
             AgentOverlayView overlay = mHost.getOverlayView();
             int cMode = overlay != null ? overlay.getControlMode() : AgentOverlayView.MODE_HUMAN;
@@ -115,13 +253,71 @@ public class WebAutomationDriver {
             }
             return obj;
         } catch (Exception e) {
-            JSONObject err = new JSONObject();
-            try {
-                err.put("ok", false);
-                err.put("error", e.getMessage());
-            } catch (Exception ignored) {}
-            return err;
+            return buildFallbackObservation("SNAPSHOT_PARSE_ERROR", "快照解析失败: " + e.getMessage());
         }
+    }
+
+    public JSONObject waitConditionSync(String condition, String target, long quietMs, long timeoutMs) {
+        long effectiveTimeout = Math.max(500, Math.min(30000, timeoutMs > 0 ? timeoutMs : 5000));
+        long startTime = SystemClock.uptimeMillis();
+        long deadline = startTime + effectiveTimeout;
+
+        String cond = (condition != null && !condition.isEmpty()) ? condition.toLowerCase().trim() : "stable";
+
+        if ("ms".equals(cond) || "time".equals(cond)) {
+            long sleepTime = Math.max(50, Math.min(effectiveTimeout, quietMs > 0 ? quietMs : (target != null && !target.isEmpty() ? Long.parseLong(target) : 1000)));
+            try {
+                Thread.sleep(sleepTime);
+            } catch (InterruptedException ignored) {}
+            long elapsed = SystemClock.uptimeMillis() - startTime;
+            JSONObject obs = observeSync(mHost.isSomEnabled(), true, false);
+            try {
+                obs.put("wait_satisfied", true);
+                obs.put("wait_condition", "ms");
+                obs.put("elapsed_ms", elapsed);
+            } catch (Exception ignored) {}
+            return obs;
+        }
+
+        boolean satisfied = false;
+        while (SystemClock.uptimeMillis() < deadline) {
+            String checkExpr = "(function(){\n" +
+                "  if (!window.__acidBridge || !window.__acidBridge.checkCondition) return JSON.stringify({ok:false, error:'BRIDGE_NOT_READY'});\n" +
+                "  return JSON.stringify(window.__acidBridge.checkCondition(" +
+                JSONObject.quote(cond) + ", " +
+                (target != null ? JSONObject.quote(target) : "null") + ", " +
+                quietMs + "));\n" +
+                "})()";
+            String raw = evaluateJsSync(checkExpr, 1500);
+            if (raw != null && !raw.isEmpty()) {
+                try {
+                    JSONObject res = new JSONObject(raw);
+                    if (res.optBoolean("satisfied", false)) {
+                        satisfied = true;
+                        break;
+                    }
+                } catch (Exception ignored) {}
+            }
+            try {
+                Thread.sleep(180);
+            } catch (InterruptedException ignored) {
+                break;
+            }
+        }
+
+        long elapsed = SystemClock.uptimeMillis() - startTime;
+        JSONObject obs = observeSync(mHost.isSomEnabled(), true, false);
+        try {
+            obs.put("wait_satisfied", satisfied);
+            obs.put("wait_condition", cond);
+            obs.put("wait_target", target != null ? target : "");
+            obs.put("elapsed_ms", elapsed);
+            obs.put("timeout_ms", effectiveTimeout);
+            if (!satisfied) {
+                obs.put("hint", "等待超时未满足条件，页面可能仍未更新或目标已消失");
+            }
+        } catch (Exception ignored) {}
+        return obs;
     }
 
     public JSONObject navigateSync(final String url, long waitSettleMs) {

@@ -437,6 +437,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
 
         applyIdentityToSettings(wv, mIsDesktopMode);
+        wv.addJavascriptInterface(mAutomationDriver.getNativeHostBridge(), "__acidNativeHost");
 
         wv.setWebViewClient(new WebViewClient() {
             @Override
@@ -631,6 +632,14 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public boolean isDesktopMode() {
         return mIsDesktopMode;
+    }
+
+    public String evaluateJsAsync(String code, long timeoutMs) {
+        return mAutomationDriver.evaluateJsAsync(code, timeoutMs);
+    }
+
+    public JSONObject waitSync(String condition, String target, long quietMs, long timeoutMs) {
+        return mAutomationDriver.waitConditionSync(condition, target, quietMs, timeoutMs);
     }
 
     public void setControlMode(int mode, String reason) {

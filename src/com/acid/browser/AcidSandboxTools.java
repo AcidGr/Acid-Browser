@@ -60,7 +60,8 @@ public class AcidSandboxTools {
                 "- 'fill': Fill text into input/textarea 'ref' (React/Vue safe, zero soft-keyboard). Optional 'submit'=true.\n" +
                 "- 'select': Choose option in <select> dropdown 'ref' by value or visible label.\n" +
                 "- 'scroll': Scroll viewport ('direction': 'down'|'up'|'top'|'bottom', 'amount': 0.8).\n" +
-                "- 'eval': Evaluate JavaScript expression ('code') on current page and return JSON result.\n" +
+                "- 'wait': Wait for a specific condition ('condition': 'networkidle'|'selector'|'stable'|'text'|'gone'|'ms', optional 'selector', 'text', 'quiet_ms', 'ms', 'timeout_ms'). Automatically returns the latest page observation upon completion.\n" +
+                "- 'eval': Evaluate JavaScript expression ('code') on current page. Supports async/await; Promises are automatically awaited.\n" +
                 "- 'set_mode': Switch browser identity ('mode': 'desktop' for 1280px PC view or 'mobile'), or toggle 'som' (true/false).\n" +
                 "- 'tabs': Manage tabs ('tab_action': 'list'|'new'|'switch'|'close', optional 'tab_id', 'url').\n" +
                 "- 'back': Navigate back in current tab history.\n" +
@@ -68,17 +69,22 @@ public class AcidSandboxTools {
                 "- 'request_takeover': Pause automation loop and ask human user to manually handle login/CAPTCHA ('reason').",
                 new String[]{
                     "observe", "navigate", "click", "fill", "select",
-                    "scroll", "eval", "set_mode", "tabs", "back", "reload", "request_takeover"
+                    "scroll", "wait", "eval", "set_mode", "tabs", "back", "reload", "request_takeover"
                 }
             ));
             browserProps.put("url", prop("string", "Target URL for 'navigate' or 'tabs' (new)."));
             browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'fill', 'select', or container 'scroll'."));
-            browserProps.put("text", prop("string", "Text value for 'fill' or option value/label for 'select'."));
+            browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', or expected text for 'wait' (text/gone)."));
+            browserProps.put("selector", prop("string", "CSS selector for 'wait' condition (selector/gone)."));
+            browserProps.put("condition", prop("string", "Wait condition for 'wait': 'stable' (DOM quiet), 'selector' (element exists), 'text' (text present), 'gone' (element/text disappeared), 'networkidle' (page loaded), 'ms' (fixed sleep)."));
+            browserProps.put("quiet_ms", prop("integer", "Quiet threshold in ms without DOM mutations for 'stable' wait (default 300)."));
+            browserProps.put("ms", prop("integer", "Sleep duration in milliseconds for 'wait' (condition='ms')."));
+            browserProps.put("timeout_ms", prop("integer", "Maximum wait timeout in milliseconds for 'wait' (default 5000)."));
             browserProps.put("clear", prop("boolean", "Whether to clear existing input value before 'fill' (default true)."));
             browserProps.put("submit", prop("boolean", "Whether to press Enter / submit form after 'fill' (default false)."));
             browserProps.put("direction", prop("string", "Scroll direction for 'scroll': 'down', 'up', 'left', 'right', 'top', 'bottom'."));
             browserProps.put("amount", prop("number", "Scroll viewport multiplier for 'scroll' (default 0.75)."));
-            browserProps.put("code", prop("string", "JavaScript code expression to evaluate for 'eval'."));
+            browserProps.put("code", prop("string", "JavaScript code expression to evaluate for 'eval'. Async functions and Promises are automatically awaited and resolved."));
             browserProps.put("mode", prop("string", "Browser identity mode for 'set_mode': 'desktop' (1280px PC) or 'mobile'."));
             browserProps.put("som", prop("boolean", "Enable or disable Set-of-Marks visual boxes on webpage."));
             browserProps.put("tab_action", prop("string", "Sub-action for 'tabs': 'list', 'new', 'switch', 'close'."));
@@ -299,10 +305,23 @@ public class AcidSandboxTools {
             return new ToolExecResult(formatObservationWithActionHeader("SCROLL " + dir, scrRes, obs), false, null);
         }
 
+        if ("wait".equals(action)) {
+            String cond = args.optString("condition", "stable");
+            String target = args.has("selector") ? args.optString("selector") : (args.has("text") ? args.optString("text") : null);
+            long quietMs = args.optLong("quiet_ms", 300);
+            long timeoutMs = args.optLong("timeout_ms", 5000);
+            if ("ms".equalsIgnoreCase(cond) && args.has("ms")) {
+                quietMs = args.optLong("ms", 1000);
+            }
+            JSONObject waitRes = mController.waitSync(cond, target, quietMs, timeoutMs);
+            String title = "WAIT " + cond.toUpperCase() + (target != null ? " (\"" + target + "\")" : "") + " [" + waitRes.optLong("elapsed_ms", 0) + "ms]";
+            return new ToolExecResult(formatObservationWithActionHeader(title, null, waitRes), false, null);
+        }
+
         if ("eval".equals(action)) {
             String code = args.optString("code", "");
-            String wrapped = "(function(){ try { const r = (" + code + "); return JSON.stringify({ok:true, result:r}); } catch(e){ return JSON.stringify({ok:false, error:String(e)}); } })()";
-            String raw = mController.evaluateJsSync(wrapped, 5000);
+            long timeout = args.optLong("timeout_ms", 10000);
+            String raw = mController.evaluateJsAsync(code, timeout);
             return new ToolExecResult("[BROWSER EVAL RESULT]\n" + raw, false, null);
         }
 
