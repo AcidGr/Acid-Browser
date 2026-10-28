@@ -68,8 +68,10 @@ public class UserscriptManager {
                 String encodedBridge = Base64.encodeToString(mBridgeJs.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
                 String injectBridge = "javascript:(function(){" +
                     "if(!window.__acidBridgeInjected){" +
+                    "window.__acidBridgeInjected=true;" +
                     "var s=document.createElement('script');" +
                     "s.type='text/javascript';" +
+                    "s.setAttribute('data-acid-internal','true');" +
                     "s.innerHTML=decodeURIComponent(escape(window.atob('" + encodedBridge + "')));" +
                     "(document.head||document.documentElement).appendChild(s);" +
                     "}" +
@@ -85,12 +87,18 @@ public class UserscriptManager {
                         String code = readFileText(f);
                         if (!code.isEmpty()) {
                             String encodedCode = Base64.encodeToString(code.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                            String safeName = f.getName().replace("'", "\\'");
                             String injectPlugin = "javascript:(function(){" +
                                 "try{" +
+                                "if(!window.__acidInjectedUserscripts)window.__acidInjectedUserscripts={};" +
+                                "if(!window.__acidInjectedUserscripts['" + safeName + "']){" +
+                                "window.__acidInjectedUserscripts['" + safeName + "']=true;" +
                                 "var s=document.createElement('script');" +
                                 "s.type='text/javascript';" +
+                                "s.setAttribute('data-acid-internal','true');" +
                                 "s.innerHTML=decodeURIComponent(escape(window.atob('" + encodedCode + "')));" +
                                 "(document.head||document.documentElement).appendChild(s);" +
+                                "}" +
                                 "}catch(e){console.error('[AcidUserscriptError]',e);}" +
                                 "})()";
                             wv.evaluateJavascript(injectPlugin, null);

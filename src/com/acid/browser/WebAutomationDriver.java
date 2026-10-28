@@ -110,9 +110,6 @@ public class WebAutomationDriver {
                     latch.countDown();
                     return;
                 }
-                if (mHost.getUserscriptManager() != null) {
-                    mHost.getUserscriptManager().injectRuntimeAndUserscripts(activeTab.webView);
-                }
                 activeTab.webView.evaluateJavascript(jsExpr, new ValueCallback<String>() {
                     @Override
                     public void onReceiveValue(String value) {
@@ -180,9 +177,6 @@ public class WebAutomationDriver {
                     resultRef.set("{\"ok\":false,\"error\":\"NO_ACTIVE_TAB\"}");
                     latch.countDown();
                     return;
-                }
-                if (mHost.getUserscriptManager() != null) {
-                    mHost.getUserscriptManager().injectRuntimeAndUserscripts(activeTab.webView);
                 }
                 activeTab.webView.evaluateJavascript(wrappedJs, null);
             }
