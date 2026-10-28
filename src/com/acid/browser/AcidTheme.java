@@ -44,6 +44,7 @@ public final class AcidTheme {
     public static final int COLOR_AMBER = Color.parseColor("#F59E0B");
     public static final int COLOR_BLUE = Color.parseColor("#0284C7");
     public static final int COLOR_RED = Color.parseColor("#EF4444");
+    public static final int COLOR_GREEN = Color.parseColor("#10B981");
     public static final int COLOR_PURPLE = Color.parseColor("#8B5CF6");
     public static final int COLOR_ORANGE = Color.parseColor("#F97316");
 

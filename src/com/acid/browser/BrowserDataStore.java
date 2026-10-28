@@ -19,6 +19,7 @@ public class BrowserDataStore {
     public static final String PREF_BOOKMARKS = "bookmarks";
     public static final String PREF_HISTORY = "history";
     public static final String PREF_DARK_MODE = "dark_mode";
+    public static final String PREF_DOWNLOADS = "downloads";
 
     public static class EntryItem {
         public final String title;
@@ -142,5 +143,59 @@ public class BrowserDataStore {
             }
             prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
         } catch (Exception ignored) {}
+    }
+
+    public List<BrowserController.DownloadItem> loadDownloads() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        String raw = prefs.getString(PREF_DOWNLOADS, "[]");
+        List<BrowserController.DownloadItem> list = new ArrayList<BrowserController.DownloadItem>();
+        try {
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                list.add(new BrowserController.DownloadItem(
+                    o.optLong("downloadId", 0),
+                    o.optString("fileName", "file"),
+                    o.optString("url", ""),
+                    o.optString("mimeType", ""),
+                    o.optLong("contentLength", 0),
+                    o.optLong("downloadedBytes", 0),
+                    o.optInt("status", 0),
+                    o.optLong("timestamp", System.currentTimeMillis())
+                ));
+            }
+        } catch (Exception ignored) {}
+        return list;
+    }
+
+    public void saveDownloads(List<BrowserController.DownloadItem> list) {
+        JSONArray arr = new JSONArray();
+        if (list != null) {
+            for (BrowserController.DownloadItem item : list) {
+                JSONObject o = new JSONObject();
+                try {
+                    o.put("downloadId", item.downloadId);
+                    o.put("fileName", item.fileName);
+                    o.put("url", item.url);
+                    o.put("mimeType", item.mimeType);
+                    o.put("contentLength", item.contentLength);
+                    o.put("downloadedBytes", item.downloadedBytes);
+                    o.put("status", item.status);
+                    o.put("timestamp", item.timestamp);
+                    arr.put(o);
+                } catch (Exception ignored) {}
+            }
+        }
+        mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREF_DOWNLOADS, arr.toString())
+            .apply();
+    }
+
+    public void clearDownloads() {
+        mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREF_DOWNLOADS, "[]")
+            .apply();
     }
 }

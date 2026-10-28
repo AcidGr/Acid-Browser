@@ -1,9 +1,17 @@
 package com.acid.browser;
 
+import android.app.DownloadManager;
+import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -12,12 +20,15 @@ import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
+import android.webkit.MimeTypeMap;
+import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -47,6 +58,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         void onDeepLinkBlocked(String blockedUri, int totalBlocked);
         void onTabsChanged(int tabCount, int activeTabId);
         void onAgentActionLog(String logLine);
+        void onDownloadRequested(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength);
     }
 
     public static class TabSession {
@@ -65,16 +77,103 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public static class DownloadItem {
+        public long downloadId;
+        public String fileName;
         public final String url;
         public final String mimeType;
-        public final long contentLength;
+        public long contentLength;
+        public long downloadedBytes;
+        public int status;
         public final long timestamp;
 
-        public DownloadItem(String url, String mimeType, long contentLength) {
-            this.url = url;
+        public DownloadItem(long downloadId, String fileName, String url, String mimeType, long contentLength, long downloadedBytes, int status, long timestamp) {
+            this.downloadId = downloadId;
+            this.fileName = (fileName != null && !fileName.isEmpty()) ? fileName : "file";
+            this.url = url != null ? url : "";
             this.mimeType = mimeType != null ? mimeType : "";
             this.contentLength = contentLength;
-            this.timestamp = System.currentTimeMillis();
+            this.downloadedBytes = downloadedBytes;
+            this.status = status;
+            this.timestamp = timestamp > 0 ? timestamp : System.currentTimeMillis();
+        }
+
+        public DownloadItem(String url, String mimeType, long contentLength) {
+            this(0, "download", url, mimeType, contentLength, 0, 0, System.currentTimeMillis());
+        }
+
+        public static String formatSize(long bytes) {
+            if (bytes <= 0) return "未知大小";
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0);
+            if (bytes < 1024 * 1024 * 1024) return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
+            return String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+        }
+
+        public static final int CAT_ALL = 0;
+        public static final int CAT_APK = 1;
+        public static final int CAT_ARCHIVE = 2;
+        public static final int CAT_DOC = 3;
+        public static final int CAT_IMAGE = 4;
+        public static final int CAT_MEDIA = 5;
+
+        public int getCategory() {
+            String name = fileName != null ? fileName.toLowerCase() : "";
+            String mime = mimeType != null ? mimeType.toLowerCase() : "";
+
+            if (name.endsWith(".apk") || name.endsWith(".apks") || name.endsWith(".xapk") || mime.contains("package-archive")) {
+                return CAT_APK;
+            }
+            if (name.endsWith(".zip") || name.endsWith(".rar") || name.endsWith(".7z") ||
+                name.endsWith(".tar") || name.endsWith(".gz") || name.endsWith(".bz2") ||
+                name.endsWith(".xz") || mime.contains("zip") || mime.contains("compressed") || mime.contains("tar")) {
+                return CAT_ARCHIVE;
+            }
+            if (name.endsWith(".pdf") || name.endsWith(".doc") || name.endsWith(".docx") ||
+                name.endsWith(".xls") || name.endsWith(".xlsx") || name.endsWith(".ppt") ||
+                name.endsWith(".pptx") || name.endsWith(".txt") || name.endsWith(".csv") ||
+                name.endsWith(".json") || name.endsWith(".xml") || name.endsWith(".md") ||
+                mime.contains("pdf") || mime.contains("document") || mime.contains("sheet") || mime.contains("text/")) {
+                return CAT_DOC;
+            }
+            if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") ||
+                name.endsWith(".webp") || name.endsWith(".gif") || name.endsWith(".bmp") ||
+                name.endsWith(".svg") || mime.startsWith("image/")) {
+                return CAT_IMAGE;
+            }
+            if (name.endsWith(".mp4") || name.endsWith(".mkv") || name.endsWith(".avi") ||
+                name.endsWith(".mov") || name.endsWith(".webm") || name.endsWith(".flv") ||
+                name.endsWith(".mp3") || name.endsWith(".wav") || name.endsWith(".flac") ||
+                name.endsWith(".m4a") || name.endsWith(".aac") || name.endsWith(".ogg") ||
+                mime.startsWith("video/") || mime.startsWith("audio/")) {
+                return CAT_MEDIA;
+            }
+            return CAT_DOC;
+        }
+
+        public int getProgressPercent() {
+            if (status == DownloadManager.STATUS_SUCCESSFUL) return 100;
+            if (contentLength > 0 && downloadedBytes > 0) {
+                int p = (int) ((downloadedBytes * 100L) / contentLength);
+                return Math.max(0, Math.min(100, p));
+            }
+            return status == DownloadManager.STATUS_RUNNING ? 5 : 0;
+        }
+
+        public String getStatusLabel() {
+            switch (status) {
+                case DownloadManager.STATUS_SUCCESSFUL:
+                    return "已完成";
+                case DownloadManager.STATUS_RUNNING:
+                    return "下载中";
+                case DownloadManager.STATUS_PENDING:
+                    return "排队中";
+                case DownloadManager.STATUS_PAUSED:
+                    return "已暂停";
+                case DownloadManager.STATUS_FAILED:
+                    return "下载失败";
+                default:
+                    return "已保存";
+            }
         }
     }
 
@@ -98,6 +197,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private int mBlockedDeepLinks = 0;
     private String mLastBlockedDeepLink = "";
     private final List<DownloadItem> mDownloads = new ArrayList<DownloadItem>();
+    private BrowserDataStore mDataStore = null;
+
+    public void setDataStore(BrowserDataStore dataStore) {
+        mDataStore = dataStore;
+        if (mDataStore != null) {
+            List<DownloadItem> saved = mDataStore.loadDownloads();
+            synchronized (mDownloads) {
+                mDownloads.clear();
+                mDownloads.addAll(saved);
+            }
+        }
+    }
 
     public BrowserController(
         Context context,
@@ -408,9 +519,20 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
         wv.setDownloadListener(new DownloadListener() {
             @Override
-            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
-                mDownloads.add(0, new DownloadItem(url, mimeType, contentLength));
-                emitLog("[DOWNLOAD] Tracked: " + url + " (" + contentLength + " B)");
+            public void onDownloadStart(final String url, final String userAgent, final String contentDisposition, final String mimeType, final long contentLength) {
+                final String fileName = smartGuessFileName(url, contentDisposition, mimeType);
+                final String resolvedMime = resolveMimeType(fileName, mimeType);
+                emitLog("[DOWNLOAD] Triggered: " + fileName + " (" + contentLength + " B, " + resolvedMime + ")");
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (mListener != null) {
+                            mListener.onDownloadRequested(url, fileName, userAgent, contentDisposition, resolvedMime, contentLength);
+                        } else {
+                            startDownload(url, fileName, userAgent, contentDisposition, resolvedMime, contentLength);
+                        }
+                    }
+                });
             }
         });
     }
@@ -546,8 +668,368 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
+    public static String smartGuessFileName(String url, String contentDisposition, String mimeType) {
+        String effectiveMime = mimeType;
+        if (effectiveMime != null) {
+            String lower = effectiveMime.trim().toLowerCase();
+            if (lower.equals("application/octet-stream") ||
+                lower.equals("binary/octet-stream") ||
+                lower.equals("application/force-download") ||
+                lower.equals("*/*") ||
+                lower.isEmpty()) {
+                effectiveMime = null;
+            }
+        }
+
+        String guessed = URLUtil.guessFileName(url, contentDisposition, effectiveMime);
+
+        // Extra guard: If URL path or contentDisposition has an explicit known extension,
+        // but URLUtil forced a .bin extension, restore the original extension.
+        if (guessed != null && guessed.toLowerCase().endsWith(".bin")) {
+            String candidate = null;
+            if (contentDisposition != null) {
+                int fnIndex = contentDisposition.toLowerCase().indexOf("filename=");
+                if (fnIndex >= 0) {
+                    String part = contentDisposition.substring(fnIndex + 9).trim();
+                    if (part.startsWith("\"") && part.length() > 1) {
+                        int endQuote = part.indexOf('\"', 1);
+                        if (endQuote > 1) candidate = part.substring(1, endQuote);
+                    } else {
+                        int semi = part.indexOf(';');
+                        candidate = semi > 0 ? part.substring(0, semi).trim() : part;
+                    }
+                }
+            }
+            if (candidate == null && url != null) {
+                try {
+                    String path = Uri.parse(url).getPath();
+                    if (path != null) {
+                        int slash = path.lastIndexOf('/');
+                        if (slash >= 0 && slash < path.length() - 1) {
+                            candidate = path.substring(slash + 1);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            if (candidate != null) {
+                int dot = candidate.lastIndexOf('.');
+                if (dot >= 0 && dot < candidate.length() - 1) {
+                    String ext = candidate.substring(dot).toLowerCase();
+                    if (!ext.equals(".bin")) {
+                        if (guessed.toLowerCase().endsWith(ext + ".bin")) {
+                            guessed = guessed.substring(0, guessed.length() - 4);
+                        } else if (guessed.toLowerCase().endsWith(".bin")) {
+                            guessed = guessed.substring(0, guessed.length() - 4) + ext;
+                        }
+                    }
+                }
+            }
+        }
+
+        return guessed;
+    }
+
+    public static String resolveMimeType(String fileName, String mimeType) {
+        if (fileName != null) {
+            int dot = fileName.lastIndexOf('.');
+            if (dot >= 0 && dot < fileName.length() - 1) {
+                String ext = fileName.substring(dot + 1).toLowerCase();
+                if ("apk".equals(ext)) {
+                    return "application/vnd.android.package-archive";
+                }
+                String guessed = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+                if (guessed != null && !guessed.isEmpty()) {
+                    return guessed;
+                }
+            }
+        }
+        if (mimeType != null && !mimeType.isEmpty() && !"*/*".equals(mimeType) && !"application/octet-stream".equals(mimeType)) {
+            return mimeType;
+        }
+        return "*/*";
+    }
+
     public List<DownloadItem> getDownloads() {
-        return new ArrayList<DownloadItem>(mDownloads);
+        syncDownloadStatus();
+        synchronized (mDownloads) {
+            return new ArrayList<DownloadItem>(mDownloads);
+        }
+    }
+
+    public void startDownload(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+        if (url == null || url.isEmpty()) return;
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            Toast.makeText(mContext, "当前暂不支持下载此协议资源: " + url, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm == null) {
+                Toast.makeText(mContext, "系统下载管理器不可用", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            if (fileName == null || fileName.trim().isEmpty()) {
+                fileName = smartGuessFileName(url, contentDisposition, mimeType);
+            }
+
+            String effectiveMime = resolveMimeType(fileName, mimeType);
+
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            if (effectiveMime != null && !effectiveMime.isEmpty() && !"*/*".equals(effectiveMime)) {
+                request.setMimeType(effectiveMime);
+            }
+
+            String cookie = CookieManager.getInstance().getCookie(url);
+            if (cookie != null && !cookie.isEmpty()) {
+                request.addRequestHeader("Cookie", cookie);
+            }
+            if (userAgent != null && !userAgent.isEmpty()) {
+                request.addRequestHeader("User-Agent", userAgent);
+            }
+
+            request.allowScanningByMediaScanner();
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setTitle(fileName);
+            request.setDescription("Acid Browser 下载");
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+            long downloadId = dm.enqueue(request);
+
+            DownloadItem item = new DownloadItem(
+                downloadId,
+                fileName,
+                url,
+                effectiveMime,
+                contentLength,
+                0,
+                DownloadManager.STATUS_RUNNING,
+                System.currentTimeMillis()
+            );
+
+            synchronized (mDownloads) {
+                mDownloads.add(0, item);
+            }
+
+            if (mDataStore != null) {
+                mDataStore.saveDownloads(mDownloads);
+            }
+
+            emitLog("[DOWNLOAD] Enqueued: " + fileName + " (id=" + downloadId + ") -> /Download/");
+            Toast.makeText(mContext, "已开始下载: " + fileName + "\n保存至手机 Download 目录", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            emitLog("[DOWNLOAD] Failed to enqueue: " + e.getMessage());
+            Toast.makeText(mContext, "下载发起失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    public void onDownloadCompleted(long downloadId) {
+        syncDownloadStatus();
+        synchronized (mDownloads) {
+            for (DownloadItem it : mDownloads) {
+                if (it.downloadId == downloadId) {
+                    emitLog("[DOWNLOAD] Complete: " + it.fileName);
+                    break;
+                }
+            }
+        }
+    }
+
+    public void syncDownloadStatus() {
+        DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+        if (dm == null) return;
+
+        boolean changed = false;
+        synchronized (mDownloads) {
+            for (DownloadItem it : mDownloads) {
+                if (it.downloadId <= 0) continue;
+                DownloadManager.Query q = new DownloadManager.Query();
+                q.setFilterById(it.downloadId);
+                Cursor c = null;
+                try {
+                    c = dm.query(q);
+                    if (c != null && c.moveToFirst()) {
+                        int statusCol = c.getColumnIndex(DownloadManager.COLUMN_STATUS);
+                        int bytesCol = c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR);
+                        int totalCol = c.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES);
+
+                        if (statusCol != -1) {
+                            int status = c.getInt(statusCol);
+                            if (it.status != status) {
+                                it.status = status;
+                                changed = true;
+                            }
+                        }
+                        if (bytesCol != -1) {
+                            long bytes = c.getLong(bytesCol);
+                            if (it.downloadedBytes != bytes) {
+                                it.downloadedBytes = bytes;
+                                changed = true;
+                            }
+                        }
+                        if (totalCol != -1) {
+                            long total = c.getLong(totalCol);
+                            if (total > 0 && (it.contentLength <= 0 || it.contentLength != total)) {
+                                it.contentLength = total;
+                                changed = true;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    if (c != null) c.close();
+                }
+            }
+        }
+        if (changed && mDataStore != null) {
+            mDataStore.saveDownloads(mDownloads);
+        }
+    }
+
+    public void openDownloadedFile(DownloadItem it) {
+        openDownloadedFile(it, false);
+    }
+
+    public void openDownloadedFile(DownloadItem it, boolean forceChooser) {
+        if (it == null) return;
+        try {
+            File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File file = new File(dir, it.fileName);
+
+            Uri uri = null;
+            if (file.exists()) {
+                uri = AcidFileProvider.getUriForFile(file);
+            }
+            if (uri == null) {
+                DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm != null && it.downloadId > 0) {
+                    uri = dm.getUriForDownloadedFile(it.downloadId);
+                }
+            }
+
+            if (uri == null) {
+                Toast.makeText(mContext, "未找到下载文件: " + it.fileName, Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            String mime = it.mimeType;
+            String lower = it.fileName != null ? it.fileName.toLowerCase() : "";
+            if (lower.endsWith(".apk")) {
+                mime = "application/vnd.android.package-archive";
+            } else if (mime == null || mime.isEmpty() || "*/*".equals(mime) || "application/octet-stream".equals(mime)) {
+                int dot = lower.lastIndexOf('.');
+                if (dot >= 0 && dot < lower.length() - 1) {
+                    String ext = lower.substring(dot + 1);
+                    String guessed = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+                    if (guessed != null) {
+                        mime = guessed;
+                    }
+                }
+            }
+            if (mime == null || mime.isEmpty()) {
+                mime = "*/*";
+            }
+
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(uri, mime);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
+            if (forceChooser) {
+                Intent chooser = Intent.createChooser(intent, "选择打开方式: " + it.fileName);
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                mContext.startActivity(chooser);
+            } else {
+                mContext.startActivity(intent);
+            }
+        } catch (ActivityNotFoundException anfe) {
+            Toast.makeText(mContext, "系统未找到可打开此类型文件的应用 (" + it.fileName + ")", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(mContext, "无法打开文件: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    public void openDownloadFolder() {
+        try {
+            Intent intent = new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            mContext.startActivity(intent);
+        } catch (Exception e1) {
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW);
+                Uri uri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload");
+                intent.setDataAndType(uri, "vnd.android.document/directory");
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                mContext.startActivity(intent);
+            } catch (Exception e2) {
+                File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                Toast.makeText(mContext, "存储目录: " + dir.getAbsolutePath(), Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    public void copyToClipboard(String text) {
+        if (text == null || text.isEmpty()) return;
+        try {
+            ClipboardManager cm = (ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(ClipData.newPlainText("download_url", text));
+                Toast.makeText(mContext, "已复制下载链接到剪贴板", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(mContext, "复制失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    public boolean removeDownload(long downloadId) {
+        return deleteDownload(downloadId, false);
+    }
+
+    public boolean deleteDownload(long downloadId, boolean deletePhysicalFile) {
+        boolean removed = false;
+        DownloadItem target = null;
+        synchronized (mDownloads) {
+            for (int i = 0; i < mDownloads.size(); i++) {
+                DownloadItem it = mDownloads.get(i);
+                if (it.downloadId == downloadId) {
+                    target = it;
+                    mDownloads.remove(i);
+                    removed = true;
+                    break;
+                }
+            }
+        }
+
+        if (deletePhysicalFile && target != null) {
+            try {
+                File file = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), target.fileName);
+                if (file.exists()) {
+                    file.delete();
+                }
+                DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm != null && downloadId > 0) {
+                    dm.remove(downloadId);
+                }
+            } catch (Exception ignored) {}
+        }
+
+        if (removed && mDataStore != null) {
+            mDataStore.saveDownloads(mDownloads);
+        }
+        return removed;
+    }
+
+    public void clearDownloads() {
+        synchronized (mDownloads) {
+            mDownloads.clear();
+        }
+        if (mDataStore != null) {
+            mDataStore.clearDownloads();
+        }
     }
 
     public String getCookieForUrl(String url) {
