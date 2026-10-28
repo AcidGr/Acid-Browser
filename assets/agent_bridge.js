@@ -48,14 +48,31 @@
     // 3. Track DOM mutations for postcondition verification and DOM quiet checks
     try {
         const mutObserver = new MutationObserver(function (mutations) {
+            let hasExternalChange = false;
             for (let i = 0; i < mutations.length; i++) {
-                const target = mutations[i].target;
-                if (target && (target.id === SOM_OVERLAY_ID || (target.closest && target.closest('#' + SOM_OVERLAY_ID)))) {
-                    continue;
+                const m = mutations[i];
+                const target = m.target;
+                if (target) {
+                    if (target.id === SOM_OVERLAY_ID || (target.closest && target.closest('#' + SOM_OVERLAY_ID))) continue;
+                    if (target.getAttribute && target.getAttribute('data-acid-internal') === 'true') continue;
                 }
+                if (m.addedNodes && m.addedNodes.length > 0) {
+                    let allInternal = true;
+                    for (let j = 0; j < m.addedNodes.length; j++) {
+                        const n = m.addedNodes[j];
+                        if (!n.getAttribute || n.getAttribute('data-acid-internal') !== 'true') {
+                            allInternal = false;
+                            break;
+                        }
+                    }
+                    if (allInternal) continue;
+                }
+                hasExternalChange = true;
+                break;
+            }
+            if (hasExternalChange) {
                 documentRevision++;
                 lastMutationTime = Date.now();
-                break;
             }
         });
         if (document.documentElement) {
@@ -971,6 +988,9 @@
         };
     }
 
+    let lastCheckedRev = -1;
+    let lastCheckedRevTime = 0;
+
     function checkCondition(cond, target, quietMs) {
         cond = (cond || '').toLowerCase();
         const now = Date.now();
@@ -980,8 +1000,12 @@
             return { ok: true, satisfied: ready && quiet, readyState: document.readyState };
         }
         if (cond === 'stable') {
-            const quiet = (now - lastMutationTime) >= (quietMs || 300);
-            return { ok: true, satisfied: quiet, msSinceMutation: now - lastMutationTime };
+            const quiet = (now - lastMutationTime) >= (quietMs || 250);
+            const revisionUnchanged = (lastCheckedRev === documentRevision && (now - lastCheckedRevTime) >= 150);
+            lastCheckedRev = documentRevision;
+            lastCheckedRevTime = now;
+            const satisfied = quiet || revisionUnchanged;
+            return { ok: true, satisfied: satisfied, msSinceMutation: now - lastMutationTime, revision: documentRevision };
         }
         if (cond === 'selector') {
             if (!target) return { ok: false, error: 'Target selector required' };
