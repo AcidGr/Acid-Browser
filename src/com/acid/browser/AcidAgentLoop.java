@@ -288,7 +288,8 @@ public class AcidAgentLoop {
                 mSessionStore.saveActiveSession();
             }
 
-            for (int step = 1; step <= MAX_STEPS_PER_TURN; step++) {
+            // Unlimited ReAct autonomous loop: continues until task completed, stopped by user, or takeover requested
+            for (int step = 1; ; step++) {
                 if (mStopRequested) break;
                 notifyState(true, false, step);
 
