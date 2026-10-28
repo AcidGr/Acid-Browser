@@ -498,20 +498,68 @@ public class AcidAgentLoop {
     }
 
     private String compactOldObservation(String full) {
-        if (full == null || full.length() < 320) return full;
+        if (full == null || full.length() < 300) return full;
+
+        // 1. If it is an eval result, tabs list, or general text/error, DO NOT treat it as a DOM snapshot
+        if (!full.contains("Interactive Elements (")) {
+            // If it is extraordinarily huge (>8192 chars), apply DSH-style head/tail retention
+            if (full.length() > 8192) {
+                return full.substring(0, 4096) +
+                    "\n\n[... historical output middle pruned (" + (full.length() - 5120) + " chars) ...]\n\n" +
+                    full.substring(full.length() - 1024);
+            }
+            return full;
+        }
+
+        // 2. It is a DOM snapshot. Preserve headers, receipt, page title/URL/mode metadata,
+        // but replace the obsolete interactive element handle table [e1..eN] with a clear notice.
         String[] lines = full.split("\n");
         StringBuilder sb = new StringBuilder();
-        int kept = 0;
+        boolean insideElements = false;
+        int elementCount = 0;
+        int keptLines = 0;
+
         for (String line : lines) {
-            if (line.startsWith("=== [BROWSER") || line.startsWith("Receipt:") ||
-                line.startsWith("Page:") || line.startsWith("URL:") || line.startsWith("Mode:")) {
-                sb.append(line).append("\n");
-                kept++;
+            if (line.startsWith("Interactive Elements (")) {
+                insideElements = true;
+                try {
+                    int p1 = line.indexOf('(');
+                    int p2 = line.indexOf(')');
+                    if (p1 >= 0 && p2 > p1) {
+                        elementCount = Integer.parseInt(line.substring(p1 + 1, p2).trim());
+                    }
+                } catch (Exception ignored) {}
+                sb.append("Interactive Elements: [").append(elementCount > 0 ? elementCount : "historical")
+                  .append(" elements expired from earlier step; refer to latest observation]\n");
+                continue;
             }
-            if (kept >= 5) break;
+            if (insideElements) {
+                if (line.startsWith("  [e") || line.startsWith("  [#")) {
+                    continue; // Skip individual stale element lines
+                } else {
+                    insideElements = false;
+                }
+            }
+
+            if (line.startsWith("Page Text Excerpt:")) {
+                sb.append(line).append("\n");
+                keptLines++;
+                continue;
+            }
+
+            // For the body text excerpt under Page Text Excerpt in old snapshots, cap it to 400 chars
+            if (keptLines > 0 && !insideElements) {
+                if (line.length() > 400) {
+                    sb.append(line.substring(0, 360)).append("... [excerpt truncated]\n");
+                } else {
+                    sb.append(line).append("\n");
+                }
+                continue;
+            }
+
+            sb.append(line).append("\n");
         }
-        sb.append("[Historical DOM element list pruned to save context tokens]");
-        return sb.toString();
+        return sb.toString().trim();
     }
 
     private JSONObject callChatCompletionsApi(JSONArray messages) throws Exception {

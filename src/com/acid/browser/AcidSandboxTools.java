@@ -336,7 +336,7 @@ public class AcidSandboxTools {
             String code = args.optString("code", "");
             long timeout = args.optLong("timeout_ms", 10000);
             String raw = mController.evaluateJsAsync(code, timeout);
-            return new ToolExecResult("[BROWSER EVAL RESULT]\n" + raw, false, null);
+            return new ToolExecResult("=== [BROWSER ACTION: EVAL] ===\n" + raw, false, null);
         }
 
         if ("set_mode".equals(action)) {
@@ -380,7 +380,7 @@ public class AcidSandboxTools {
             latch.await(2000, TimeUnit.MILLISECONDS);
             Thread.sleep(400);
 
-            StringBuilder sb = new StringBuilder("[TABS (" + sub + ")]\n");
+            StringBuilder sb = new StringBuilder("=== [BROWSER ACTION: TABS (" + sub.toUpperCase() + ")] ===\n");
             List<BrowserController.TabSession> tabs = mController.getTabs();
             BrowserController.TabSession active = mController.getActiveTab();
             for (BrowserController.TabSession t : tabs) {
@@ -434,11 +434,45 @@ public class AcidSandboxTools {
         return new ToolExecResult("Unknown browser action: " + action, false, null);
     }
 
+    private JSONObject cleanReceipt(JSONObject r) {
+        if (r == null) return null;
+        try {
+            JSONObject c = new JSONObject(r.toString());
+            c.remove("strategy");
+            c.remove("viewX");
+            c.remove("viewY");
+            c.remove("revisionBefore");
+            c.remove("revisionAfter");
+            c.remove("wait_satisfied");
+            c.remove("checks");
+            c.remove("target");
+            if (c.optBoolean("satisfied", false)) {
+                c.remove("last_check");
+                c.remove("quiet_ms");
+                c.remove("timeout_ms");
+            }
+            if (c.has("value")) {
+                String v = c.optString("value", "");
+                if (v.length() > 80) {
+                    c.put("value", v.substring(0, 60) + "... (" + v.length() + " chars)");
+                }
+            }
+            if (c.has("hit") && c.optJSONObject("hit") != null) {
+                JSONObject hit = c.optJSONObject("hit");
+                hit.remove("rect");
+            }
+            return c;
+        } catch (Exception e) {
+            return r;
+        }
+    }
+
     private String formatObservationWithActionHeader(String actionTitle, JSONObject receipt, JSONObject obs) {
         StringBuilder sb = new StringBuilder();
         sb.append("=== [BROWSER ACTION: ").append(actionTitle).append("] ===\n");
         if (receipt != null) {
-            sb.append("Receipt: ").append(receipt.toString()).append("\n");
+            JSONObject cleaned = cleanReceipt(receipt);
+            sb.append("Receipt: ").append(cleaned.toString()).append("\n");
         }
         if (obs != null) {
             String compact = obs.optString("compactText", "");
