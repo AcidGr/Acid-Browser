@@ -361,9 +361,17 @@
                         counter++;
                         const ref = 'e' + counter;
                         refMap[ref] = el;
-
                         const role = (el.getAttribute('role') || '').toLowerCase() || tag;
                         const label = extractElementLabel(el);
+                        refMetaMap[ref] = {
+                            tag: tag,
+                            role: role,
+                            label: cleanText(label, 80),
+                            id: el.id || '',
+                            className: (el.className || '').toString().trim(),
+                            name: el.getAttribute('name') || '',
+                            href: el.getAttribute('href') || ''
+                        };
                         const inputType = tag === 'input' ? (el.type || 'text').toLowerCase() : undefined;
                         const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
                         const checked = (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) ? !!el.checked : undefined;
@@ -512,15 +520,164 @@
         };
     }
 
-    // 8. Prepare Element for Native Touch / Click
-    function prepareClick(ref) {
-        const el = refMap[ref];
-        if (!el) {
-            return { ok: false, error: 'REF_NOT_FOUND', message: 'Element ref ' + ref + ' not found. Run observe first.' };
+    // 8. Fingerprint & Semantic Target Resolver (Auto-Healing & Semantic Locators)
+    function findElementByFingerprint(meta) {
+        if (!meta) return null;
+        if (meta.id) {
+            try {
+                const byId = document.getElementById(meta.id);
+                if (byId && byId.isConnected) return byId;
+            } catch (e) {}
         }
-        if (!el.isConnected) {
-            return { ok: false, error: 'STALE_ELEMENT_REF', message: 'Element ' + ref + ' detached from DOM.' };
+        if (meta.href) {
+            try {
+                const byHref = document.querySelector('[href=' + JSON.stringify(meta.href) + ']');
+                if (byHref && byHref.isConnected) return byHref;
+            } catch (e) {}
         }
+        if (meta.name) {
+            try {
+                const byName = document.querySelector('[name=' + JSON.stringify(meta.name) + ']');
+                if (byName && byName.isConnected) return byName;
+            } catch (e) {}
+        }
+        if (meta.label && meta.label.length >= 2) {
+            const candidates = document.querySelectorAll(meta.tag || 'button, a, div, span, input');
+            for (let i = 0; i < candidates.length; i++) {
+                const c = candidates[i];
+                if (!c.isConnected) continue;
+                const cLabel = extractElementLabel(c).trim();
+                if (cLabel === meta.label) {
+                    return c;
+                }
+            }
+        }
+        return null;
+    }
+
+    function findElementByText(query, exact) {
+        if (!query) return null;
+        const text = String(query).trim();
+        if (!text) return null;
+
+        const interactives = document.querySelectorAll(
+            'button, a, input, select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [onclick], [tabindex]'
+        );
+        let partialMatch = null;
+        for (let i = 0; i < interactives.length; i++) {
+            const el = interactives[i];
+            if (!el.isConnected) continue;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+            const label = extractElementLabel(el).trim();
+            if (label === text) {
+                return el;
+            }
+            if (!exact && label && label.includes(text) && !partialMatch) {
+                partialMatch = el;
+            }
+        }
+        if (partialMatch) return partialMatch;
+
+        const textNodes = document.querySelectorAll('div, span, p, li, h1, h2, h3, h4, h5, h6, label');
+        for (let i = 0; i < textNodes.length; i++) {
+            const el = textNodes[i];
+            if (!el.isConnected) continue;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+            const label = (el.innerText || '').trim();
+            if (label === text) {
+                return el;
+            }
+            if (!exact && label && label.includes(text) && !partialMatch && label.length < text.length + 30) {
+                partialMatch = el;
+            }
+        }
+        return partialMatch;
+    }
+
+    function resolveTargetElement(opts) {
+        if (!opts) return { ok: false, error: 'NO_TARGET_SPECIFIED', message: 'No target ref, text, or selector specified.' };
+        if (typeof opts === 'string') {
+            opts = { ref: opts };
+        }
+
+        const ref = (opts.ref || '').trim();
+        const text = (opts.text || '').trim();
+        const selector = (opts.selector || '').trim();
+        let reResolved = false;
+        let matchedBy = 'ref';
+        let matchedEl = null;
+
+        // 1. Ref match with auto-healing
+        if (ref) {
+            const el = refMap[ref];
+            if (el && el.isConnected) {
+                matchedEl = el;
+            } else {
+                const meta = refMetaMap[ref];
+                if (meta) {
+                    matchedEl = findElementByFingerprint(meta);
+                    if (matchedEl) {
+                        reResolved = true;
+                        refMap[ref] = matchedEl;
+                    }
+                }
+            }
+        }
+
+        // 2. Selector fallback
+        if (!matchedEl && selector) {
+            try {
+                const el = document.querySelector(selector);
+                if (el && el.isConnected) {
+                    matchedEl = el;
+                    matchedBy = 'selector';
+                }
+            } catch (ignored) {}
+        }
+
+        // 3. Text semantic fallback
+        if (!matchedEl && text) {
+            matchedEl = findElementByText(text, opts.exact);
+            if (matchedEl) {
+                matchedBy = 'text';
+            }
+        }
+
+        if (!matchedEl) {
+            if (ref && refMap[ref] && !refMap[ref].isConnected) {
+                return {
+                    ok: false,
+                    error: 'STALE_ELEMENT_REF',
+                    message: 'Element ' + ref + ' detached from DOM and fingerprint auto-healing could not relocate it.',
+                    ref: ref
+                };
+            }
+            return {
+                ok: false,
+                error: 'ELEMENT_NOT_FOUND',
+                message: 'Could not resolve element with ' + (ref ? 'ref="' + ref + '" ' : '') + (text ? 'text="' + text + '" ' : '') + (selector ? 'selector="' + selector + '"' : '')
+            };
+        }
+
+        return {
+            ok: true,
+            el: matchedEl,
+            ref: ref || undefined,
+            matchedBy: matchedBy,
+            re_resolved: reResolved
+        };
+    }
+
+    // 9. Prepare Element for Native Touch / Click
+    function prepareClick(targetOpts) {
+        const resolved = resolveTargetElement(targetOpts);
+        if (!resolved.ok) {
+            return resolved;
+        }
+        const el = resolved.el;
+        const ref = resolved.ref || 'target';
 
         const vh = window.innerHeight || document.documentElement.clientHeight || 640;
         let rect = el.getBoundingClientRect();
@@ -539,11 +696,12 @@
         const scale = vv ? vv.scale : 1;
         const offsetLeft = vv ? vv.offsetLeft : 0;
         const offsetTop = vv ? vv.offsetTop : 0;
+        const label = extractElementLabel(el);
 
         return {
             ok: true,
             ref: ref,
-            label: extractElementLabel(el),
+            label: label,
             tag: (el.tagName || '').toLowerCase(),
             cssX: cssX,
             cssY: cssY,
@@ -551,16 +709,25 @@
             vvOffsetLeft: offsetLeft,
             vvOffsetTop: offsetTop,
             dpr: window.devicePixelRatio || 1,
-            revisionBefore: documentRevision
+            revisionBefore: documentRevision,
+            re_resolved: resolved.re_resolved,
+            matchedBy: resolved.matchedBy,
+            hit: {
+                tag: el.tagName || '',
+                text: cleanText(label, 60),
+                rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)]
+            }
         };
     }
 
-    // 9. JS Synthetic Click Fallback
-    function jsClick(ref) {
-        const el = refMap[ref];
-        if (!el || !el.isConnected) {
-            return { ok: false, error: 'STALE_OR_MISSING_REF', ref: ref };
+    // 10. JS Synthetic Click Fallback
+    function jsClick(targetOpts) {
+        const resolved = resolveTargetElement(targetOpts);
+        if (!resolved.ok) {
+            return resolved;
         }
+        const el = resolved.el;
+        const ref = resolved.ref || 'target';
         const revBefore = documentRevision;
         try {
             el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
@@ -589,7 +756,14 @@
             ref: ref,
             strategy: 'DOM_SYNTHETIC',
             revisionBefore: revBefore,
-            revisionAfter: documentRevision
+            revisionAfter: documentRevision,
+            re_resolved: resolved.re_resolved,
+            matchedBy: resolved.matchedBy,
+            hit: {
+                tag: el.tagName || '',
+                text: cleanText(extractElementLabel(el), 60),
+                rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)]
+            }
         };
     }
 
@@ -621,18 +795,29 @@
             return true;
         } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
             el.focus();
-            el.innerText = finalText;
+            let applied = false;
+            try {
+                if (clear !== false) {
+                    document.execCommand('selectAll', false, null);
+                }
+                applied = document.execCommand('insertText', false, finalText);
+            } catch (e) {}
+            if (!applied) {
+                el.innerText = finalText;
+            }
             el.dispatchEvent(new Event('input', { bubbles: true }));
             return true;
         }
         return false;
     }
 
-    function fill(ref, text, clear, submit) {
-        const el = refMap[ref];
-        if (!el || !el.isConnected) {
-            return { ok: false, error: 'REF_NOT_FOUND_OR_STALE', message: 'Element ' + ref + ' not available.' };
+    function fill(targetOpts, text, clear, submit) {
+        const resolved = resolveTargetElement(targetOpts);
+        if (!resolved.ok) {
+            return resolved;
         }
+        const el = resolved.el;
+        const ref = resolved.ref || 'target';
         const revBefore = documentRevision;
         try {
             el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
@@ -666,10 +851,12 @@
         return {
             ok: true,
             ref: ref,
-            value: isSensitiveInput(el) ? '***' : el.value,
+            value: isSensitiveInput(el) ? '***' : (el.value || el.innerText || ''),
             submitted: !!submit,
             revisionBefore: revBefore,
-            revisionAfter: documentRevision
+            revisionAfter: documentRevision,
+            re_resolved: resolved.re_resolved,
+            matchedBy: resolved.matchedBy
         };
     }
 
@@ -681,15 +868,20 @@
         for (let i = 0; i < fields.length; i++) {
             const f = fields[i];
             const isLast = (i === fields.length - 1) && !!submitLast;
-            results.push(fill(f.ref, f.text || f.value || '', f.clear !== false, isLast || !!f.submit));
+            results.push(fill(f, f.text || f.value || '', f.clear !== false, isLast || !!f.submit));
         }
         return { ok: true, results: results, revision: documentRevision };
     }
 
     // 11. Select Option in <select> Dropdown
-    function selectOption(ref, valueOrLabel) {
-        const el = refMap[ref];
-        if (!el || (el.tagName || '').toLowerCase() !== 'select') {
+    function selectOption(targetOpts, valueOrLabel) {
+        const resolved = resolveTargetElement(targetOpts);
+        if (!resolved.ok) {
+            return resolved;
+        }
+        const el = resolved.el;
+        const ref = resolved.ref || 'target';
+        if ((el.tagName || '').toLowerCase() !== 'select') {
             return { ok: false, error: 'NOT_SELECT_ELEMENT', ref: ref };
         }
         const target = String(valueOrLabel).trim();
@@ -711,7 +903,9 @@
             ok: true,
             ref: ref,
             selectedValue: el.options[matchedIdx].value,
-            selectedText: el.options[matchedIdx].text
+            selectedText: el.options[matchedIdx].text,
+            re_resolved: resolved.re_resolved,
+            matchedBy: resolved.matchedBy
         };
     }
 

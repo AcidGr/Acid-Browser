@@ -642,6 +642,14 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mAutomationDriver.waitConditionSync(condition, target, quietMs, timeoutMs);
     }
 
+    public JSONObject clickTargetSync(JSONObject targetOpts, boolean useNative) {
+        return mAutomationDriver.clickTargetSync(targetOpts, useNative);
+    }
+
+    public JSONObject fillTargetSync(JSONObject targetOpts, String text, boolean clear, boolean submit) {
+        return mAutomationDriver.fillSync(targetOpts, text, clear, submit);
+    }
+
     public void setControlMode(int mode, String reason) {
         mTakeoverReason = (reason != null) ? reason : "";
         mOverlayView.setControlMode(mode);
