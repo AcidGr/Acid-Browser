@@ -91,6 +91,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private BrowserListsSheet mListsSheet;
     private AgentModelSelectorSheet mModelSelectorSheet;
     private ModelProviderConfigSheet mProviderConfigSheet;
+    private AcidBottomSheetView mAboutSheet;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -252,8 +253,19 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onOpenModelProviderConfig() {
                 mProviderConfigSheet.showConfig();
             }
+
+            @Override
+            public void onOpenAbout() {
+                showAboutSheet();
+            }
         });
         mRootContainer.addView(mMenuSheet, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        mAboutSheet = new AcidBottomSheetView(this);
+        mAboutSheet.setTitle("关于");
+        mRootContainer.addView(mAboutSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
@@ -734,6 +746,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mListsSheet != null) mListsSheet.applyTheme(dark);
         if (mModelSelectorSheet != null) mModelSelectorSheet.applyTheme(dark);
         if (mProviderConfigSheet != null) mProviderConfigSheet.applyTheme(dark);
+        if (mAboutSheet != null) mAboutSheet.applyTheme(dark);
     }
 
     private void updateTopAgentButton(boolean running, boolean pausedForTakeover) {
@@ -769,6 +782,129 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         int disabledIcon = AcidTheme.iconDisabled(mIsDarkMode);
         mIconBack.setColor(canBack ? activeIcon : disabledIcon);
         mIconForward.setColor(canForward ? activeIcon : disabledIcon);
+    }
+
+    private void showAboutSheet() {
+        if (mAboutSheet == null) return;
+        mAboutSheet.setTitle("关于 Acid Browser");
+        mAboutSheet.hideAction();
+        LinearLayout container = mAboutSheet.getContentContainer();
+        container.removeAllViews();
+
+        int accent = AcidTheme.accent(mIsDarkMode);
+        int text = AcidTheme.text(mIsDarkMode);
+        int muted = AcidTheme.muted(mIsDarkMode);
+        int cardBg = AcidTheme.cardItemBg(mIsDarkMode);
+        int border = AcidTheme.border(mIsDarkMode);
+        int blue = AcidTheme.COLOR_BLUE;
+
+        // Hero Card: Logo + App Name + Version Badge
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setGravity(Gravity.CENTER);
+        hero.setPadding(dp(16), dp(16), dp(16), dp(16));
+        hero.setBackground(AcidTheme.cardBorderBg(this, cardBg, border, 1, 14));
+        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        hLp.bottomMargin = dp(10);
+        hero.setLayoutParams(hLp);
+
+        AcidIcons.SvgIconView logo = new AcidIcons.SvgIconView(this, AcidIcons.ICON_LOGO, accent, 42);
+        hero.addView(logo);
+
+        TextView tvName = new TextView(this);
+        tvName.setText("Acid Browser");
+        tvName.setTextColor(text);
+        tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f);
+        tvName.setTypeface(Typeface.DEFAULT_BOLD);
+        tvName.setPadding(0, dp(8), 0, dp(2));
+        hero.addView(tvName);
+
+        TextView tvVersion = new TextView(this);
+        tvVersion.setText("版本: v0.2.0");
+        tvVersion.setTextColor(accent);
+        tvVersion.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvVersion.setTypeface(Typeface.DEFAULT_BOLD);
+        tvVersion.setPadding(dp(8), dp(2), dp(8), dp(2));
+        tvVersion.setBackground(AcidTheme.pillBg(this, Color.argb(26, Color.red(accent), Color.green(accent), Color.blue(accent)), 0, 6));
+        hero.addView(tvVersion);
+
+        container.addView(hero);
+
+        // Author & GitHub Info Card
+        LinearLayout infoCard = new LinearLayout(this);
+        infoCard.setOrientation(LinearLayout.VERTICAL);
+        infoCard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        infoCard.setBackground(AcidTheme.cardBorderBg(this, cardBg, border, 1, 12));
+        LinearLayout.LayoutParams acLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        acLp.bottomMargin = dp(10);
+        infoCard.setLayoutParams(acLp);
+
+        TextView lblAuthor = new TextView(this);
+        lblAuthor.setText("作者 / 开发者");
+        lblAuthor.setTextColor(muted);
+        lblAuthor.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        infoCard.addView(lblAuthor);
+
+        TextView tvAuthor = new TextView(this);
+        tvAuthor.setText("酸小明");
+        tvAuthor.setTextColor(text);
+        tvAuthor.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f);
+        tvAuthor.setTypeface(Typeface.DEFAULT_BOLD);
+        tvAuthor.setPadding(0, dp(2), 0, dp(8));
+        infoCard.addView(tvAuthor);
+
+        TextView lblGh = new TextView(this);
+        lblGh.setText("GitHub 主页");
+        lblGh.setTextColor(muted);
+        lblGh.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        infoCard.addView(lblGh);
+
+        TextView tvGh = new TextView(this);
+        tvGh.setText("https://github.com/AcidGr");
+        tvGh.setTextColor(blue);
+        tvGh.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        tvGh.setPadding(0, dp(2), 0, dp(10));
+        infoCard.addView(tvGh);
+
+        TextView btnVisit = new TextView(this);
+        btnVisit.setText("访问作者 GitHub 主页");
+        btnVisit.setTextColor(Color.WHITE);
+        btnVisit.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        btnVisit.setTypeface(Typeface.DEFAULT_BOLD);
+        btnVisit.setGravity(Gravity.CENTER);
+        btnVisit.setPadding(dp(12), dp(9), dp(12), dp(9));
+        btnVisit.setBackground(AcidTheme.pillBg(this, blue, blue, 8));
+        btnVisit.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mAboutSheet.dismiss();
+                mController.loadUrl("https://github.com/AcidGr");
+            }
+        });
+        infoCard.addView(btnVisit);
+
+        container.addView(infoCard);
+
+        // Features Description
+        LinearLayout descCard = new LinearLayout(this);
+        descCard.setOrientation(LinearLayout.VERTICAL);
+        descCard.setPadding(dp(14), dp(10), dp(14), dp(10));
+        descCard.setBackground(AcidTheme.cardBorderBg(this, cardBg, border, 1, 12));
+
+        TextView tvDesc = new TextView(this);
+        tvDesc.setText("Acid Browser 是一款超轻量 (~197 KB)、零敏感权限、原生支持 Agent Loop 与多端视口自由切换的现代 AI 浏览器内核。");
+        tvDesc.setTextColor(muted);
+        tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        tvDesc.setLineSpacing(dp(3), 1f);
+        descCard.addView(tvDesc);
+
+        container.addView(descCard);
+
+        mAboutSheet.show();
     }
 
     private void hideKeyboard() {
@@ -879,6 +1015,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     @Override
     public void onBackPressed() {
+        if (mAboutSheet != null && mAboutSheet.isShowing()) {
+            mAboutSheet.dismiss();
+            return;
+        }
         if (mSessionsSheet != null && mSessionsSheet.isShowing()) {
             mSessionsSheet.dismiss();
             return;
