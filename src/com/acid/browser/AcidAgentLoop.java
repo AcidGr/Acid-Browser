@@ -32,7 +32,7 @@ public class AcidAgentLoop {
     private static final String KEY_MODEL = "model_name";
 
     public static final String DEFAULT_BASE_URL = "https://api.deepseek.com/v1";
-    public static final String DEFAULT_MODEL = "deepseek-chat";
+    public static final String DEFAULT_MODEL = "deepseek-flash";
     private static final int MAX_STEPS_PER_TURN = 35;
 
     public interface AgentLoopListener {

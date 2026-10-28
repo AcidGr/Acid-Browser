@@ -937,7 +937,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         box.setPadding(pad, pad, pad, pad);
 
         TextView tvId = new TextView(ctx);
-        tvId.setText("模型 ID (例如: deepseek-reasoner, gpt-4o, claude-3-5-sonnet-20241022):");
+        tvId.setText("模型 ID (例如: deepseek-flash, gpt-5.4, claude-sonnet-4-5, gemini-3.8-flash):");
         tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         box.addView(tvId);
 
