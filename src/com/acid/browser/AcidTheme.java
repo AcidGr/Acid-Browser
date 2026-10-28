@@ -1,5 +1,6 @@
 package com.acid.browser;
 
+import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -91,5 +92,13 @@ public final class AcidTheme {
         float r = dp(context, radiusDp);
         gd.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
         return gd;
+    }
+
+    public static int dialogTheme(boolean dark) {
+        return dark ? AlertDialog.THEME_DEVICE_DEFAULT_DARK : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT;
+    }
+
+    public static AlertDialog.Builder dialogBuilder(Context context, boolean dark) {
+        return new AlertDialog.Builder(context, dialogTheme(dark));
     }
 }

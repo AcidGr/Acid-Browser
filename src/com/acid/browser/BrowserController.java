@@ -216,10 +216,21 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         AgentOverlayView overlayView,
         BrowserStateListener listener
     ) {
+        this(context, webViewContainer, overlayView, listener, false);
+    }
+
+    public BrowserController(
+        Context context,
+        FrameLayout webViewContainer,
+        AgentOverlayView overlayView,
+        BrowserStateListener listener,
+        boolean isDarkMode
+    ) {
         mContext = context;
         mWebViewContainer = webViewContainer;
         mOverlayView = overlayView;
         mListener = listener;
+        mDarkMode = isDarkMode;
 
         mUserscriptManager = new UserscriptManager(context);
         mAutomationDriver = new WebAutomationDriver(context, this);
@@ -405,6 +416,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     private void configureWebView(final TabSession tab) {
         final WebView wv = tab.webView;
+        wv.setBackgroundColor(AcidTheme.bg(mDarkMode));
         WebSettings s = wv.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -657,6 +669,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void setDarkMode(boolean dark) {
         mDarkMode = dark;
         for (TabSession t : mTabs) {
+            t.webView.setBackgroundColor(AcidTheme.bg(dark));
             if (dark) {
                 injectDarkModeCss(t.webView);
             } else {

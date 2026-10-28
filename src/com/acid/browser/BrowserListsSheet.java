@@ -650,7 +650,7 @@ public class BrowserListsSheet extends AcidBottomSheetView {
                         "重新下载",
                         "删除任务"
                     };
-                    AlertDialog.Builder menuBuilder = new AlertDialog.Builder(getContext());
+                    AlertDialog.Builder menuBuilder = AcidTheme.dialogBuilder(getContext(), mIsDarkMode);
                     menuBuilder.setTitle(it.fileName);
                     menuBuilder.setItems(options, new DialogInterface.OnClickListener() {
                         @Override
@@ -690,7 +690,7 @@ public class BrowserListsSheet extends AcidBottomSheetView {
 
     private void showDeleteConfirmDialog(final BrowserController.DownloadItem it, final LinearLayout itemsContainer) {
         Context ctx = getContext();
-        AlertDialog.Builder delBuilder = new AlertDialog.Builder(ctx);
+        AlertDialog.Builder delBuilder = AcidTheme.dialogBuilder(ctx, mIsDarkMode);
         delBuilder.setTitle("删除");
 
         LinearLayout box = new LinearLayout(ctx);

@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 
 import org.json.JSONObject;
@@ -109,12 +110,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mDataStore = new BrowserDataStore(this);
         mIsDarkMode = mDataStore.isDarkMode();
+        getWindow().setBackgroundDrawable(new ColorDrawable(AcidTheme.bg(mIsDarkMode)));
 
         View root = buildContentView();
         setContentView(root);
 
-        mController = new BrowserController(this, mWebViewContainer, mOverlayView, this);
-        mController.setDarkMode(mIsDarkMode);
+        mController = new BrowserController(this, mWebViewContainer, mOverlayView, this, mIsDarkMode);
         mController.setDataStore(mDataStore);
 
         if (Build.VERSION.SDK_INT >= 23) {
@@ -528,7 +529,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         // --- Center Viewport ---
         mCenterFrame = new FrameLayout(this);
+        mCenterFrame.setBackgroundColor(AcidTheme.bg(mIsDarkMode));
         mWebViewContainer = new FrameLayout(this);
+        mWebViewContainer.setBackgroundColor(AcidTheme.bg(mIsDarkMode));
         mOverlayView = new AgentOverlayView(this);
         mCenterFrame.addView(mWebViewContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         mCenterFrame.addView(mOverlayView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -757,7 +760,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         }
 
+        getWindow().setBackgroundDrawable(new ColorDrawable(bg));
         mMainContentLayout.setBackgroundColor(bg);
+        if (mCenterFrame != null) mCenterFrame.setBackgroundColor(bg);
+        if (mWebViewContainer != null) mWebViewContainer.setBackgroundColor(bg);
         mTopBar.setBackgroundColor(bar);
         mTopBarDivider.setBackgroundColor(border);
         mBottomBar.setBackgroundColor(bar);
@@ -869,7 +875,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         versionRow.setGravity(Gravity.CENTER_VERTICAL);
         versionRow.setPadding(0, dp(4), 0, 0);
 
-        String curVer = "v0.2.0";
+        String curVer = "v0.2.3";
         try {
             android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
             curVer = "v" + pi.versionName;
@@ -1038,7 +1044,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                             String changelog = obj.optString("changelog", "");
 
                             int currentCode = 0;
-                            String currentName = "0.2.0";
+                            String currentName = "0.2.3";
                             try {
                                 android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
                                 currentCode = pi.versionCode;
@@ -1066,7 +1072,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         final String changelog,
         final String downloadUrl
     ) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        AlertDialog.Builder builder = AcidTheme.dialogBuilder(this, mIsDarkMode);
         builder.setTitle("发现新版本 v" + remoteName);
 
         LinearLayout content = new LinearLayout(this);
