@@ -56,8 +56,8 @@ public class AcidSandboxTools {
                 "Action to perform on the browser:\n" +
                 "- 'observe': Inspect current webpage semantic tree ([e1..eN] handles) and text excerpt.\n" +
                 "- 'navigate': Load URL in current tab (supports http/https or file:/// inside workspace).\n" +
-                "- 'click': Tap element by 'ref' (e.g. 'e3') or pixel coordinates ('x', 'y').\n" +
-                "- 'fill': Fill text into input/textarea 'ref' (React/Vue safe, zero soft-keyboard). Optional 'submit'=true.\n" +
+                "- 'click': Tap element by 'ref' (e.g. 'e3'), visible text ('text', e.g. '消息'/'发送'), CSS selector ('selector'), or pixel coordinates ('x', 'y'). Includes auto-healing if the DOM re-rendered.\n" +
+                "- 'fill': Fill text into input/textarea/contenteditable ('ref' or 'selector'). React/Vue safe. Optional 'submit'=true.\n" +
                 "- 'select': Choose option in <select> dropdown 'ref' by value or visible label.\n" +
                 "- 'scroll': Scroll viewport ('direction': 'down'|'up'|'top'|'bottom', 'amount': 0.8).\n" +
                 "- 'wait': Wait for a specific condition ('condition': 'networkidle'|'selector'|'stable'|'text'|'gone'|'ms', optional 'selector', 'text', 'quiet_ms', 'ms', 'timeout_ms'). Automatically returns the latest page observation upon completion.\n" +
@@ -73,9 +73,10 @@ public class AcidSandboxTools {
                 }
             ));
             browserProps.put("url", prop("string", "Target URL for 'navigate' or 'tabs' (new)."));
-            browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'fill', 'select', or container 'scroll'."));
-            browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', or expected text for 'wait' (text/gone)."));
-            browserProps.put("selector", prop("string", "CSS selector for 'wait' condition (selector/gone)."));
+            browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'fill', 'select', or container 'scroll'. Supports auto-healing if the DOM refreshed."));
+            browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', visible element text for semantic 'click' (e.g. '消息'/'发送'), or expected text for 'wait'."));
+            browserProps.put("selector", prop("string", "CSS selector for 'click', 'fill', or 'wait' (e.g. 'a[href*=\"/user/self\"]', 'input[name=\"q\"]')."));
+            browserProps.put("exact", prop("boolean", "Whether semantic text matching requires exact full equality (default false)."));
             browserProps.put("condition", prop("string", "Wait condition for 'wait': 'stable' (DOM quiet), 'selector' (element exists), 'text' (text present), 'gone' (element/text disappeared), 'networkidle' (page loaded), 'ms' (fixed sleep)."));
             browserProps.put("quiet_ms", prop("integer", "Quiet threshold in ms without DOM mutations for 'stable' wait (default 300)."));
             browserProps.put("ms", prop("integer", "Sleep duration in milliseconds for 'wait' (condition='ms')."));
@@ -256,14 +257,18 @@ public class AcidSandboxTools {
         }
 
         if ("click".equals(action)) {
-            String ref = args.optString("ref", "").trim();
             JSONObject clickRes;
-            if (!ref.isEmpty()) {
-                clickRes = mController.clickRefSync(ref, true);
-            } else if (args.has("x") && args.has("y")) {
+            if (args.has("x") && args.has("y")) {
                 clickRes = mController.clickCoordinateSync((float) args.optDouble("x", 0), (float) args.optDouble("y", 0));
+            } else if (args.has("ref") || args.has("text") || args.has("selector")) {
+                JSONObject targetOpts = new JSONObject();
+                if (args.has("ref")) targetOpts.put("ref", args.optString("ref").trim());
+                if (args.has("text")) targetOpts.put("text", args.optString("text").trim());
+                if (args.has("selector")) targetOpts.put("selector", args.optString("selector").trim());
+                if (args.has("exact")) targetOpts.put("exact", args.optBoolean("exact", false));
+                clickRes = mController.clickTargetSync(targetOpts, true);
             } else {
-                return new ToolExecResult("Error: browser click requires 'ref' (e.g. 'e1') or ('x', 'y') coordinates.", false, null);
+                return new ToolExecResult("Error: browser click requires 'ref' (e.g. 'e1'), semantic 'text', 'selector', or ('x', 'y') coordinates.", false, null);
             }
             Thread.sleep(380); // Let page animations/DOM settle after click
             JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
@@ -271,11 +276,13 @@ public class AcidSandboxTools {
         }
 
         if ("fill".equals(action)) {
-            String ref = args.optString("ref", "").trim();
             String text = args.optString("text", "");
             boolean clear = args.optBoolean("clear", true);
             boolean submit = args.optBoolean("submit", false);
-            JSONObject fillRes = mController.fillSync(ref, text, clear, submit);
+            JSONObject targetOpts = new JSONObject();
+            if (args.has("ref")) targetOpts.put("ref", args.optString("ref").trim());
+            if (args.has("selector")) targetOpts.put("selector", args.optString("selector").trim());
+            JSONObject fillRes = mController.fillTargetSync(targetOpts, text, clear, submit);
             if (submit) {
                 Thread.sleep(650);
             } else {

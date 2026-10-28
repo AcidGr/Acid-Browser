@@ -135,26 +135,41 @@ public class WebAutomationDriver {
         final AtomicReference<String> resultRef = new AtomicReference<String>(null);
         mNativeBridge.prepareCall(callId, latch, resultRef);
 
+        String trimmed = (userCode != null) ? userCode.trim() : "";
+        String innerBody;
+        if (trimmed.contains("return ") || trimmed.contains("\n") || trimmed.contains(";") ||
+            trimmed.startsWith("const ") || trimmed.startsWith("let ") || trimmed.startsWith("var ")) {
+            innerBody = trimmed;
+        } else {
+            innerBody = "return (" + trimmed + ");";
+        }
+
         final String wrappedJs = "(function() {\n" +
             "  var __cid = " + JSONObject.quote(callId) + ";\n" +
-            "  (async function() {\n" +
-            "    try {\n" +
-            "      var v = await (async function() { return (" + userCode + "); })();\n" +
-            "      if (v === undefined) v = null;\n" +
-            "      if (v && typeof v === 'object' && v instanceof Element) {\n" +
-            "        v = { tag: v.tagName, id: v.id || '', className: v.className || '', text: (v.innerText || '').substring(0, 150) };\n" +
+            "  try {\n" +
+            "    (async function() {\n" +
+            "      try {\n" +
+            "        var v = await (async function() {\n" + innerBody + "\n})();\n" +
+            "        if (v === undefined) v = null;\n" +
+            "        if (v && typeof v === 'object' && v instanceof Element) {\n" +
+            "          v = { tag: v.tagName, id: v.id || '', className: v.className || '', text: (v.innerText || '').substring(0, 150) };\n" +
+            "        }\n" +
+            "        var payload = JSON.stringify({ ok: true, result: v });\n" +
+            "        if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
+            "          window.__acidNativeHost.resolve(__cid, payload);\n" +
+            "        }\n" +
+            "      } catch (e) {\n" +
+            "        var errPayload = JSON.stringify({ ok: false, error: String(e && e.message || e) });\n" +
+            "        if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
+            "          window.__acidNativeHost.resolve(__cid, errPayload);\n" +
+            "        }\n" +
             "      }\n" +
-            "      var payload = JSON.stringify({ ok: true, result: v });\n" +
-            "      if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
-            "        window.__acidNativeHost.resolve(__cid, payload);\n" +
-            "      }\n" +
-            "    } catch (e) {\n" +
-            "      var errPayload = JSON.stringify({ ok: false, error: String(e && e.message || e) });\n" +
-            "      if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
-            "        window.__acidNativeHost.resolve(__cid, errPayload);\n" +
-            "      }\n" +
+            "    })();\n" +
+            "  } catch (topErr) {\n" +
+            "    if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
+            "      window.__acidNativeHost.resolve(__cid, JSON.stringify({ ok: false, error: 'SYNTAX_ERROR: ' + String(topErr) }));\n" +
             "    }\n" +
-            "  })();\n" +
+            "  }\n" +
             "})();";
 
         mMainHandler.post(new Runnable() {
@@ -357,9 +372,15 @@ public class WebAutomationDriver {
     }
 
     public JSONObject clickRefSync(final String targetRef, final boolean useNativeMotionEvent) {
+        JSONObject opts = new JSONObject();
+        try { opts.put("ref", targetRef); } catch (Exception ignored) {}
+        return clickTargetSync(opts, useNativeMotionEvent);
+    }
+
+    public JSONObject clickTargetSync(final JSONObject targetOpts, final boolean useNativeMotionEvent) {
         try {
             String prepExpr = "(function(){ return JSON.stringify(window.__acidBridge.prepareClick(" +
-                JSONObject.quote(targetRef) + ")); })()";
+                (targetOpts != null ? targetOpts.toString() : "{}") + ")); })()";
             String prepRaw = evaluateJsSync(prepExpr, 4000);
             JSONObject prep = new JSONObject(prepRaw);
             if (!prep.optBoolean("ok", false)) {
@@ -368,8 +389,12 @@ public class WebAutomationDriver {
 
             final double cssX = prep.optDouble("cssX", 0);
             final double cssY = prep.optDouble("cssY", 0);
+            final String targetRef = prep.optString("ref", "target");
             final String label = prep.optString("label", "");
             final int revBefore = prep.optInt("revisionBefore", 0);
+            final boolean reResolved = prep.optBoolean("re_resolved", false);
+            final String matchedBy = prep.optString("matchedBy", "ref");
+            final JSONObject hit = prep.optJSONObject("hit");
 
             if (useNativeMotionEvent) {
                 final CountDownLatch tapLatch = new CountDownLatch(1);
@@ -412,7 +437,8 @@ public class WebAutomationDriver {
 
                 if (!verified) {
                     String fallbackRaw = evaluateJsSync(
-                        "(function(){ return JSON.stringify(window.__acidBridge.jsClick(" + JSONObject.quote(targetRef) + ")); })()",
+                        "(function(){ return JSON.stringify(window.__acidBridge.jsClick(" +
+                        (targetOpts != null ? targetOpts.toString() : "{}") + ")); })()",
                         2000
                     );
                     JSONObject fb = new JSONObject(fallbackRaw);
@@ -421,7 +447,8 @@ public class WebAutomationDriver {
                 }
 
                 mHost.emitLog("[CLICK] [" + targetRef + "] \"" + label + "\" @(" +
-                    Math.round(viewXRef.get()) + "," + Math.round(viewYRef.get()) + ")");
+                    Math.round(viewXRef.get()) + "," + Math.round(viewYRef.get()) + ")" +
+                    (reResolved ? " (re-resolved via " + matchedBy + ")" : ""));
 
                 JSONObject receipt = new JSONObject();
                 receipt.put("ok", true);
@@ -433,13 +460,20 @@ public class WebAutomationDriver {
                 receipt.put("revisionBefore", revBefore);
                 receipt.put("revisionAfter", revAfter);
                 receipt.put("verified", verified);
+                receipt.put("re_resolved", reResolved);
+                receipt.put("matchedBy", matchedBy);
+                if (hit != null) {
+                    receipt.put("hit", hit);
+                }
                 return receipt;
             } else {
                 String jsRaw = evaluateJsSync(
-                    "(function(){ return JSON.stringify(window.__acidBridge.jsClick(" + JSONObject.quote(targetRef) + ")); })()",
+                    "(function(){ return JSON.stringify(window.__acidBridge.jsClick(" +
+                    (targetOpts != null ? targetOpts.toString() : "{}") + ")); })()",
                     3000
                 );
-                mHost.emitLog("[CLICK] JS-Synthetic [" + targetRef + "] \"" + label + "\"");
+                mHost.emitLog("[CLICK] JS-Synthetic [" + targetRef + "] \"" + label + "\"" +
+                    (reResolved ? " (re-resolved via " + matchedBy + ")" : ""));
                 return new JSONObject(jsRaw);
             }
         } catch (Exception e) {
@@ -500,14 +534,15 @@ public class WebAutomationDriver {
         }, 40);
     }
 
-    public JSONObject fillSync(String ref, String text, boolean clear, boolean submit) {
+    public JSONObject fillSync(JSONObject targetOpts, String text, boolean clear, boolean submit) {
         try {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.fill(" +
-                JSONObject.quote(ref) + "," +
+                (targetOpts != null ? targetOpts.toString() : "{}") + "," +
                 JSONObject.quote(text) + "," +
                 clear + "," +
                 submit + ")); })()";
             String raw = evaluateJsSync(expr, 4000);
+            String ref = targetOpts != null ? targetOpts.optString("ref", targetOpts.optString("selector", targetOpts.optString("text", "field"))) : "field";
             mHost.emitLog("[FILL] [" + ref + "] -> \"" + text + "\"" + (submit ? " (submitted)" : ""));
             return new JSONObject(raw);
         } catch (Exception e) {
@@ -515,6 +550,12 @@ public class WebAutomationDriver {
             try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ignored) {}
             return err;
         }
+    }
+
+    public JSONObject fillSync(String ref, String text, boolean clear, boolean submit) {
+        JSONObject opts = new JSONObject();
+        try { opts.put("ref", ref); } catch (Exception ignored) {}
+        return fillSync(opts, text, clear, submit);
     }
 
     public JSONObject fillFormSync(JSONArray fields, boolean submitLast) {

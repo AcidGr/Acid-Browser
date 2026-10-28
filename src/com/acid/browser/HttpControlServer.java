@@ -98,9 +98,29 @@ public class HttpControlServer {
             InputStream is = socket.getInputStream();
             OutputStream os = socket.getOutputStream();
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-            String requestLine = reader.readLine();
-            if (requestLine == null || requestLine.isEmpty()) {
+            ByteArrayOutputStream headerBuf = new ByteArrayOutputStream();
+            int b;
+            int matched = 0;
+            while ((b = is.read()) != -1) {
+                headerBuf.write(b);
+                if ((matched == 0 || matched == 2) && b == '\r') matched++;
+                else if ((matched == 1 || matched == 3) && b == '\n') matched++;
+                else if (b == '\n') {
+                    byte[] raw = headerBuf.toByteArray();
+                    if (raw.length >= 2 && raw[raw.length - 2] == '\n') break;
+                    matched = 0;
+                } else matched = 0;
+                if (matched == 4) break;
+            }
+            if (headerBuf.size() == 0) {
+                socket.close();
+                return;
+            }
+
+            String headerText = headerBuf.toString(StandardCharsets.ISO_8859_1.name());
+            String[] lines = headerText.split("\r?\n");
+            String requestLine = lines.length > 0 ? lines[0] : "";
+            if (requestLine.isEmpty()) {
                 socket.close();
                 return;
             }
@@ -119,8 +139,8 @@ public class HttpControlServer {
             Map<String, String> query = parseQuery(queryStr);
 
             int contentLength = 0;
-            String headerLine;
-            while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
+            for (int i = 1; i < lines.length; i++) {
+                String headerLine = lines[i];
                 int colon = headerLine.indexOf(':');
                 if (colon > 0) {
                     String k = headerLine.substring(0, colon).trim().toLowerCase();
@@ -135,14 +155,14 @@ public class HttpControlServer {
 
             String bodyStr = "";
             if (contentLength > 0) {
-                char[] buf = new char[contentLength];
+                byte[] bodyBytes = new byte[contentLength];
                 int total = 0;
                 while (total < contentLength) {
-                    int n = reader.read(buf, total, contentLength - total);
+                    int n = is.read(bodyBytes, total, contentLength - total);
                     if (n == -1) break;
                     total += n;
                 }
-                bodyStr = new String(buf, 0, total);
+                bodyStr = new String(bodyBytes, 0, total, StandardCharsets.UTF_8);
             }
 
             if ("OPTIONS".equals(method)) {
@@ -232,9 +252,16 @@ public class HttpControlServer {
 
         if ("/api/click".equals(path)) {
             String ref = body.optString("ref", query.get("ref"));
-            if (ref != null && !ref.isEmpty()) {
+            String text = body.optString("text", query.get("text"));
+            String selector = body.optString("selector", query.get("selector"));
+            if ((ref != null && !ref.isEmpty()) || (text != null && !text.isEmpty()) || (selector != null && !selector.isEmpty())) {
                 boolean useNative = body.optBoolean("native", true);
-                return mController.clickRefSync(ref, useNative);
+                JSONObject targetOpts = new JSONObject();
+                if (ref != null && !ref.isEmpty()) targetOpts.put("ref", ref);
+                if (text != null && !text.isEmpty()) targetOpts.put("text", text);
+                if (selector != null && !selector.isEmpty()) targetOpts.put("selector", selector);
+                targetOpts.put("exact", body.optBoolean("exact", false));
+                return mController.clickTargetSync(targetOpts, useNative);
             } else if (body.has("x") && body.has("y")) {
                 float x = (float) body.optDouble("x", 0);
                 float y = (float) body.optDouble("y", 0);
@@ -242,7 +269,7 @@ public class HttpControlServer {
             } else {
                 JSONObject err = new JSONObject();
                 err.put("ok", false);
-                err.put("error", "Provide either 'ref' (e.g. 'e1') or 'x' and 'y' coordinates.");
+                err.put("error", "Provide 'ref', 'text', 'selector', or ('x', 'y') coordinates.");
                 return err;
             }
         }
@@ -254,10 +281,14 @@ public class HttpControlServer {
                 return mController.fillFormSync(fields, submitLast);
             }
             String ref = body.optString("ref", query.get("ref"));
+            String selector = body.optString("selector", query.get("selector"));
             String text = body.optString("text", body.optString("value", ""));
             boolean clear = body.optBoolean("clear", true);
             boolean submit = body.optBoolean("submit", false);
-            return mController.fillSync(ref, text, clear, submit);
+            JSONObject targetOpts = new JSONObject();
+            if (ref != null && !ref.isEmpty()) targetOpts.put("ref", ref);
+            if (selector != null && !selector.isEmpty()) targetOpts.put("selector", selector);
+            return mController.fillTargetSync(targetOpts, text, clear, submit);
         }
 
         if ("/api/select".equals(path)) {
