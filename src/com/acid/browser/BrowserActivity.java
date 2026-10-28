@@ -107,8 +107,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AcidIcons.SvgIconView mSearchIcon;
     private EditText mEtUrl;
     private AcidIcons.SvgIconView mBtnReload;
-    private LinearLayout mBtnTopAgent;
+    private FrameLayout mBtnTopAgent;
     private AcidIcons.SvgIconView mIconTopAgent;
+    private TextView mAgentUnreadBadge;
+    private boolean mHasUnreadAgentMessage = false;
     private View mProgressBar;
 
     // Center Viewport
@@ -193,16 +195,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onLoopStateChanged(boolean running, boolean pausedForTakeover, int step) {
                 int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
                 int muted = mIsDarkMode ? DARK_MUTED : LIGHT_MUTED;
+                int yellow = Color.parseColor("#F59E0B");
                 if (mTvAgentLoopStatus != null) {
                     if (running) {
                         mTvAgentLoopStatus.setText("运行中 · Step " + step);
-                        mTvAgentLoopStatus.setTextColor(accent);
+                        mTvAgentLoopStatus.setTextColor(yellow);
                     } else if (pausedForTakeover) {
                         mTvAgentLoopStatus.setText("等待人工接管协助");
                         mTvAgentLoopStatus.setTextColor(COLOR_AMBER);
                     } else {
                         mTvAgentLoopStatus.setText(mAgentLoop.getModelName());
                         mTvAgentLoopStatus.setTextColor(muted);
+                    }
+                }
+                if (!running && !pausedForTakeover) {
+                    if (mDrawerPanel == null || mDrawerPanel.getVisibility() != View.VISIBLE) {
+                        mHasUnreadAgentMessage = true;
                     }
                 }
                 updateTopAgentButton(running, pausedForTakeover);
@@ -229,6 +237,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onUiItemAdded(AcidSessionStore.UiMessageItem item) {
                 if (mTvAgentSessionTitle != null && mAgentLoop.getActiveSession() != null) {
                     mTvAgentSessionTitle.setText(mAgentLoop.getActiveSession().title);
+                }
+                if (mDrawerPanel == null || mDrawerPanel.getVisibility() != View.VISIBLE) {
+                    if (item != null && (AcidSessionStore.TYPE_ASSISTANT.equals(item.type) || AcidSessionStore.TYPE_ERROR.equals(item.type))) {
+                        mHasUnreadAgentMessage = true;
+                        updateTopAgentButton(mAgentLoop != null && mAgentLoop.isRunning(), mAgentLoop != null && mAgentLoop.isPausedForTakeover());
+                    }
                 }
                 appendUiMessageItemView(item, true);
             }
@@ -390,13 +404,31 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         searchLp.setMargins(dp(6), 0, dp(6), 0);
         mTopBar.addView(mSearchContainer, searchLp);
 
-        // Agent Trigger Icon Button on Top Bar right (replaces SoM, no text, dynamic status color)
-        mBtnTopAgent = new LinearLayout(this);
-        mBtnTopAgent.setGravity(Gravity.CENTER);
-        int pad = dp(6);
+        // Agent Trigger Icon Button on Top Bar right (dynamic status color + unread bubble)
+        mBtnTopAgent = new FrameLayout(this);
+        int pad = dp(5);
         mBtnTopAgent.setPadding(pad, pad, pad, pad);
+
         mIconTopAgent = new AcidIcons.SvgIconView(this, AcidIcons.ICON_AGENT, LIGHT_ICON, 19);
-        mBtnTopAgent.addView(mIconTopAgent);
+        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER
+        );
+        mBtnTopAgent.addView(mIconTopAgent, iconLp);
+
+        // Unread notification badge: red circular bubble with white exclamation mark '!'
+        mAgentUnreadBadge = new TextView(this);
+        mAgentUnreadBadge.setText("!");
+        mAgentUnreadBadge.setTextColor(Color.WHITE);
+        mAgentUnreadBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        mAgentUnreadBadge.setTypeface(Typeface.DEFAULT_BOLD);
+        mAgentUnreadBadge.setGravity(Gravity.CENTER);
+        int badgeSize = dp(13);
+        mAgentUnreadBadge.setBackground(pillBg(Color.parseColor("#EF4444"), Color.WHITE, 6.5f));
+        FrameLayout.LayoutParams badgeLp = new FrameLayout.LayoutParams(badgeSize, badgeSize, Gravity.TOP | Gravity.END);
+        mAgentUnreadBadge.setLayoutParams(badgeLp);
+        mAgentUnreadBadge.setVisibility(View.GONE);
+        mBtnTopAgent.addView(mAgentUnreadBadge);
+
         mBtnTopAgent.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -1626,6 +1658,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private float mUserTargetY = -1;
 
     private void openAgentFloatingWindow() {
+        mHasUnreadAgentMessage = false;
+        if (mAgentUnreadBadge != null) {
+            mAgentUnreadBadge.setVisibility(View.GONE);
+        }
         if (mDrawerPanel != null) {
             mDrawerPanel.setVisibility(View.VISIBLE);
             updateFloatingWindowPosition(false);
@@ -1695,19 +1731,25 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     private void updateTopAgentButton(boolean running, boolean pausedForTakeover) {
         if (mIconTopAgent == null || mBtnTopAgent == null) return;
-        int accent = mIsDarkMode ? DARK_ACCENT : LIGHT_ACCENT;
         if (running) {
-            mIconTopAgent.setColor(accent);
-            int bg = Color.argb(32, Color.red(accent), Color.green(accent), Color.blue(accent));
-            mBtnTopAgent.setBackground(pillBg(bg, accent, 12));
-        } else if (pausedForTakeover) {
-            mIconTopAgent.setColor(COLOR_AMBER);
+            int yellow = Color.parseColor("#F59E0B"); // Bright amber yellow for in-progress running
+            mIconTopAgent.setColor(yellow);
             int bg = Color.argb(32, 245, 158, 11);
-            mBtnTopAgent.setBackground(pillBg(bg, COLOR_AMBER, 12));
+            mBtnTopAgent.setBackground(pillBg(bg, yellow, 12));
+        } else if (pausedForTakeover) {
+            int orange = Color.parseColor("#F97316"); // Alert orange for takeover
+            mIconTopAgent.setColor(orange);
+            int bg = Color.argb(32, 249, 115, 22);
+            mBtnTopAgent.setBackground(pillBg(bg, orange, 12));
         } else {
             int iconCol = mIsDarkMode ? DARK_ICON : LIGHT_ICON;
             mIconTopAgent.setColor(iconCol);
             mBtnTopAgent.setBackground(null);
+        }
+
+        if (mAgentUnreadBadge != null) {
+            boolean showBadge = mHasUnreadAgentMessage && (mDrawerPanel == null || mDrawerPanel.getVisibility() != View.VISIBLE);
+            mAgentUnreadBadge.setVisibility(showBadge ? View.VISIBLE : View.GONE);
         }
     }
 
