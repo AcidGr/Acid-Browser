@@ -35,6 +35,7 @@ public class BrowserMenuSheet extends FrameLayout {
         void onOpenAgentFloatingWindow();
         void onOpenModelProviderConfig();
         void onOpenAbout();
+        void onToggleMcpServer();
     }
 
     /**
@@ -171,8 +172,10 @@ public class BrowserMenuSheet extends FrameLayout {
     private final MenuCardItem mMenuItemAgent;
     private final MenuCardItem mMenuItemModelConfig;
 
-    // Page 2: 9th tool (About)
+    // Page 2: 9th & 10th tools (About, MCP Server)
     private final MenuCardItem mMenuItemAbout;
+    private final MenuCardItem mMenuItemMcp;
+    private boolean mIsMcpRunning = false;
 
     private final MenuActionListener mListener;
     private boolean mIsDarkMode = false;
@@ -401,14 +404,29 @@ public class BrowserMenuSheet extends FrameLayout {
             }
         );
         LinearLayout.LayoutParams aboutLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        aboutLp.rightMargin = AcidTheme.dp(context, 4);
+        aboutLp.rightMargin = AcidTheme.dp(context, 2);
         page2Row1.addView(mMenuItemAbout, aboutLp);
 
-        // 3 transparent placeholder cells to maintain identical 4-column widths
-        for (int i = 0; i < 3; i++) {
+        mMenuItemMcp = new MenuCardItem(
+            context, AcidIcons.ICON_TERMINAL, "MCP 服务",
+            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (mListener != null) mListener.onToggleMcpServer();
+                }
+            }
+        );
+        LinearLayout.LayoutParams mcpLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        mcpLp.leftMargin = AcidTheme.dp(context, 2);
+        mcpLp.rightMargin = AcidTheme.dp(context, 2);
+        page2Row1.addView(mMenuItemMcp, mcpLp);
+
+        // 2 transparent placeholder cells to maintain identical 4-column widths
+        for (int i = 0; i < 2; i++) {
             View placeholder = new View(context);
             LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            if (i > 0) phLp.leftMargin = AcidTheme.dp(context, 2);
+            phLp.leftMargin = AcidTheme.dp(context, 2);
             page2Row1.addView(placeholder, phLp);
         }
         page2.addView(page2Row1);
@@ -584,8 +602,26 @@ public class BrowserMenuSheet extends FrameLayout {
         mMenuItemAgent.update(AcidIcons.ICON_AGENT, "Acid Agent", muted, text, itemBg);
         mMenuItemModelConfig.update(AcidIcons.ICON_MODEL, "模型配置", muted, text, itemBg);
         mMenuItemAbout.update(AcidIcons.ICON_INFO, "关于", muted, text, itemBg);
+        updateMcpState(mIsMcpRunning);
 
         updateIndicator(mCurrentPage);
+    }
+
+    public void updateMcpState(boolean isRunning) {
+        mIsMcpRunning = isRunning;
+        int accent = AcidTheme.accent(mIsDarkMode);
+        int muted = AcidTheme.muted(mIsDarkMode);
+        int text = AcidTheme.text(mIsDarkMode);
+        int itemBg = AcidTheme.menuItemBg(mIsDarkMode);
+        if (mMenuItemMcp != null) {
+            mMenuItemMcp.update(
+                AcidIcons.ICON_TERMINAL,
+                mIsMcpRunning ? "MCP 运行中" : "MCP 已关闭",
+                mIsMcpRunning ? accent : muted,
+                text,
+                itemBg
+            );
+        }
     }
 
     public void applyTheme(boolean isDark) {

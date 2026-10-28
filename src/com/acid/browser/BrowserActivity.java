@@ -278,6 +278,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onOpenAbout() {
                 showAboutSheet();
             }
+
+            @Override
+            public void onToggleMcpServer() {
+                toggleMcpServer();
+            }
         });
         mRootContainer.addView(mMenuSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
@@ -337,7 +342,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         ));
 
         mHttpServer = new HttpControlServer(mController, HttpControlServer.DEFAULT_PORT);
-        mHttpServer.start();
+        boolean mcpEnabled = getSharedPreferences("acid_browser_prefs", MODE_PRIVATE)
+            .getBoolean("mcp_server_enabled", true);
+        if (mcpEnabled) {
+            mHttpServer.start();
+        }
 
         mDownloadReceiver = new BroadcastReceiver() {
             @Override
@@ -712,6 +721,24 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             providerCount,
             modelCount
         );
+        mMenuSheet.updateMcpState(mHttpServer != null && mHttpServer.isRunning());
+    }
+
+    private void toggleMcpServer() {
+        if (mHttpServer == null) return;
+        boolean currentlyRunning = mHttpServer.isRunning();
+        if (currentlyRunning) {
+            mHttpServer.stop();
+            getSharedPreferences("acid_browser_prefs", MODE_PRIVATE)
+                .edit().putBoolean("mcp_server_enabled", false).apply();
+            Toast.makeText(this, "MCP 服务已停止 (3090 端口已释放)", Toast.LENGTH_SHORT).show();
+        } else {
+            mHttpServer.start();
+            getSharedPreferences("acid_browser_prefs", MODE_PRIVATE)
+                .edit().putBoolean("mcp_server_enabled", true).apply();
+            Toast.makeText(this, "MCP 服务已启动 (127.0.0.1:3090)", Toast.LENGTH_SHORT).show();
+        }
+        updateMenuSheetCards();
     }
 
     private void toggleDarkMode() {
