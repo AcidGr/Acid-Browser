@@ -54,6 +54,13 @@ public class AcidIcons {
     public static final int ICON_INCOGNITO = 27;
     public static final int ICON_RETURN = 28;
     public static final int ICON_GLOBE = 29;
+    public static final int ICON_CHEVRON_DOWN = 30;
+    public static final int ICON_CHEVRON_UP = 31;
+    public static final int ICON_CHECK = 32;
+    public static final int ICON_SEND = 33;
+    public static final int ICON_SETTINGS = 34;
+    public static final int ICON_CHAT_LIST = 35;
+    public static final int ICON_FILE = 36;
 
     /**
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
@@ -404,6 +411,42 @@ public class AcidIcons {
                 // SVG Web Globe
                 p.addCircle(12f, 12f, 9f, Path.Direction.CW);
                 p.addPath(parseSvgPath("M 3 12 H 21 M 12 3 C 8.5 7.5 8.5 16.5 12 21 M 12 3 C 15.5 7.5 15.5 16.5 12 21"));
+                break;
+
+            case ICON_CHEVRON_DOWN:
+                p.addPath(parseSvgPath("M 6 9 L 12 15 L 18 9"));
+                break;
+
+            case ICON_CHEVRON_UP:
+                p.addPath(parseSvgPath("M 6 15 L 12 9 L 18 15"));
+                break;
+
+            case ICON_CHECK:
+                p.addCircle(12f, 12f, 9f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 8 12.2 L 10.8 15 L 16.2 9.5"));
+                break;
+
+            case ICON_SEND:
+                // SVG Paper Plane / Up-Right Send Arrow
+                p.addPath(parseSvgPath("M 21 3 L 3 10.5 L 10.5 13.5 L 13.5 21 L 21 3 Z M 10.5 13.5 L 21 3"));
+                break;
+
+            case ICON_SETTINGS:
+                // SVG Sliders / Settings
+                p.addPath(parseSvgPath("M 4 6 H 14 M 18 6 H 20 M 4 12 H 8 M 12 12 H 20 M 4 18 H 16 M 20 18 H 20.5"));
+                p.addCircle(16f, 6f, 2f, Path.Direction.CW);
+                p.addCircle(10f, 12f, 2f, Path.Direction.CW);
+                p.addCircle(18f, 18f, 2f, Path.Direction.CW);
+                break;
+
+            case ICON_CHAT_LIST:
+                // SVG Chat Bubble + Lines
+                p.addPath(parseSvgPath("M 4 4 H 20 V 16 H 8 L 4 20 V 4 Z M 8 8.5 H 16 M 8 12 H 13.5"));
+                break;
+
+            case ICON_FILE:
+                // SVG File Document
+                p.addPath(parseSvgPath("M 6 3 H 14 L 19 8 V 21 H 6 V 3 Z M 14 3 V 8 H 19 M 9 13 H 15 M 9 17 H 15"));
                 break;
 
             default:
