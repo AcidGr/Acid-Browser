@@ -18,6 +18,7 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.io.ByteArrayOutputStream;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -126,73 +127,220 @@ public class WebAutomationDriver {
         return ref.get();
     }
 
-    public String evaluateJsAsync(final String userCode, long timeoutMs) {
-        final String callId = "eval_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 10000);
-        final CountDownLatch latch = new CountDownLatch(1);
-        final AtomicReference<String> resultRef = new AtomicReference<String>(null);
-        mNativeBridge.prepareCall(callId, latch, resultRef);
+    private static final String EVAL_PARSED_MARKER = "__acid_parsed__";
+    private static final String EVAL_PARSED_NOHOST_MARKER = "__acid_parsed_nohost__";
 
-        String trimmed = (userCode != null) ? userCode.trim() : "";
-        String innerBody;
-        if (trimmed.contains("return ") || trimmed.contains("\n") || trimmed.contains(";") ||
-            trimmed.startsWith("const ") || trimmed.startsWith("let ") || trimmed.startsWith("var ")) {
-            innerBody = trimmed;
-        } else {
-            innerBody = "return (" + trimmed + ");";
-        }
+    /**
+     * Shared in-page serializer: Element/NodeList/Map/Set/circular/function/BigInt/NaN safe.
+     * Defines __acidSer(value, mode) -> JSON string payload.
+     */
+    private static final String EVAL_SERIALIZER_JS =
+        "function __acidSer(v, mode){\n" +
+        "  var MAXD=6, MAXN=200, MAXS=100000;\n" +
+        "  var path=[];\n" +
+        "  function isEl(x){ return typeof Element!=='undefined' && x instanceof Element; }\n" +
+        "  function isList(x){ return (typeof NodeList!=='undefined' && x instanceof NodeList) || (typeof HTMLCollection!=='undefined' && x instanceof HTMLCollection); }\n" +
+        "  function elDesc(el){\n" +
+        "    var o={__type:'Element', tag:String(el.tagName||'').toLowerCase()};\n" +
+        "    if (el.id) o.id=el.id;\n" +
+        "    var cn=(typeof el.className==='string')?el.className:(el.getAttribute&&el.getAttribute('class'));\n" +
+        "    if (cn) o.className=String(cn).substring(0,120);\n" +
+        "    var t=String(el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim();\n" +
+        "    if (t) o.text=t.substring(0,150);\n" +
+        "    if (el.getAttribute){ var h=el.getAttribute('href'); if(h) o.href=h; var nm=el.getAttribute('name'); if(nm) o.name=nm; }\n" +
+        "    if ('value' in el && typeof el.value==='string' && el.value) o.value=el.value.substring(0,150);\n" +
+        "    return o;\n" +
+        "  }\n" +
+        "  function conv(x,d){\n" +
+        "    var t=typeof x;\n" +
+        "    if (x===null||t==='boolean'||t==='string') return x;\n" +
+        "    if (t==='number') return isFinite(x)?x:String(x);\n" +
+        "    if (t==='undefined') return null;\n" +
+        "    if (t==='bigint') return x.toString()+'n';\n" +
+        "    if (t==='symbol') return x.toString();\n" +
+        "    if (t==='function') return '[Function '+(x.name||'anonymous')+']';\n" +
+        "    if (path.indexOf(x)>=0) return '[Circular]';\n" +
+        "    if (d>MAXD) return '[MaxDepth]';\n" +
+        "    try {\n" +
+        "      if (typeof window!=='undefined' && x===window) return '[Window '+location.href+']';\n" +
+        "      if (typeof document!=='undefined' && x===document) return '[Document '+location.href+']';\n" +
+        "      if (isEl(x)) return elDesc(x);\n" +
+        "      if (typeof Node!=='undefined' && x instanceof Node) return {__type:x.nodeName, text:String(x.textContent||'').trim().substring(0,150)};\n" +
+        "      if (x instanceof Error) return {__type:'Error', name:x.name, message:x.message};\n" +
+        "      if (x instanceof Date) return isNaN(x.getTime())?'Invalid Date':x.toISOString();\n" +
+        "      if (x instanceof RegExp) return String(x);\n" +
+        "      if (typeof Promise!=='undefined' && x instanceof Promise) return '[Promise]';\n" +
+        "      path.push(x);\n" +
+        "      try {\n" +
+        "        var i, out, n;\n" +
+        "        if (typeof Map!=='undefined' && x instanceof Map){ out={__type:'Map', size:x.size, entries:[]}; n=0; x.forEach(function(val,key){ if(n++<MAXN) out.entries.push([conv(key,d+1),conv(val,d+1)]); }); return out; }\n" +
+        "        if (typeof Set!=='undefined' && x instanceof Set){ out={__type:'Set', size:x.size, values:[]}; n=0; x.forEach(function(val){ if(n++<MAXN) out.values.push(conv(val,d+1)); }); return out; }\n" +
+        "        if (Array.isArray(x) || isList(x) || (typeof ArrayBuffer!=='undefined' && ArrayBuffer.isView && ArrayBuffer.isView(x))){\n" +
+        "          out=[]; n=x.length;\n" +
+        "          for (i=0;i<n && i<MAXN;i++) out.push(conv(x[i],d+1));\n" +
+        "          if (n>MAXN) out.push('[... '+(n-MAXN)+' more]');\n" +
+        "          return out;\n" +
+        "        }\n" +
+        "        if (typeof x.toJSON==='function'){ try { return conv(x.toJSON(),d+1); } catch(e){} }\n" +
+        "        out={}; var keys=Object.keys(x);\n" +
+        "        for (i=0;i<keys.length && i<MAXN;i++){\n" +
+        "          var k=keys[i], val;\n" +
+        "          try { val=x[k]; } catch(e){ out[k]='[Unreadable]'; continue; }\n" +
+        "          if (val===undefined) continue;\n" +
+        "          out[k]=conv(val,d+1);\n" +
+        "        }\n" +
+        "        if (keys.length>MAXN) out.__truncatedKeys=keys.length-MAXN;\n" +
+        "        return out;\n" +
+        "      } finally { path.pop(); }\n" +
+        "    } catch(e){ return '[Unserializable: '+String(e&&e.message||e)+']'; }\n" +
+        "  }\n" +
+        "  var rt;\n" +
+        "  if (v===undefined) rt='undefined'; else if (v===null) rt='null'; else if (Array.isArray(v)) rt='array';\n" +
+        "  else if (isEl(v)) rt='element'; else if (isList(v)) rt='nodelist'; else rt=typeof v;\n" +
+        "  var s;\n" +
+        "  try { s=JSON.stringify({ok:true, result:conv(v,0), result_type:rt, mode:mode}); }\n" +
+        "  catch(e){ s=JSON.stringify({ok:true, result:String(v), result_type:rt, mode:mode, note:'stringify fallback: '+String(e&&e.message||e)}); }\n" +
+        "  if (s.length>MAXS) s=JSON.stringify({ok:true, truncated:true, original_length:s.length, result_type:rt, mode:mode, result_preview:s.substring(0,MAXS)});\n" +
+        "  return s;\n" +
+        "}\n";
 
-        final String wrappedJs = "(function() {\n" +
-            "  var __cid = " + JSONObject.quote(callId) + ";\n" +
-            "  try {\n" +
-            "    (async function() {\n" +
-            "      try {\n" +
-            "        var v = await (async function() {\n" + innerBody + "\n})();\n" +
-            "        if (v === undefined) v = null;\n" +
-            "        if (v && typeof v === 'object' && v instanceof Element) {\n" +
-            "          v = { tag: v.tagName, id: v.id || '', className: v.className || '', text: (v.innerText || '').substring(0, 150) };\n" +
-            "        }\n" +
-            "        var payload = JSON.stringify({ ok: true, result: v });\n" +
-            "        if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
-            "          window.__acidNativeHost.resolve(__cid, payload);\n" +
-            "        }\n" +
-            "      } catch (e) {\n" +
-            "        var errPayload = JSON.stringify({ ok: false, error: String(e && e.message || e) });\n" +
-            "        if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
-            "          window.__acidNativeHost.resolve(__cid, errPayload);\n" +
-            "        }\n" +
-            "      }\n" +
-            "    })();\n" +
-            "  } catch (topErr) {\n" +
-            "    if (window.__acidNativeHost && window.__acidNativeHost.resolve) {\n" +
-            "      window.__acidNativeHost.resolve(__cid, JSON.stringify({ ok: false, error: 'SYNTAX_ERROR: ' + String(topErr) }));\n" +
-            "    }\n" +
-            "  }\n" +
-            "})();";
+    private static String buildEvalWrapper(String callId, String body, String mode) {
+        return "(function(){\n" +
+            "var __acidCid=" + JSONObject.quote(callId) + ";\n" +
+            "var __acidHost=window.__acidNativeHost;\n" +
+            EVAL_SERIALIZER_JS +
+            "function __acidSend(p){\n" +
+            "  if (__acidHost && __acidHost.resolve) { try { __acidHost.resolve(__acidCid, p); return; } catch(e){} }\n" +
+            "  (window.__acidEvalResults = window.__acidEvalResults || {})[__acidCid] = p;\n" +
+            "}\n" +
+            "function __acidErr(e){\n" +
+            "  var o={ok:false, error_code:'JS_EXCEPTION', error:String(e&&e.message||e), mode:" + JSONObject.quote(mode) + "};\n" +
+            "  if (e && e.name) o.name=e.name;\n" +
+            "  if (e && e.stack) o.stack=String(e.stack).split('\\n').slice(0,4).join('\\n');\n" +
+            "  return JSON.stringify(o);\n" +
+            "}\n" +
+            "try {\n" +
+            "  (async function(){\n" + body + "\n})().then(\n" +
+            "    function(v){ var p; try { p=__acidSer(v," + JSONObject.quote(mode) + "); } catch(e){ p=__acidErr(e); } __acidSend(p); },\n" +
+            "    function(e){ __acidSend(__acidErr(e)); });\n" +
+            "} catch(e) { __acidSend(__acidErr(e)); }\n" +
+            "return (__acidHost && __acidHost.resolve) ? " + JSONObject.quote(EVAL_PARSED_MARKER) + " : " +
+            JSONObject.quote(EVAL_PARSED_NOHOST_MARKER) + ";\n" +
+            "})()";
+    }
 
-        mMainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                BrowserController.TabSession activeTab = mHost.getActiveTab();
-                if (activeTab == null || activeTab.webView == null) {
-                    resultRef.set("{\"ok\":false,\"error\":\"NO_ACTIVE_TAB\"}");
-                    latch.countDown();
-                    return;
-                }
-                activeTab.webView.evaluateJavascript(wrappedJs, null);
-            }
-        });
-
+    private static String evalError(String code, String message, long timeoutMs) {
+        JSONObject o = new JSONObject();
         try {
-            boolean done = latch.await(timeoutMs, TimeUnit.MILLISECONDS);
-            if (!done || resultRef.get() == null) {
-                return "{\"ok\":false,\"error\":\"ASYNC_TIMEOUT\",\"timeout_ms\":" + timeoutMs + "}";
+            o.put("ok", false);
+            o.put("error_code", code);
+            o.put("error", message);
+            if (timeoutMs > 0) o.put("timeout_ms", timeoutMs);
+        } catch (Exception ignored) {}
+        return o.toString();
+    }
+
+    /**
+     * Evaluates user JS (expression, statements, or function body; async/await supported) and returns
+     * a JSON string: {ok, result, result_type, mode} or {ok:false, error_code, error}.
+     *
+     * Candidates from {@link JsEvalShaper} are injected in order. A candidate with a syntax error is
+     * rejected by the JS engine before any of it runs (evaluateJavascript yields null instead of the
+     * parse marker), so falling through to the next shape never duplicates side effects.
+     */
+    public String evaluateJsAsync(final String userCode, long timeoutMs) {
+        long effTimeout = Math.max(200, timeoutMs);
+        long deadline = SystemClock.uptimeMillis() + effTimeout;
+        List<JsEvalShaper.Candidate> candidates = JsEvalShaper.candidates(userCode);
+        StringBuilder triedModes = new StringBuilder();
+
+        for (JsEvalShaper.Candidate cand : candidates) {
+            final String callId = "eval_" + System.nanoTime() + "_" + (int) (Math.random() * 100000);
+            final CountDownLatch latch = new CountDownLatch(1);
+            final AtomicReference<String> resultRef = new AtomicReference<String>(null);
+            mNativeBridge.prepareCall(callId, latch, resultRef);
+            try {
+                long remaining = deadline - SystemClock.uptimeMillis();
+                if (remaining <= 0) {
+                    return evalError("ASYNC_TIMEOUT", "eval timed out before code could be injected", effTimeout);
+                }
+                String parsed = evaluateJsSync(buildEvalWrapper(callId, cand.body, cand.mode), Math.min(remaining, 3000));
+                if (parsed != null && parsed.contains("\"NO_ACTIVE_TAB\"")) {
+                    return evalError("NO_ACTIVE_TAB", "no active tab", 0);
+                }
+                boolean viaHost = EVAL_PARSED_MARKER.equals(parsed);
+                boolean viaPoll = EVAL_PARSED_NOHOST_MARKER.equals(parsed);
+                boolean injectTimedOut = parsed != null && parsed.contains("\"TIMEOUT\"");
+                if (!viaHost && !viaPoll && !injectTimedOut) {
+                    // Syntax error for this shape: nothing executed, try the next shape.
+                    if (triedModes.length() > 0) triedModes.append(", ");
+                    triedModes.append(cand.mode);
+                    continue;
+                }
+                if (viaPoll) {
+                    return pollEvalResult(callId, deadline, effTimeout);
+                }
+                // Parsed (or main thread busy running the code): wait for resolution.
+                long wait = deadline - SystemClock.uptimeMillis();
+                boolean done = false;
+                try {
+                    done = wait > 0 && latch.await(wait, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    return evalError("INTERRUPTED", "eval interrupted", 0);
+                }
+                if (!done || resultRef.get() == null) {
+                    return evalError("ASYNC_TIMEOUT",
+                        "code started but its result (or awaited Promise) did not settle within timeout", effTimeout);
+                }
+                return resultRef.get();
+            } finally {
+                mNativeBridge.cleanupCall(callId);
             }
-            return resultRef.get();
-        } catch (InterruptedException e) {
-            return "{\"ok\":false,\"error\":\"INTERRUPTED\"}";
-        } finally {
-            mNativeBridge.cleanupCall(callId);
         }
+
+        JSONObject err = new JSONObject();
+        try {
+            err.put("ok", false);
+            err.put("error_code", "SYNTAX_ERROR");
+            err.put("error", diagnoseSyntaxError(userCode));
+            err.put("tried_modes", triedModes.toString());
+            err.put("hint", "Code was not executed. Pass an expression (e.g. document.title), statements whose last line is the value, or a function body with an explicit return.");
+        } catch (Exception ignored) {}
+        return err.toString();
+    }
+
+    private String pollEvalResult(String callId, long deadline, long effTimeout) {
+        String q = JSONObject.quote(callId);
+        String expr = "(function(){var m=window.__acidEvalResults; if(!m||!(" + q + " in m)) return null;" +
+            " var p=m[" + q + "]; delete m[" + q + "]; return p;})()";
+        while (SystemClock.uptimeMillis() < deadline) {
+            String r = evaluateJsSync(expr, 1000);
+            if (r != null && r.startsWith("{") && !r.contains("\"error\":\"TIMEOUT\"")) {
+                return r;
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                return evalError("INTERRUPTED", "eval interrupted", 0);
+            }
+        }
+        return evalError("ASYNC_TIMEOUT", "code started but its result did not settle within timeout", effTimeout);
+    }
+
+    /** Best-effort SyntaxError message via the AsyncFunction constructor (blocked on strict-CSP pages). */
+    private String diagnoseSyntaxError(String userCode) {
+        String code = userCode == null ? "" : userCode;
+        String expr = "(function(){try{var AF=Object.getPrototypeOf(async function(){}).constructor;" +
+            "new AF(" + JSONObject.quote(code) + ");return 'parse ok';}catch(e){" +
+            "return (e&&e.name?e.name+': ':'')+String(e&&e.message||e);}})()";
+        String r = evaluateJsSync(expr, 1500);
+        if (r == null || r.isEmpty() || r.startsWith("{") || "parse ok".equals(r)) {
+            return "SyntaxError (details unavailable)";
+        }
+        if (r.startsWith("EvalError")) {
+            return "SyntaxError (details unavailable: page CSP blocks eval-based diagnostics)";
+        }
+        return r;
     }
 
     private JSONObject buildFallbackObservation(String errorCode, String message) {
@@ -266,73 +414,151 @@ public class WebAutomationDriver {
         }
     }
 
+    /**
+     * Waits for a condition. Returns a structured receipt:
+     * {ok, satisfied, wait_satisfied, timed_out, condition, target, elapsed_ms, quiet_ms, timeout_ms,
+     *  checks, last_check, error_code?, error?, hint?, url, title, snapshot}
+     * ok == satisfied; a timeout is ok:false + timed_out:true + error_code WAIT_TIMEOUT.
+     */
     public JSONObject waitConditionSync(String condition, String target, long quietMs, long timeoutMs) {
         long effectiveQuietMs = Math.max(50, quietMs > 0 ? quietMs : 300);
         long effectiveTimeout = Math.max(effectiveQuietMs, Math.min(30000, timeoutMs > 0 ? timeoutMs : 5000));
         long startTime = SystemClock.uptimeMillis();
         long deadline = startTime + effectiveTimeout;
 
-        String cond = (condition != null && !condition.isEmpty()) ? condition.toLowerCase().trim() : "stable";
+        String cond = (condition != null && !condition.trim().isEmpty()) ? condition.toLowerCase().trim() : "stable";
+        if ("time".equals(cond) || "sleep".equals(cond)) cond = "ms";
+        if ("load".equals(cond) || "complete".equals(cond)) cond = "networkidle";
+        if ("visible".equals(cond)) cond = "selector";
+        if ("hidden".equals(cond) || "detached".equals(cond)) cond = "gone";
+        String tgt = (target != null && !target.trim().isEmpty()) ? target : null;
 
-        if ("ms".equals(cond) || "time".equals(cond)) {
-            long sleepTime = Math.max(50, Math.min(effectiveTimeout, quietMs > 0 ? quietMs : (target != null && !target.isEmpty() ? Long.parseLong(target) : 1000)));
+        boolean satisfied = false;
+        String errorCode = null;
+        String errorMsg = null;
+        int checks = 0;
+        JSONObject lastCheck = null;
+        long reportedQuiet = effectiveQuietMs;
+        long reportedTimeout = effectiveTimeout;
+
+        boolean known = "stable".equals(cond) || "networkidle".equals(cond) || "selector".equals(cond)
+            || "text".equals(cond) || "gone".equals(cond) || "ms".equals(cond);
+
+        if (!known) {
+            errorCode = "INVALID_ARGUMENT";
+            errorMsg = "Unknown wait condition '" + cond + "'. Use one of: stable, networkidle, selector, text, gone, ms.";
+        } else if (("selector".equals(cond) || "text".equals(cond) || "gone".equals(cond)) && tgt == null) {
+            errorCode = "INVALID_ARGUMENT";
+            errorMsg = "Condition '" + cond + "' requires " + ("text".equals(cond) ? "'text'" : "'selector' (or 'text' for gone)") + ".";
+        } else if ("ms".equals(cond)) {
+            long sleepTime = quietMs > 0 ? quietMs : 1000;
+            if (quietMs <= 0 && tgt != null) {
+                try { sleepTime = Long.parseLong(tgt.trim()); } catch (NumberFormatException ignored) {}
+            }
+            sleepTime = Math.max(0, Math.min(30000, sleepTime));
             try {
                 Thread.sleep(sleepTime);
             } catch (InterruptedException ignored) {}
-            long elapsed = SystemClock.uptimeMillis() - startTime;
-            JSONObject obs = observeSync(mHost.isSomEnabled(), true, false);
-            try {
-                obs.put("wait_satisfied", true);
-                obs.put("wait_condition", "ms");
-                obs.put("elapsed_ms", elapsed);
-            } catch (Exception ignored) {}
-            return obs;
-        }
-
-        boolean satisfied = false;
-        boolean isFirst = true;
-        while (SystemClock.uptimeMillis() < deadline) {
-            String checkExpr = "(function(){\n" +
-                "  if (!window.__acidBridge || !window.__acidBridge.checkCondition) return JSON.stringify({ok:false, error:'BRIDGE_NOT_READY'});\n" +
-                "  return JSON.stringify(window.__acidBridge.checkCondition(" +
-                JSONObject.quote(cond) + ", " +
-                (target != null ? JSONObject.quote(target) : "null") + ", " +
-                effectiveQuietMs + ", " +
-                isFirst + "));\n" +
-                "})()";
-            isFirst = false;
-
-            String raw = evaluateJsSync(checkExpr, 1500);
-            if (raw != null && !raw.isEmpty()) {
-                try {
-                    JSONObject res = new JSONObject(raw);
-                    if (res.optBoolean("satisfied", false)) {
-                        satisfied = true;
-                        break;
+            satisfied = true;
+            reportedQuiet = 0;
+            reportedTimeout = sleepTime;
+        } else {
+            boolean isFirst = true;
+            while (true) {
+                String checkExpr = "(function(){\n" +
+                    "  if (!window.__acidBridge || !window.__acidBridge.checkCondition) return JSON.stringify({ok:false, error:'BRIDGE_NOT_READY'});\n" +
+                    "  return JSON.stringify(window.__acidBridge.checkCondition(" +
+                    JSONObject.quote(cond) + ", " +
+                    (tgt != null ? JSONObject.quote(tgt) : "null") + ", " +
+                    effectiveQuietMs + ", " +
+                    isFirst + "));\n" +
+                    "})()";
+                checks++;
+                String raw = evaluateJsSync(checkExpr, 1500);
+                JSONObject res = null;
+                if (raw != null && raw.startsWith("{")) {
+                    try { res = new JSONObject(raw); } catch (Exception ignored) {}
+                }
+                if (res != null) {
+                    lastCheck = res;
+                    if (res.optBoolean("ok", false)) {
+                        isFirst = false; // baseline is only established once the bridge actually answered
+                        if (res.optBoolean("satisfied", false)) {
+                            satisfied = true;
+                            break;
+                        }
+                    } else {
+                        String e = res.optString("error", "");
+                        if ("NO_ACTIVE_TAB".equals(e)) {
+                            errorCode = "NO_ACTIVE_TAB";
+                            errorMsg = "no active tab";
+                            break;
+                        }
+                        if (!"BRIDGE_NOT_READY".equals(e) && !"TIMEOUT".equals(e)) {
+                            // Deterministic failure (bad selector, unknown condition...): retrying cannot help.
+                            errorCode = "selector".equals(cond) ? "INVALID_SELECTOR" : "INVALID_ARGUMENT";
+                            errorMsg = e;
+                            break;
+                        }
                     }
-                } catch (Exception ignored) {}
+                }
+                if (SystemClock.uptimeMillis() >= deadline) break;
+                try {
+                    Thread.sleep(40);
+                } catch (InterruptedException ignored) {
+                    break;
+                }
+                if (SystemClock.uptimeMillis() >= deadline) break;
             }
-            try {
-                Thread.sleep(40);
-            } catch (InterruptedException ignored) {
-                break;
+            if (!satisfied && errorCode == null) {
+                if (lastCheck == null || "BRIDGE_NOT_READY".equals(lastCheck.optString("error", ""))) {
+                    errorCode = "BRIDGE_NOT_READY";
+                    errorMsg = "agent bridge never became available on this page within " + effectiveTimeout
+                        + "ms (page still loading, or its CSP blocked bridge injection); condition could not be evaluated";
+                } else {
+                    errorCode = "WAIT_TIMEOUT";
+                    errorMsg = "condition '" + cond + "' not satisfied within " + effectiveTimeout + "ms";
+                }
             }
         }
 
         long elapsed = SystemClock.uptimeMillis() - startTime;
-        JSONObject obs = observeSync(mHost.isSomEnabled(), true, false);
+        JSONObject snapshot = observeSync(mHost.isSomEnabled(), true, false);
+        JSONObject out = new JSONObject();
         try {
-            obs.put("wait_satisfied", satisfied);
-            obs.put("wait_condition", cond);
-            obs.put("wait_target", target != null ? target : "");
-            obs.put("elapsed_ms", elapsed);
-            obs.put("quiet_ms", effectiveQuietMs);
-            obs.put("timeout_ms", effectiveTimeout);
-            if (!satisfied) {
-                obs.put("hint", "等待超时未满足条件，页面可能仍未更新或变动持续未达静默阈值 (" + effectiveQuietMs + "ms)");
+            out.put("ok", satisfied);
+            out.put("satisfied", satisfied);
+            out.put("wait_satisfied", satisfied); // backward-compatible alias (v0.2.7)
+            out.put("timed_out", "WAIT_TIMEOUT".equals(errorCode) || "BRIDGE_NOT_READY".equals(errorCode));
+            out.put("condition", cond);
+            out.put("target", tgt != null ? tgt : JSONObject.NULL);
+            out.put("elapsed_ms", elapsed);
+            if ("stable".equals(cond) || "networkidle".equals(cond)) out.put("quiet_ms", reportedQuiet);
+            out.put("timeout_ms", reportedTimeout);
+            out.put("checks", checks);
+            if (lastCheck != null) out.put("last_check", lastCheck);
+            if (errorCode != null) {
+                out.put("error_code", errorCode);
+                out.put("error", errorMsg);
             }
+            if ("WAIT_TIMEOUT".equals(errorCode)) {
+                if ("stable".equals(cond) || "networkidle".equals(cond)) {
+                    out.put("hint", "页面在超时内未能连续静默 " + effectiveQuietMs + "ms（持续有 DOM 变动），可增大 timeout_ms 或改用 selector/text 条件");
+                } else {
+                    out.put("hint", "超时未满足条件，可检查 selector/text 是否正确，或增大 timeout_ms");
+                }
+            } else if ("BRIDGE_NOT_READY".equals(errorCode)) {
+                out.put("hint", "页面内的 agent bridge 未就绪（页面加载中或 CSP 拦截了注入），无法判断条件；可用 browser(action='eval') 直接检查页面状态");
+            } else if ("INVALID_SELECTOR".equals(errorCode) || "INVALID_ARGUMENT".equals(errorCode)) {
+                out.put("hint", "参数错误，已立即返回未等待；请修正后重试");
+            }
+            out.put("url", snapshot.optString("url", snapshot.optJSONObject("partial") != null
+                ? snapshot.optJSONObject("partial").optString("url", "") : ""));
+            out.put("title", snapshot.optString("title", snapshot.optJSONObject("partial") != null
+                ? snapshot.optJSONObject("partial").optString("title", "") : ""));
+            out.put("snapshot", snapshot);
         } catch (Exception ignored) {}
-        return obs;
+        return out;
     }
 
     public JSONObject navigateSync(final String url, long waitSettleMs) {

@@ -307,7 +307,10 @@ public class HttpControlServer {
         if ("/api/wait".equals(path)) {
             String cond = body.optString("condition", query.get("condition") != null ? query.get("condition") : "stable");
             String target = body.optString("target", body.optString("selector", body.optString("text", query.get("target"))));
-            long quietMs = body.optLong("quiet_ms", body.optLong("ms", 300));
+            if (target != null && target.isEmpty()) target = null;
+            long quietMs = "ms".equalsIgnoreCase(cond) || "time".equalsIgnoreCase(cond) || "sleep".equalsIgnoreCase(cond)
+                ? body.optLong("ms", body.optLong("quiet_ms", 1000))
+                : body.optLong("quiet_ms", 300);
             long timeoutMs = body.optLong("timeout_ms", 5000);
             return mController.waitSync(cond, target, quietMs, timeoutMs);
         }
