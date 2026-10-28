@@ -777,6 +777,53 @@
         };
     }
 
+    function checkCondition(cond, target, quietMs) {
+        cond = (cond || '').toLowerCase();
+        const now = Date.now();
+        if (cond === 'networkidle' || cond === 'load' || cond === 'complete') {
+            const ready = document.readyState === 'complete';
+            const quiet = (now - lastMutationTime) >= (quietMs || 250);
+            return { ok: true, satisfied: ready && quiet, readyState: document.readyState };
+        }
+        if (cond === 'stable') {
+            const quiet = (now - lastMutationTime) >= (quietMs || 300);
+            return { ok: true, satisfied: quiet, msSinceMutation: now - lastMutationTime };
+        }
+        if (cond === 'selector') {
+            if (!target) return { ok: false, error: 'Target selector required' };
+            try {
+                const el = document.querySelector(target);
+                const satisfied = !!(el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0));
+                return { ok: true, satisfied: satisfied };
+            } catch (e) {
+                return { ok: false, error: String(e) };
+            }
+        }
+        if (cond === 'text') {
+            if (!target) return { ok: false, error: 'Target text required' };
+            const pageText = document.body ? (document.body.innerText || '') : '';
+            return { ok: true, satisfied: pageText.includes(target) };
+        }
+        if (cond === 'gone') {
+            if (!target) return { ok: false, error: 'Target required for gone condition' };
+            let found = false;
+            try {
+                const el = document.querySelector(target);
+                if (el && (el.offsetWidth > 0 || el.offsetHeight > 0)) {
+                    found = true;
+                }
+            } catch (ignored) {}
+            if (!found) {
+                const pageText = document.body ? (document.body.innerText || '') : '';
+                if (pageText.includes(target)) {
+                    found = true;
+                }
+            }
+            return { ok: true, satisfied: !found };
+        }
+        return { ok: false, error: 'Unknown condition: ' + cond };
+    }
+
     window.__acidBridge = {
         __initialized: true,
         observe: observe,
@@ -789,6 +836,7 @@
         setSomHighlight: setSomHighlight,
         enforceDesktopViewport: enforceDesktopViewport,
         clearSomOverlay: clearSomOverlay,
-        getState: getState
+        getState: getState,
+        checkCondition: checkCondition
     };
 })();

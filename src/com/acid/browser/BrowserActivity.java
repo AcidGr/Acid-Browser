@@ -875,7 +875,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         versionRow.setGravity(Gravity.CENTER_VERTICAL);
         versionRow.setPadding(0, dp(4), 0, 0);
 
-        String curVer = "v0.2.3";
+        String curVer = "v0.2.4";
         try {
             android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
             curVer = "v" + pi.versionName;
@@ -1044,7 +1044,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                             String changelog = obj.optString("changelog", "");
 
                             int currentCode = 0;
-                            String currentName = "0.2.3";
+                            String currentName = "0.2.4";
                             try {
                                 android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
                                 currentCode = pi.versionCode;
