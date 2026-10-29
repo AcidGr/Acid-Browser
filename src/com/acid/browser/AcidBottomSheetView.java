@@ -40,7 +40,7 @@ public class AcidBottomSheetView extends FrameLayout {
 
         // 1. Semi-transparent Scrim
         mScrim = new View(context);
-        mScrim.setBackgroundColor(Color.parseColor("#80000000"));
+        mScrim.setBackgroundColor(AcidTheme.SCRIM);
         mScrim.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -59,7 +59,7 @@ public class AcidBottomSheetView extends FrameLayout {
 
         // Top Handle
         mHandle = new View(context);
-        mHandle.setBackground(AcidTheme.pillBg(context, Color.parseColor("#CBD5E1"), 0, 2));
+        mHandle.setBackground(AcidTheme.pillBg(context, AcidTheme.handle(false), 0, 2));
         LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(AcidTheme.dp(context, 36), AcidTheme.dp(context, 4));
         hLp.gravity = Gravity.CENTER_HORIZONTAL;
         hLp.bottomMargin = AcidTheme.dp(context, 10);
@@ -189,7 +189,7 @@ public class AcidBottomSheetView extends FrameLayout {
         mBtnCloseIcon.setColor(muted);
         mHandle.setBackground(AcidTheme.pillBg(
             getContext(),
-            isDark ? AcidTheme.DARK_BORDER : Color.parseColor("#CBD5E1"),
+            AcidTheme.handle(isDark),
             0,
             2
         ));

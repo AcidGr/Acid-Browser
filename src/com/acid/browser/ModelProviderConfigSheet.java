@@ -103,7 +103,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         final Context ctx = getContext();
         final List<AcidModelStore.ConfiguredProvider> providers = mModelStore.getProviders();
 
-        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
         int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
@@ -337,7 +337,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         container.removeAllViews();
         Context ctx = getContext();
 
-        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
         int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         int textCol = AcidTheme.text(mIsDarkMode);
         int blue = AcidTheme.COLOR_BLUE;
@@ -413,7 +413,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         Context ctx = getContext();
         List<AcidModelStore.CatalogProviderPreset> presets = AcidModelStore.getBuiltinCatalogPresets();
 
-        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
         int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
@@ -549,7 +549,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         final boolean embeddedInAddTab
     ) {
         final Context ctx = getContext();
-        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
         int inputBg = mIsDarkMode ? AcidTheme.DARK_BG : Color.WHITE;
         int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         final int textCol = AcidTheme.text(mIsDarkMode);

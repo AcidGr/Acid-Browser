@@ -42,12 +42,12 @@ public class AcidMarkdownView extends LinearLayout {
         Context ctx = container.getContext();
         float d = ctx.getResources().getDisplayMetrics().density;
 
-        int textColor = darkTheme ? Color.parseColor("#F1F5F9") : Color.parseColor("#0F172A");
-        int mutedColor = darkTheme ? Color.parseColor("#94A3B8") : Color.parseColor("#64748B");
-        int codeBlockBg = darkTheme ? Color.parseColor("#090D16") : Color.parseColor("#1E293B");
-        int codeBlockBorder = darkTheme ? Color.parseColor("#1E293B") : Color.parseColor("#334155");
-        int inlineCodeBg = darkTheme ? Color.parseColor("#1E293B") : Color.parseColor("#E2E8F0");
-        int inlineCodeFg = darkTheme ? Color.parseColor("#38BDF8") : Color.parseColor("#0369A1");
+        int textColor = AcidTheme.markdownText(darkTheme);
+        int mutedColor = AcidTheme.markdownMuted(darkTheme);
+        int codeBlockBg = AcidTheme.codeBlockBg(darkTheme);
+        int codeBlockBorder = AcidTheme.codeBlockBorder(darkTheme);
+        int inlineCodeBg = AcidTheme.inlineCodeBg(darkTheme);
+        int inlineCodeFg = AcidTheme.inlineCodeFg(darkTheme);
 
         String[] rawLines = markdown.replace("\r\n", "\n").split("\n");
         StringBuilder paraBuf = new StringBuilder();
@@ -137,7 +137,7 @@ public class AcidMarkdownView extends LinearLayout {
         box.setPadding(Math.round(8 * d), Math.round(4 * d), Math.round(8 * d), Math.round(4 * d));
 
         GradientDrawable bar = new GradientDrawable();
-        bar.setColor(Color.parseColor("#00BA76"));
+        bar.setColor(AcidTheme.LIGHT_ACCENT);
         bar.setCornerRadius(2 * d);
 
         TextView leftLine = new TextView(ctx);
@@ -180,7 +180,7 @@ public class AcidMarkdownView extends LinearLayout {
         if (lang != null && !lang.isEmpty()) {
             TextView langTv = new TextView(ctx);
             langTv.setText(lang.toUpperCase());
-            langTv.setTextColor(Color.parseColor("#38BDF8"));
+            langTv.setTextColor(AcidTheme.DARK_INLINE_CODE_FG);
             langTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
             langTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
             LinearLayout.LayoutParams lLp = new LinearLayout.LayoutParams(
@@ -195,7 +195,7 @@ public class AcidMarkdownView extends LinearLayout {
 
         TextView codeTv = new TextView(ctx);
         codeTv.setText(code);
-        codeTv.setTextColor(Color.parseColor("#E2E8F0"));
+        codeTv.setTextColor(AcidTheme.DARK_CODE_TEXT);
         codeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.8f);
         codeTv.setTypeface(Typeface.MONOSPACE);
         codeTv.setTextIsSelectable(true);

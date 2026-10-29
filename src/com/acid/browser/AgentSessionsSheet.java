@@ -97,7 +97,7 @@ public class AgentSessionsSheet extends AcidBottomSheetView {
             int pad = AcidTheme.dp(ctx, 10);
             row.setPadding(pad, pad, pad, pad);
             int rowBg = isCurrent
-                ? (mIsDarkMode ? Color.parseColor("#0C4A6E") : Color.parseColor("#E0F2FE"))
+                ? AcidTheme.selectedBg(mIsDarkMode)
                 : AcidTheme.menuItemBg(mIsDarkMode);
             int rowBorder = isCurrent ? AcidTheme.COLOR_TAB_ACTIVE_BORDER : 0;
             row.setBackground(AcidTheme.pillBg(ctx, rowBg, rowBorder, 8));
