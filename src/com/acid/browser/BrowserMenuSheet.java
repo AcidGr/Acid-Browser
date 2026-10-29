@@ -1,6 +1,8 @@
 package com.acid.browser;
 
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
@@ -14,7 +16,10 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
+
+import java.util.List;
 
 /**
  * Bottom Pop-up Menu Panel ("功能" - Modal Bottom Sheet).
@@ -37,6 +42,9 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         void onOpenModelProviderConfig();
         void onOpenAbout();
         void onToggleMcpServer();
+        void onOpenUserscripts();
+        void onRunCustomTool(UserscriptMeta meta);
+        void onEnableCustomTool(UserscriptMeta meta);
     }
 
     /**
@@ -60,6 +68,41 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
             applyCardBg(cardBgColor);
 
             iconView = new AcidIcons.SvgIconView(context, iconId, iconColor, 22);
+            addView(iconView);
+
+            titleView = new TextView(context);
+            titleView.setText(title);
+            titleView.setTextColor(textColor);
+            titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            titleView.setTypeface(Typeface.DEFAULT_BOLD);
+            titleView.setSingleLine(true);
+            titleView.setEllipsize(TextUtils.TruncateAt.END);
+            titleView.setGravity(Gravity.CENTER);
+            LayoutParams tLp = new LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            tLp.topMargin = Math.round(5 * d);
+            addView(titleView, tLp);
+
+            setClickable(true);
+            setFocusable(true);
+            if (listener != null) {
+                setOnClickListener(listener);
+            }
+        }
+
+        public MenuCardItem(Context context, String svgPath, String title,
+                            int iconColor, int textColor, int cardBgColor,
+                            OnClickListener listener) {
+            super(context);
+            setOrientation(VERTICAL);
+            setGravity(Gravity.CENTER);
+            float d = context.getResources().getDisplayMetrics().density;
+            int padH = Math.round(4 * d);
+            int padV = Math.round(9 * d);
+            setPadding(padH, padV, padH, padV);
+
+            applyCardBg(cardBgColor);
+
+            iconView = new AcidIcons.SvgIconView(context, svgPath, iconColor, 22);
             addView(iconView);
 
             titleView = new TextView(context);
@@ -271,6 +314,10 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
     private final View mDot1;
     private final View mDot2;
 
+    // Dynamic strip below the pager for agent-authored scripts.
+    private final ScrollView mCustomToolsScroll;
+    private final LinearLayout mCustomToolsContainer;
+
     // Page 1: 8 tools (4x2)
     private final MenuCardItem mMenuItemNight;
     private final MenuCardItem mMenuItemIncognito;
@@ -281,9 +328,10 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
     private final MenuCardItem mMenuItemAgent;
     private final MenuCardItem mMenuItemModelConfig;
 
-    // Page 2: 9th & 10th tools (About, MCP Server)
+    // Page 2: 9th, 10th & 11th tools (About, MCP Server, Userscripts)
     private final MenuCardItem mMenuItemAbout;
     private final MenuCardItem mMenuItemMcp;
+    private final MenuCardItem mMenuItemScripts;
     private boolean mIsMcpRunning = false;
 
     private final MenuActionListener mListener;
@@ -531,13 +579,27 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         mcpLp.rightMargin = AcidTheme.dp(context, 2);
         page2Row1.addView(mMenuItemMcp, mcpLp);
 
-        // 2 transparent placeholder cells to maintain identical 4-column widths
-        for (int i = 0; i < 2; i++) {
-            View placeholder = new View(context);
-            LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            phLp.leftMargin = AcidTheme.dp(context, 2);
-            page2Row1.addView(placeholder, phLp);
-        }
+        mMenuItemScripts = new MenuCardItem(
+            context, AcidIcons.ICON_FILE, "脚本管理",
+            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    dismiss();
+                    if (mListener != null) mListener.onOpenUserscripts();
+                }
+            }
+        );
+        LinearLayout.LayoutParams scriptsLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        scriptsLp.leftMargin = AcidTheme.dp(context, 2);
+        scriptsLp.rightMargin = AcidTheme.dp(context, 2);
+        page2Row1.addView(mMenuItemScripts, scriptsLp);
+
+        // 1 transparent placeholder cell to maintain identical 4-column widths
+        View placeholder = new View(context);
+        LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        phLp.leftMargin = AcidTheme.dp(context, 2);
+        page2Row1.addView(placeholder, phLp);
         page2.addView(page2Row1);
 
         // Row 2 placeholder row on Page 2 for identical height stability
@@ -546,9 +608,9 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         page2Row2.setPadding(0, AcidTheme.dp(context, 4), 0, AcidTheme.dp(context, 4));
         for (int i = 0; i < 4; i++) {
             View ph = new View(context);
-            LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(0, AcidTheme.dp(context, 54), 1f);
-            if (i > 0) phLp.leftMargin = AcidTheme.dp(context, 2);
-            page2Row2.addView(ph, phLp);
+            LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(0, AcidTheme.dp(context, 54), 1f);
+            if (i > 0) r2Lp.leftMargin = AcidTheme.dp(context, 2);
+            page2Row2.addView(ph, r2Lp);
         }
         page2.addView(page2Row2);
 
@@ -598,6 +660,22 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         mIndicatorBar.addView(mDot2);
 
         mMenuCard.addView(mIndicatorBar);
+
+        // 5. Dynamic area for agent-authored scripts.
+        // Kept outside the pager: the pager's height is fixed at 142dp so both pages line
+        // up, and appending to page 2 would push its content past that clip. A separate
+        // scrollable strip below the dots grows without disturbing the paging geometry.
+        mCustomToolsScroll = new ScrollView(context);
+        mCustomToolsScroll.setVerticalScrollBarEnabled(false);
+        mCustomToolsContainer = new LinearLayout(context);
+        mCustomToolsContainer.setOrientation(LinearLayout.VERTICAL);
+        mCustomToolsScroll.addView(mCustomToolsContainer, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        mCustomToolsScroll.setVisibility(View.GONE);
+        mMenuCard.addView(mCustomToolsScroll, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
 
         // Track page width dynamically
         addOnLayoutChangeListener(new OnLayoutChangeListener() {
@@ -721,6 +799,7 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         mMenuItemAgent.update(AcidIcons.ICON_AGENT, "Acid Agent", muted, text, itemBg);
         mMenuItemModelConfig.update(AcidIcons.ICON_MODEL, "模型配置", muted, text, itemBg);
         mMenuItemAbout.update(AcidIcons.ICON_INFO, "关于", muted, text, itemBg);
+        mMenuItemScripts.update(AcidIcons.ICON_FILE, "脚本管理", muted, text, itemBg);
         updateMcpState(mIsMcpRunning);
 
         updateIndicator(mCurrentPage);
@@ -741,6 +820,184 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
                 itemBg
             );
         }
+    }
+
+    public void renderCustomTools(final List<UserscriptMeta> customTools) {
+        if (mCustomToolsContainer == null || mCustomToolsScroll == null) return;
+        mCustomToolsContainer.removeAllViews();
+        if (customTools == null || customTools.isEmpty()) {
+            mCustomToolsScroll.setVisibility(View.GONE);
+            return;
+        }
+
+        mCustomToolsScroll.setVisibility(View.VISIBLE);
+        Context ctx = getContext();
+        int textCol = AcidTheme.text(mIsDarkMode);
+        int itemBg = AcidTheme.menuItemBg(mIsDarkMode);
+        int accent = AcidTheme.accent(mIsDarkMode);
+        int muted = AcidTheme.muted(mIsDarkMode);
+
+        // Header line: "快捷工具 (N)"
+        LinearLayout header = new LinearLayout(ctx);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(0, AcidTheme.dp(ctx, 8), 0, AcidTheme.dp(ctx, 4));
+
+        TextView tvSection = new TextView(ctx);
+        tvSection.setText("快捷工具 (" + customTools.size() + ")");
+        tvSection.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvSection.setTypeface(Typeface.DEFAULT_BOLD);
+        tvSection.setTextColor(muted);
+        header.addView(tvSection);
+
+        mCustomToolsContainer.addView(header);
+
+        int total = customTools.size();
+        for (int i = 0; i < total; i += 4) {
+            LinearLayout row = new LinearLayout(ctx);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(0, AcidTheme.dp(ctx, 4), 0, AcidTheme.dp(ctx, 4));
+
+            for (int col = 0; col < 4; col++) {
+                int index = i + col;
+                if (index < total) {
+                    final UserscriptMeta tool = customTools.get(index);
+                    int iconColor = tool.enabled ? accent : AcidTheme.COLOR_AMBER;
+                    String title = tool.name;
+                    if (!tool.enabled) {
+                        title = title + " (待启用)";
+                    }
+                    MenuCardItem card = new MenuCardItem(
+                        ctx,
+                        !TextUtils.isEmpty(tool.iconPath) ? tool.iconPath : "M 5 4 H 19 V 20 H 5 Z",
+                        title,
+                        iconColor,
+                        textCol,
+                        itemBg,
+                        new OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                if (!tool.enabled) {
+                                    showScriptConfirmDialog(tool);
+                                } else {
+                                    dismiss();
+                                    if (mListener != null) {
+                                        mListener.onRunCustomTool(tool);
+                                    }
+                                }
+                            }
+                        }
+                    );
+                    card.setOnLongClickListener(new OnLongClickListener() {
+                        @Override
+                        public boolean onLongClick(View v) {
+                            showScriptConfirmDialog(tool);
+                            return true;
+                        }
+                    });
+                    LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                    if (col > 0) cardLp.leftMargin = AcidTheme.dp(ctx, 4);
+                    row.addView(card, cardLp);
+                } else {
+                    View ph = new View(ctx);
+                    LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                    if (col > 0) phLp.leftMargin = AcidTheme.dp(ctx, 4);
+                    row.addView(ph, phLp);
+                }
+            }
+            mCustomToolsContainer.addView(row);
+        }
+    }
+
+    public void showScriptConfirmDialog(final UserscriptMeta meta) {
+        Context ctx = getContext();
+        AlertDialog.Builder b = AcidTheme.dialogBuilder(ctx, mIsDarkMode);
+        b.setTitle((meta.enabled ? "工具详情: " : "启用工具: ") + meta.name);
+
+        LinearLayout box = new LinearLayout(ctx);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int padH = AcidTheme.dp(ctx, 20);
+        int padV = AcidTheme.dp(ctx, 14);
+        box.setPadding(padH, padV, padH, padV);
+
+        LinearLayout header = new LinearLayout(ctx);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        AcidIcons.SvgIconView iconView;
+        if (!TextUtils.isEmpty(meta.iconPath)) {
+            iconView = new AcidIcons.SvgIconView(ctx, meta.iconPath, AcidTheme.accent(mIsDarkMode), 28);
+        } else {
+            iconView = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_FILE, AcidTheme.muted(mIsDarkMode), 28);
+        }
+        header.addView(iconView);
+
+        LinearLayout hText = new LinearLayout(ctx);
+        hText.setOrientation(LinearLayout.VERTICAL);
+        hText.setPadding(AcidTheme.dp(ctx, 12), 0, 0, 0);
+
+        TextView tvTitle = new TextView(ctx);
+        tvTitle.setText(meta.name);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextColor(AcidTheme.text(mIsDarkMode));
+        hText.addView(tvTitle);
+
+        TextView tvScope = new TextView(ctx);
+        tvScope.setText("生效范围: " + meta.describeScope() + "\n时机: " + meta.runAt);
+        tvScope.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        tvScope.setTextColor(AcidTheme.muted(mIsDarkMode));
+        hText.addView(tvScope);
+
+        header.addView(hText);
+        box.addView(header);
+
+        if (!TextUtils.isEmpty(meta.description)) {
+            TextView tvDesc = new TextView(ctx);
+            tvDesc.setText(meta.description);
+            tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            tvDesc.setTextColor(AcidTheme.text(mIsDarkMode));
+            tvDesc.setPadding(0, AcidTheme.dp(ctx, 8), 0, 0);
+            box.addView(tvDesc);
+        }
+
+        TextView tvCode = new TextView(ctx);
+        String body = meta.body != null ? meta.body : "";
+        if (body.length() > 300) body = body.substring(0, 300) + "\n…";
+        tvCode.setText(body);
+        tvCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+        tvCode.setTypeface(Typeface.MONOSPACE);
+        tvCode.setTextColor(AcidTheme.DARK_CODE_TEXT);
+        tvCode.setPadding(AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 8));
+        tvCode.setBackground(AcidTheme.pillBg(ctx, AcidTheme.codeBlockBg(mIsDarkMode), 0, 6));
+        LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cLp.topMargin = AcidTheme.dp(ctx, 10);
+        box.addView(tvCode, cLp);
+
+        b.setView(box);
+        if (!meta.enabled) {
+            b.setPositiveButton("启用并运行", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    if (mListener != null) {
+                        mListener.onEnableCustomTool(meta);
+                    }
+                }
+            });
+        } else {
+            b.setPositiveButton("在当前页运行", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                    dismiss();
+                    if (mListener != null) {
+                        mListener.onRunCustomTool(meta);
+                    }
+                }
+            });
+        }
+        b.setNegativeButton("关闭", null);
+        b.show();
     }
 
     public void applyTheme(boolean isDark) {

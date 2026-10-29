@@ -63,6 +63,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         void onTabsChanged(int tabCount, int activeTabId);
         void onAgentActionLog(String logLine);
         void onDownloadRequested(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength);
+        void onUserscriptInstallRequested(String url, String fileName);
     }
 
     public static class TabSession {
@@ -556,12 +557,27 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         wv.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (url != null && (url.endsWith(".user.js") || url.contains(".user.js?"))) {
+                    String guessName = smartGuessFileName(url, null, "application/javascript");
+                    if (mListener != null) {
+                        mListener.onUserscriptInstallRequested(url, guessName);
+                    }
+                    return true;
+                }
                 return handleUrlIntercept(url);
             }
 
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (Build.VERSION.SDK_INT >= 24 && request != null && request.getUrl() != null) {
-                    return handleUrlIntercept(request.getUrl().toString());
+                    String u = request.getUrl().toString();
+                    if (u.endsWith(".user.js") || u.contains(".user.js?")) {
+                        String guessName = smartGuessFileName(u, null, "application/javascript");
+                        if (mListener != null) {
+                            mListener.onUserscriptInstallRequested(u, guessName);
+                        }
+                        return true;
+                    }
+                    return handleUrlIntercept(u);
                 }
                 return false;
             }
@@ -570,6 +586,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 tab.isLoading = true;
                 tab.url = url;
+                // Earliest available hook: scripts declaring @run-at document-start run
+                // here. The DOM is not built yet, so such scripts are limited to window
+                // level work (patching fetch, navigator, injecting early CSS).
+                mUserscriptManager.injectRuntimeAndUserscripts(
+                    view, url, UserscriptMeta.RUN_AT_START);
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(url, tab.title);
                     mListener.onProgressChanged(0, true);
@@ -580,7 +601,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onPageFinished(WebView view, String url) {
                 tab.isLoading = false;
                 tab.url = url;
-                mUserscriptManager.injectRuntimeAndUserscripts(view);
+                mUserscriptManager.injectRuntimeAndUserscripts(
+                    view, url, UserscriptMeta.RUN_AT_END);
 
                 if (mDarkMode) {
                     injectDarkModeCss(view);
@@ -607,7 +629,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 tab.progress = newProgress;
                 tab.isLoading = (newProgress < 100);
                 if (newProgress > 40) {
-                    mUserscriptManager.injectRuntimeAndUserscripts(view);
+                    mUserscriptManager.injectRuntimeAndUserscripts(
+                        view, view.getUrl(), UserscriptMeta.RUN_AT_IDLE);
                 }
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onProgressChanged(newProgress, tab.isLoading);
@@ -650,6 +673,20 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 final String fileName = smartGuessFileName(url, contentDisposition, mimeType);
                 final String resolvedMime = resolveMimeType(fileName, mimeType);
                 emitLog("[DOWNLOAD] Triggered: " + fileName + " (" + contentLength + " B, " + resolvedMime + ")");
+
+                // Intercept userscript downloads directly into the script installer.
+                if (fileName.endsWith(".user.js") || (url != null && url.contains(".user.js"))) {
+                    mMainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (mListener != null) {
+                                mListener.onUserscriptInstallRequested(url, fileName);
+                            }
+                        }
+                    });
+                    return;
+                }
+
                 mMainHandler.post(new Runnable() {
                     @Override
                     public void run() {
@@ -1350,13 +1387,50 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mUserscriptManager.listUserscriptsJson();
     }
 
+    public List<UserscriptMeta> getUserscripts() {
+        return mUserscriptManager.getScripts();
+    }
+
+    /** Scripts marked {@code @acid-menu true}, ordered for the menu grid. */
+    public List<UserscriptMeta> getMenuUserscripts() {
+        return mUserscriptManager.getMenuScripts();
+    }
+
+    /**
+     * Installs a userscript after validation.
+     *
+     * @return null on success, otherwise a human-readable rejection reason.
+     */
+    public String installUserscript(String fileName, String content) {
+        String error = mUserscriptManager.installUserscript(fileName, content);
+        if (error == null) {
+            emitLog("[PLUGIN] Userscript installed: " + fileName);
+        } else {
+            emitLog("[PLUGIN] Userscript rejected: " + error);
+        }
+        return error;
+    }
+
     public boolean saveUserscript(String name, String code) {
-        boolean ok = mUserscriptManager.saveUserscript(name, code);
-        if (ok) emitLog("[PLUGIN] Userscript installed: " + name);
+        return installUserscript(name, code) == null;
+    }
+
+    /** Runs a script immediately on the active tab, honouring its {@code @match}. */
+    public boolean runUserscriptNow(UserscriptMeta meta) {
+        TabSession tab = getActiveTab();
+        if (tab == null || tab.webView == null) return false;
+        boolean ok = mUserscriptManager.runScriptNow(tab.webView, meta);
+        emitLog(ok
+            ? "[PLUGIN] Ran " + meta.fileName
+            : "[PLUGIN] " + meta.fileName + " does not apply to this page");
         return ok;
     }
 
     public boolean deleteUserscript(String name) {
         return mUserscriptManager.deleteUserscript(name);
+    }
+
+    public boolean setUserscriptEnabled(String name, boolean enabled) {
+        return mUserscriptManager.setScriptEnabled(name, enabled);
     }
 }

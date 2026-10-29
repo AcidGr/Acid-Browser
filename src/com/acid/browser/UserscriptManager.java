@@ -14,21 +14,40 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.regex.Pattern;
 
 /**
- * Manages embedded agent_bridge.js runtime and userscripts filesystem/injection.
+ * Manages the embedded agent_bridge.js runtime and the userscript filesystem/injection.
  *
- * Write policy: every write reports success honestly. A failed write returns false and
+ * <p>Scripts are real userscripts: the {@code ==UserScript==} header is parsed and honoured,
+ * so {@code @match} decides which sites a script runs on and {@code @run-at} decides when.
+ * Before this the header was decorative — every script ran everywhere, at one fixed moment.
+ *
+ * <p>Write policy: every write reports success honestly. A failed write returns false and
  * logs, instead of being swallowed and reported as success to the caller.
  */
 public class UserscriptManager {
 
     private static final String TAG = "AcidUserscripts";
 
+    /** Hard ceiling so a runaway agent cannot fill the disk with generated scripts. */
+    private static final int MAX_SCRIPT_BYTES = 64 * 1024;
+
     private final Context mContext;
     private final File mWorkspaceDir;
     private final File mUserscriptsDir;
     private String mBridgeJs = "";
+
+    /**
+     * Parsed scripts, refreshed from disk when the directory changes. Guarded by itself
+     * because injection happens on the UI thread while saves may arrive from the agent.
+     */
+    private final List<UserscriptMeta> mScripts = new ArrayList<UserscriptMeta>();
+    private boolean mCacheLoaded = false;
 
     public UserscriptManager(Context context) {
         mContext = context.getApplicationContext();
@@ -72,79 +91,261 @@ public class UserscriptManager {
         return mBridgeJs;
     }
 
-    public void injectRuntimeAndUserscripts(WebView wv) {
+    // =========================================================================
+    // Script discovery
+    // =========================================================================
+
+    /** Drops the parsed cache so the next injection re-reads the directory. */
+    public void invalidateCache() {
+        synchronized (mScripts) {
+            mCacheLoaded = false;
+        }
+    }
+
+    private List<UserscriptMeta> loadedScripts() {
+        synchronized (mScripts) {
+            if (!mCacheLoaded) {
+                mScripts.clear();
+                File[] files = mUserscriptsDir.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (!f.isFile() || !f.getName().endsWith(".js")) continue;
+                        String code = readFileText(f);
+                        if (code.isEmpty()) continue;
+                        mScripts.add(UserscriptMeta.parse(f.getName(), code));
+                    }
+                }
+                Collections.sort(mScripts, new Comparator<UserscriptMeta>() {
+                    @Override
+                    public int compare(UserscriptMeta a, UserscriptMeta b) {
+                        return a.fileName.compareTo(b.fileName);
+                    }
+                });
+                mCacheLoaded = true;
+            }
+            return new ArrayList<UserscriptMeta>(mScripts);
+        }
+    }
+
+    /** Every parsed script, for the management sheet and the agent. */
+    public List<UserscriptMeta> getScripts() {
+        return loadedScripts();
+    }
+
+    /** Scripts flagged with {@code @acid-menu true}, ordered by {@code @acid-order}. */
+    public List<UserscriptMeta> getMenuScripts() {
+        List<UserscriptMeta> out = new ArrayList<UserscriptMeta>();
+        for (UserscriptMeta m : loadedScripts()) {
+            if (m.showInMenu) out.add(m);
+        }
+        Collections.sort(out, new Comparator<UserscriptMeta>() {
+            @Override
+            public int compare(UserscriptMeta a, UserscriptMeta b) {
+                if (a.menuOrder != b.menuOrder) return a.menuOrder - b.menuOrder;
+                return a.name.compareTo(b.name);
+            }
+        });
+        return out;
+    }
+
+    // =========================================================================
+    // Injection
+    // =========================================================================
+
+    /**
+     * Injects the bridge plus every script scheduled for this phase.
+     *
+     * @param runAt one of the {@link UserscriptMeta#RUN_AT_START} / {@code END} / {@code IDLE}
+     *              constants. Scripts declared for other phases are skipped.
+     */
+    public void injectRuntimeAndUserscripts(WebView wv, String url, String runAt) {
         if (wv == null) return;
         try {
-            // 1. Inject Agent Bridge core runtime directly via privileged evaluateJavascript
-            // (100% immune to page Content-Security-Policy script-src and TrustedHTML restrictions)
+            // The bridge must exist before any script can call into it, and it is idempotent
+            // on the page side, so every phase injects it.
             if (!mBridgeJs.isEmpty()) {
                 wv.evaluateJavascript(mBridgeJs, null);
             }
 
-            // 2. Inject userscript plugins directly via IIFE wrappers (no DOM script elements)
-            File[] files = mUserscriptsDir.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    if (f.isFile() && f.getName().endsWith(".js")) {
-                        String code = readFileText(f);
-                        if (!code.isEmpty()) {
-                            String safeName = f.getName();
-                            String injectPlugin = "(function(){\n" +
-                                "try {\n" +
-                                "  window.__acidInjectedUserscripts = window.__acidInjectedUserscripts || {};\n" +
-                                "  if (!window.__acidInjectedUserscripts[" + JSONObject.quote(safeName) + "]) {\n" +
-                                "    window.__acidInjectedUserscripts[" + JSONObject.quote(safeName) + "] = true;\n" +
-                                code + "\n" +
-                                "  }\n" +
-                                "} catch(e) { console.error('[AcidUserscriptError]', e); }\n" +
-                                "})();";
-                            wv.evaluateJavascript(injectPlugin, null);
-                        }
-                    }
-                }
+            for (UserscriptMeta meta : loadedScripts()) {
+                if (!meta.enabled) continue;
+                if (!runAt.equals(meta.runAt)) continue;
+                if (!meta.appliesTo(url)) continue;
+                injectOne(wv, meta);
             }
         } catch (Exception e) {
-            Log.w(TAG, "Failed to inject bridge/userscripts into the current page", e);
+            Log.w(TAG, "Failed to inject bridge/userscripts at " + runAt, e);
         }
     }
 
+    /** Convenience overload for callers that only have the WebView. */
+    public void injectRuntimeAndUserscripts(WebView wv) {
+        String url = null;
+        try {
+            url = wv != null ? wv.getUrl() : null;
+        } catch (Exception e) {
+            Log.w(TAG, "Could not read the current URL before injection", e);
+        }
+        injectRuntimeAndUserscripts(wv, url, UserscriptMeta.RUN_AT_IDLE);
+    }
+
+    /**
+     * Runs a single script on demand, ignoring its {@code @run-at} phase but still honouring
+     * its {@code @match}. Used by the menu buttons and by the agent's preview action.
+     */
+    public boolean runScriptNow(WebView wv, UserscriptMeta meta) {
+        if (wv == null || meta == null) return false;
+        String url = null;
+        try {
+            url = wv.getUrl();
+        } catch (Exception e) {
+            Log.w(TAG, "Could not read the current URL before running " + meta.fileName, e);
+        }
+        if (!meta.appliesTo(url)) {
+            Log.i(TAG, "Script " + meta.fileName + " does not apply to " + url);
+            return false;
+        }
+        injectOne(wv, meta);
+        return true;
+    }
+
+    /**
+     * Wraps the script body in an IIFE with a per-file guard so repeated injections on the
+     * same page do not run the body twice.
+     *
+     * <p>The body is passed through {@code evaluateJavascript} rather than appended as a
+     * {@code <script>} element, which keeps working on pages with a strict CSP.
+     */
+    private void injectOne(WebView wv, UserscriptMeta meta) {
+        String code = meta.body;
+        if (code == null || code.trim().isEmpty()) return;
+
+        String guardKey = JSONObject.quote(meta.fileName);
+        String injectPlugin = "(function(){\n" +
+            "try {\n" +
+            "  window.__acidInjectedUserscripts = window.__acidInjectedUserscripts || {};\n" +
+            "  if (!window.__acidInjectedUserscripts[" + guardKey + "]) {\n" +
+            "    window.__acidInjectedUserscripts[" + guardKey + "] = true;\n" +
+            code + "\n" +
+            "  }\n" +
+            "} catch(e) { console.error('[AcidUserscriptError]', e); }\n" +
+            "})();";
+        try {
+            wv.evaluateJavascript(injectPlugin, null);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to inject " + meta.fileName, e);
+        }
+    }
+
+    // =========================================================================
+    // Management
+    // =========================================================================
+
     public JSONArray listUserscriptsJson() {
         JSONArray arr = new JSONArray();
-        File[] files = mUserscriptsDir.listFiles();
-        if (files != null) {
-            for (File f : files) {
-                if (f.isFile() && f.getName().endsWith(".js")) {
-                    JSONObject item = new JSONObject();
-                    try {
-                        item.put("name", f.getName());
-                        item.put("sizeBytes", f.length());
-                    } catch (Exception e) {
-                        Log.w(TAG, "Failed to encode userscript metadata for " + f.getName(), e);
-                        continue;
-                    }
-                    arr.put(item);
-                }
-            }
+        for (UserscriptMeta m : loadedScripts()) {
+            arr.put(m.toJson());
         }
         return arr;
     }
 
-    public boolean saveUserscript(String name, String code) {
-        if (name == null || name.trim().isEmpty()) return false;
-        String safeName = name.replaceAll("[^a-zA-Z0-9._-]", "_");
-        if (!safeName.endsWith(".js")) safeName += ".user.js";
+    /**
+     * Installs a script after validating it.
+     *
+     * @return null on success, or a human-readable error explaining why it was rejected.
+     */
+    public String installUserscript(String fileName, String content) {
+        if (content == null || content.trim().isEmpty()) {
+            return "脚本内容为空";
+        }
+        if (content.length() > MAX_SCRIPT_BYTES) {
+            return "脚本超过 " + (MAX_SCRIPT_BYTES / 1024) + " KB 上限";
+        }
+
+        UserscriptMeta meta = UserscriptMeta.parse(fileName, content);
+        if (!meta.hasMetadata) {
+            return "缺少 ==UserScript== 元数据块，无法确定生效范围";
+        }
+        if (meta.matches.isEmpty() && meta.includes.isEmpty()) {
+            return "缺少 @match 或 @include，无法确定生效范围";
+        }
+
+        String safeName = safeFileName(fileName);
         File f = new File(mUserscriptsDir, safeName);
-        return writeFileText(f, code != null ? code : "");
+        if (!writeFileText(f, content)) {
+            return "写入文件失败: " + f.getAbsolutePath();
+        }
+        invalidateCache();
+        Log.i(TAG, "Installed " + safeName + " (" + meta.describeScope() + ")");
+        return null;
+    }
+
+    public boolean saveUserscript(String name, String code) {
+        return installUserscript(name, code) == null;
     }
 
     public boolean deleteUserscript(String name) {
         if (name == null) return false;
         File f = new File(mUserscriptsDir, name);
         if (f.exists() && f.isFile()) {
-            return f.delete();
+            boolean ok = f.delete();
+            if (ok) invalidateCache();
+            return ok;
         }
         return false;
     }
+
+    public boolean setScriptEnabled(String fileName, boolean enabled) {
+        if (fileName == null) return false;
+        File f = new File(mUserscriptsDir, fileName);
+        if (!f.exists()) return false;
+        String content = readFileText(f);
+        if (content.isEmpty()) return false;
+
+        String pattern = "(?m)^//\\s*@acid-enabled\\s+.*$";
+        String replacement = "// @acid-enabled  " + enabled;
+        String newContent;
+        if (Pattern.compile(pattern).matcher(content).find()) {
+            newContent = content.replaceAll(pattern, replacement);
+        } else {
+            int end = content.indexOf("==/UserScript==");
+            if (end >= 0) {
+                newContent = content.substring(0, end) + replacement + "\n" + content.substring(end);
+            } else {
+                newContent = replacement + "\n" + content;
+            }
+        }
+        boolean ok = writeFileText(f, newContent);
+        if (ok) invalidateCache();
+        return ok;
+    }
+
+    /** Replaces the body of an existing script while preserving its metadata header. */
+    public boolean updateScriptBody(String fileName, String newBody) {
+        File f = new File(mUserscriptsDir, fileName);
+        if (!f.exists()) return false;
+        String original = readFileText(f);
+        if (original.isEmpty()) return false;
+
+        int end = original.indexOf("==/UserScript==");
+        if (end < 0) return false;
+        String header = original.substring(0, end + "==/UserScript==".length());
+        boolean ok = writeFileText(f, header + "\n\n" + (newBody != null ? newBody : ""));
+        if (ok) invalidateCache();
+        return ok;
+    }
+
+    private String safeFileName(String name) {
+        String base = name != null ? name.trim() : "";
+        if (base.isEmpty()) base = "script";
+        base = base.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (!base.endsWith(".js")) base += ".user.js";
+        return base;
+    }
+
+    // =========================================================================
+    // File helpers
+    // =========================================================================
 
     public String readAssetText(String path) {
         try {
@@ -164,19 +365,29 @@ public class UserscriptManager {
     }
 
     public String readFileText(File f) {
+        if (f == null) return "";
+        FileInputStream fis = null;
         try {
             if (!f.exists()) return "";
-            FileInputStream fis = new FileInputStream(f);
+            fis = new FileInputStream(f);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             byte[] buf = new byte[4096];
             int n;
             while ((n = fis.read(buf)) != -1) {
                 baos.write(buf, 0, n);
             }
-            fis.close();
             return baos.toString("UTF-8");
         } catch (Exception e) {
+            Log.w(TAG, "Failed to read " + (f != null ? f.getAbsolutePath() : "?"), e);
             return "";
+        } finally {
+            if (fis != null) {
+                try {
+                    fis.close();
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to close input stream", e);
+                }
+            }
         }
     }
 

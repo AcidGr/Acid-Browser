@@ -488,7 +488,11 @@ public class HttpControlServer {
                 JSONObject toolArgs = params != null ? params.optJSONObject("arguments") : new JSONObject();
                 if (toolArgs == null) toolArgs = new JSONObject();
 
-                AcidSandboxTools.ToolExecResult execRes = mSandboxTools.executeTool(toolName, toolArgs);
+                // Marked as MCP so self-extension tools can refuse the call: this gateway
+                // is reachable from any page on the device and must not be able to install
+                // persistent scripts.
+                AcidSandboxTools.ToolExecResult execRes =
+                    mSandboxTools.executeTool(toolName, toolArgs, AcidSandboxTools.ToolSource.MCP);
 
                 JSONObject result = new JSONObject();
                 JSONArray content = new JSONArray();

@@ -9,6 +9,7 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -24,6 +25,8 @@ import java.util.List;
  * Zero emoji, crisp anti-aliased vector geometry at any screen DPI.
  */
 public class AcidIcons {
+
+    private static final String TAG = "AcidIcons";
 
     public static final int ICON_BACK = 1;
     public static final int ICON_HOME = 2;
@@ -79,6 +82,40 @@ public class AcidIcons {
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
      * in a 24x24 viewBox into an Android Graphics Path.
      */
+    /**
+     * Validates an agent-supplied SVG path before it is persisted.
+     *
+     * <p>{@link #parseSvgPath} silently skips commands it does not implement, so a path
+     * using arcs or smooth-curve shorthands would render as a partial shape with no error
+     * anywhere. This check surfaces the problem while the agent can still fix it.
+     *
+     * @return null when acceptable, otherwise a message naming the offending command.
+     */
+    public static String validateSvgPath(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return "图标路径为空";
+        }
+        String p = path.trim();
+
+        // Only command letters count; coordinates and exponents are digits, dots, signs,
+        // and the letter 'e' used in scientific notation.
+        for (int i = 0; i < p.length(); i++) {
+            char c = p.charAt(i);
+            if (c == 'A' || c == 'a') {
+                return "不支持弧线命令 A，请用多段 C 或 Q 曲线近似圆/弧";
+            }
+            if (c == 'S' || c == 's' || c == 'T' || c == 't') {
+                return "不支持平滑曲线命令 " + c + "，请改用完整的三次/二次贝塞尔 C 或 Q";
+            }
+        }
+
+        Path parsed = parseSvgPath(p);
+        if (parsed == null || parsed.isEmpty()) {
+            return "图标路径未产生任何图形，请检查坐标是否落在 24x24 范围内";
+        }
+        return null;
+    }
+
     public static Path parseSvgPath(String d) {
         Path p = new Path();
         if (d == null || d.isEmpty()) return p;
@@ -570,7 +607,35 @@ public class AcidIcons {
             mIconId = iconId;
             mColor = color;
             mBasePath = buildIconPath24(iconId);
+            initPaintAndSize(context, color, sizeDp);
+        }
 
+        /**
+         * Renders an icon from a raw SVG path string instead of a compiled-in icon id.
+         *
+         * <p>Needed by agent-generated menu entries, whose glyphs do not exist at compile
+         * time. Only the command subset understood by {@link AcidIcons#parseSvgPath} is
+         * supported: M, L, H, V, C, Q and Z (upper and lower case). Arcs (A) and the
+         * smooth-curve shorthands (S, T) are silently ignored by the parser, so callers
+         * must validate the path first — see {@link #isSupportedSvgPath(String)}.
+         *
+         * <p>A path that yields no geometry falls back to a placeholder circle rather than
+         * rendering an invisible icon, so a bad path is visible rather than mysterious.
+         */
+        public SvgIconView(Context context, String svgPath, int color, int sizeDp) {
+            super(context);
+            mIconId = -1;
+            mColor = color;
+            mBasePath = parseSvgPath(svgPath != null ? svgPath : "");
+            if (mBasePath == null || mBasePath.isEmpty()) {
+                Log.w(TAG, "SVG path produced no geometry; drawing a placeholder: " + svgPath);
+                mBasePath = new Path();
+                mBasePath.addCircle(12f, 12f, 8f, Path.Direction.CW);
+            }
+            initPaintAndSize(context, color, sizeDp);
+        }
+
+        private void initPaintAndSize(Context context, int color, int sizeDp) {
             mPaint.setStyle(Paint.Style.STROKE);
             mPaint.setStrokeCap(Paint.Cap.ROUND);
             mPaint.setStrokeJoin(Paint.Join.ROUND);
