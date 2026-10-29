@@ -27,6 +27,9 @@ public class BrowserDataStore {
     public static final String PREF_HISTORY = "history";
     public static final String PREF_DARK_MODE = "dark_mode";
     public static final String PREF_DOWNLOADS = "downloads";
+    public static final String PREF_ADBLOCK_ENABLED = "adblock_enabled";
+    public static final String PREF_ADBLOCK_BLOCKED_COUNT = "adblock_blocked_count";
+    public static final String PREF_ADBLOCK_SUBSCRIPTION_URL = "adblock_sub_url";
 
     public static class EntryItem {
         public final String title;
@@ -52,6 +55,39 @@ public class BrowserDataStore {
     public void setDarkMode(boolean dark) {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putBoolean(PREF_DARK_MODE, dark);
+        ed.apply();
+    }
+
+    public boolean isAdBlockEnabled() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(PREF_ADBLOCK_ENABLED, true);
+    }
+
+    public void setAdBlockEnabled(boolean enabled) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putBoolean(PREF_ADBLOCK_ENABLED, enabled);
+        ed.apply();
+    }
+
+    public int getAdBlockBlockedCount() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getInt(PREF_ADBLOCK_BLOCKED_COUNT, 0);
+    }
+
+    public void setAdBlockBlockedCount(int count) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putInt(PREF_ADBLOCK_BLOCKED_COUNT, count);
+        ed.apply();
+    }
+
+    public String getAdBlockSubscriptionUrl() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(PREF_ADBLOCK_SUBSCRIPTION_URL, "https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/master/anti-ad-easylist.txt");
+    }
+
+    public void setAdBlockSubscriptionUrl(String url) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putString(PREF_ADBLOCK_SUBSCRIPTION_URL, url != null ? url.trim() : "");
         ed.apply();
     }
 

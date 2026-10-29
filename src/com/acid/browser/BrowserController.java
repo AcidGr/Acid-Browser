@@ -28,6 +28,7 @@ import android.webkit.MimeTypeMap;
 import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -284,6 +285,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mDarkMode = isDarkMode;
 
         mUserscriptManager = new UserscriptManager(context);
+        AdBlockManager.getInstance(context).setWorkspaceDir(getWorkspaceDir());
         mAutomationDriver = new WebAutomationDriver(context, this);
 
         if (mOverlayView != null) {
@@ -301,6 +303,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
 
         createNewTab(HOME_URL, true);
+    }
+
+    public Context getContext() {
+        return mContext;
     }
 
     public UserscriptManager getUserscriptManager() {
@@ -641,6 +647,29 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
         wv.setWebViewClient(new WebViewClient() {
             @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (request != null && request.getUrl() != null) {
+                    WebResourceResponse resp = AdBlockManager.getInstance(mContext).shouldIntercept(request.getUrl());
+                    if (resp != null) {
+                        return resp;
+                    }
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
+            @SuppressWarnings("deprecation")
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+                if (url != null) {
+                    WebResourceResponse resp = AdBlockManager.getInstance(mContext).shouldIntercept(Uri.parse(url));
+                    if (resp != null) {
+                        return resp;
+                    }
+                }
+                return super.shouldInterceptRequest(view, url);
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 if (url != null && (url.endsWith(".user.js") || url.contains(".user.js?"))) {
                     String guessName = smartGuessFileName(url, null, "application/javascript");
@@ -676,6 +705,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 // level work (patching fetch, navigator, injecting early CSS).
                 mUserscriptManager.injectRuntimeAndUserscripts(
                     view, url, UserscriptMeta.RUN_AT_START);
+                AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(url, tab.title);
                     mListener.onProgressChanged(0, true);
@@ -688,6 +718,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 tab.url = url;
                 mUserscriptManager.injectRuntimeAndUserscripts(
                     view, url, UserscriptMeta.RUN_AT_END);
+                AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
 
                 if (mDarkMode) {
                     injectDarkModeCss(view);
