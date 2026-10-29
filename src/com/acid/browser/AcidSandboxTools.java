@@ -118,11 +118,16 @@ public class AcidSandboxTools {
 
             // 3. write
             JSONObject writeProps = new JSONObject();
-            writeProps.put("file_path", prop("string", "Path to write (relative to sandbox workspace). Writing to 'userscripts/<name>.user.js' automatically installs a browser userscript plugin."));
+            writeProps.put("file_path", prop("string",
+                "Path to write (relative to sandbox workspace). Writing to 'userscripts/<name>.user.js' "
+                + "installs a browser userscript; the file MUST contain a complete ==UserScript== header "
+                + "with at least @name and @match, otherwise the install is rejected."));
             writeProps.put("content", prop("string", "Complete UTF-8 text content to write."));
             tools.put(makeTool(
                 "write",
-                "Create or overwrite a UTF-8 text file in the sandbox workspace (e.g. HTML reports, JSON data, scripts, or 'userscripts/*.user.js' browser plugins).",
+                "Create or overwrite a UTF-8 text file in the sandbox workspace (e.g. HTML reports, JSON data, scripts). "
+                + "Files written under 'userscripts/' are validated and installed as browser plugins that run on the "
+                + "sites named by their @match header.",
                 writeProps,
                 new String[]{"file_path", "content"}
             ));
@@ -150,6 +155,38 @@ public class AcidSandboxTools {
                 "/data/user/0/com.acid.browser/files/workspace`). Returns stdout, stderr, and exit code.",
                 bashProps,
                 new String[]{"command"}
+            ));
+
+            // 6. create_script (agent-authored browser feature)
+            JSONObject createProps = new JSONObject();
+            createProps.put("name", prop("string",
+                "Menu label shown to the user. Keep it short (<= 6 Chinese characters), e.g. '看书模式'."));
+            createProps.put("description", prop("string",
+                "One sentence explaining what the feature does. Shown in the management list."));
+            createProps.put("match", prop("string",
+                "Sites the script runs on, in userscript glob form: '*://*/*' for every site, "
+                + "'*://*.zhihu.com/*' for one domain. Prefer the narrowest scope that works."));
+            createProps.put("run_at", propEnum("string",
+                "When the script executes. 'document-idle' (default) is safest and has a full DOM. "
+                + "'document-end' runs at DOMContentLoaded. 'document-start' runs before the DOM exists "
+                + "and can only touch window/navigator/fetch.",
+                new String[]{"document-start", "document-end", "document-idle"}));
+            createProps.put("code", prop("string",
+                "Script body. Wrap in an IIFE. Do NOT include a ==UserScript== header - the system "
+                + "generates it from the fields above."));
+            createProps.put("icon_path", prop("string",
+                "Menu glyph as an SVG path in a 24x24 viewBox. Draw a simple line-art icon matching the "
+                + "app's style. ONLY these commands are supported: M L H V C Q Z (upper or lower case). "
+                + "Arcs (A) and smooth curves (S/T) are rejected - approximate circles with C curves. "
+                + "Example (a book): 'M 5 4 H 19 V 20 H 5 Z M 8 8 H 16 M 8 12 H 16 M 8 16 H 13'"));
+            tools.put(makeTool(
+                "create_script",
+                "Create a new browser feature for the user, such as a reading mode, an ad blocker, or a "
+                + "site tweak. The feature is saved as a userscript and appears in the browser menu, but "
+                + "stays DISABLED until the user reviews and enables it. Use this when the user asks for "
+                + "a lasting capability rather than a one-off change to the current page.",
+                createProps,
+                new String[]{"name", "match", "code", "icon_path"}
             ));
         } catch (Exception e) {
             Log.e(TAG, "Failed to build the tool schema; the agent may see fewer tools", e);
@@ -236,9 +273,31 @@ public class AcidSandboxTools {
         }
     }
 
+    /** Where a tool call originated. Gates the self-extending tools. */
+    public enum ToolSource {
+        /** The in-app agent chat, driven by the user typing a request. */
+        AGENT_UI,
+        /** The local MCP gateway, reachable by anything on the device and by web pages. */
+        MCP
+    }
+
+    /** Backwards-compatible entry point; treats the call as coming from the agent UI. */
     public ToolExecResult executeTool(String name, JSONObject args) {
+        return executeTool(name, args, ToolSource.AGENT_UI);
+    }
+
+    public ToolExecResult executeTool(String name, JSONObject args, ToolSource source) {
         if (args == null) args = new JSONObject();
         try {
+            // Self-extension is user-initiated only. The MCP gateway is reachable from any
+            // page via a permissive CORS policy, so allowing it to install scripts would
+            // let a malicious site plant a persistent payload that runs on every page.
+            if ("create_script".equals(name) && source != ToolSource.AGENT_UI) {
+                return new ToolExecResult(
+                    "Error: create_script is only available from the in-app agent chat, "
+                    + "not through the MCP gateway.", false, null);
+            }
+
             if ("browser".equals(name)) {
                 return executeBrowserTool(args);
             } else if ("read".equals(name)) {
@@ -249,12 +308,83 @@ public class AcidSandboxTools {
                 return new ToolExecResult(executeEditTool(args), false, null);
             } else if ("bash".equals(name)) {
                 return new ToolExecResult(executeBashTool(args), false, null);
+            } else if ("create_script".equals(name)) {
+                return new ToolExecResult(executeCreateScriptTool(args), false, null);
             } else {
                 return new ToolExecResult("Error: Unknown tool '" + name + "'", false, null);
             }
         } catch (Exception e) {
             return new ToolExecResult("Tool execution exception (" + name + "): " + e.getMessage(), false, null);
         }
+    }
+
+    /**
+     * Builds a userscript from agent-supplied fields and installs it as a menu entry.
+     *
+     * <p>The script is written with {@code @acid-menu true} and is visible in the menu
+     * straight away, but the entry renders as "pending" and does not inject until the
+     * user reviews the code and enables it.
+     */
+    private String executeCreateScriptTool(JSONObject args) {
+        String name = args.optString("name", "").trim();
+        String description = args.optString("description", "").trim();
+        String match = args.optString("match", "").trim();
+        String runAt = args.optString("run_at", UserscriptMeta.RUN_AT_IDLE).trim();
+        String code = args.optString("code", "");
+        String iconPath = args.optString("icon_path", "").trim();
+
+        if (name.isEmpty()) return "Error: name is required.";
+        if (match.isEmpty()) return "Error: match is required (e.g. '*://*/*').";
+        if (code.trim().isEmpty()) return "Error: code is required.";
+
+        if (!UserscriptMeta.RUN_AT_START.equals(runAt)
+            && !UserscriptMeta.RUN_AT_END.equals(runAt)
+            && !UserscriptMeta.RUN_AT_IDLE.equals(runAt)) {
+            return "Error: run_at must be document-start, document-end or document-idle.";
+        }
+
+        String iconError = AcidIcons.validateSvgPath(iconPath);
+        if (iconError != null) {
+            return "Error: invalid icon_path - " + iconError;
+        }
+
+        String fileName = name.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (fileName.isEmpty()) fileName = "script";
+        fileName = fileName + ".user.js";
+
+        StringBuilder src = new StringBuilder();
+        src.append("// ==UserScript==\n");
+        src.append("// @name         ").append(name).append("\n");
+        src.append("// @namespace    acid.agent\n");
+        src.append("// @version      1.0.0\n");
+        if (!description.isEmpty()) {
+            src.append("// @description  ").append(description).append("\n");
+        }
+        src.append("// @match        ").append(match).append("\n");
+        src.append("// @run-at       ").append(runAt).append("\n");
+        src.append("// @acid-icon    ").append(iconPath).append("\n");
+        src.append("// @acid-menu    true\n");
+        src.append("// @acid-enabled false\n");
+        src.append("// @acid-order   100\n");
+        src.append("// ==/UserScript==\n\n");
+        src.append("(function () {\n");
+        src.append("  'use strict';\n");
+        src.append(code).append("\n");
+        src.append("})();\n");
+
+        String error = mController.installUserscript(fileName, src.toString());
+        if (error != null) {
+            return "Error: " + error;
+        }
+
+        mController.emitLog("[SCRIPT] Created \"" + name + "\" (" + match + ")");
+
+        return "Created userscript \"" + name + "\".\n"
+            + "Scope: " + match + "\n"
+            + "Run at: " + runAt + "\n"
+            + "File: " + fileName + "\n\n"
+            + "The entry now appears in the browser menu marked as pending. It will NOT run "
+            + "until the user opens it and taps Enable. Tell the user to review it there.";
     }
 
     // =========================================================================
@@ -565,6 +695,23 @@ public class AcidSandboxTools {
             return "Error: file_path is required.";
         }
         File f = resolveSandboxFile(pathStr);
+
+        // Writing into userscripts/ is an install, not a plain write: it must go through
+        // validation so a script without @match cannot silently end up running everywhere.
+        // Previously this branch did not exist and the tool description merely claimed it
+        // did — scripts only worked because both paths happened to share a directory.
+        if (isInsideUserscripts(f)) {
+            String error = mController.installUserscript(f.getName(), content);
+            if (error != null) {
+                return "Error: " + error;
+            }
+            UserscriptMeta meta = UserscriptMeta.parse(f.getName(), content);
+            return "Installed userscript \"" + meta.name + "\"\n"
+                + "Scope: " + meta.describeScope() + "\n"
+                + "Run at: " + meta.runAt + "\n"
+                + "File: " + f.getAbsolutePath();
+        }
+
         try {
             File parent = f.getParentFile();
             if (parent != null && !parent.exists()) {
@@ -576,6 +723,19 @@ public class AcidSandboxTools {
                 " (Accessible in browser via: file://" + f.getAbsolutePath() + ")";
         } catch (Exception e) {
             return "Error writing file: " + e.getMessage();
+        }
+    }
+
+    /** True when {@code f} lives inside the userscripts directory. */
+    private boolean isInsideUserscripts(File f) {
+        if (f == null) return false;
+        try {
+            File dir = mController.getUserscriptManager().getUserscriptsDir().getCanonicalFile();
+            File target = f.getCanonicalFile();
+            return target.getParentFile() != null && target.getParentFile().equals(dir);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not resolve userscripts directory for " + f, e);
+            return false;
         }
     }
 

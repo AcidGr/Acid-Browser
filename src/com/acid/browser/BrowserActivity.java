@@ -107,6 +107,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private ModelProviderConfigSheet mProviderConfigSheet;
     private AcidBottomSheetView mAboutSheet;
     private AcidBottomSheetView mDownloadConfirmSheet;
+    private UserscriptSheet mUserscriptSheet;
     private BroadcastReceiver mDownloadReceiver;
 
     /**
@@ -296,6 +297,35 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onToggleMcpServer() {
                 toggleMcpServer();
             }
+
+            @Override
+            public void onOpenUserscripts() {
+                if (mUserscriptSheet != null) {
+                    mUserscriptSheet.showScripts();
+                }
+            }
+
+            @Override
+            public void onRunCustomTool(UserscriptMeta meta) {
+                if (mController != null) {
+                    boolean ok = mController.runUserscriptNow(meta);
+                    if (ok) {
+                        Toast.makeText(BrowserActivity.this, "已执行「" + meta.name + "」", Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(BrowserActivity.this, "「" + meta.name + "」不适用于当前页面 (" + meta.describeScope() + ")", Toast.LENGTH_LONG).show();
+                    }
+                }
+            }
+
+            @Override
+            public void onEnableCustomTool(UserscriptMeta meta) {
+                if (mController != null) {
+                    mController.setUserscriptEnabled(meta.fileName, true);
+                    updateMenuSheetCards();
+                    Toast.makeText(BrowserActivity.this, "已启用「" + meta.name + "」", Toast.LENGTH_SHORT).show();
+                    mController.runUserscriptNow(meta);
+                }
+            }
         });
         mRootContainer.addView(mMenuSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
@@ -320,6 +350,28 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         });
         mRootContainer.addView(mListsSheet, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        mUserscriptSheet = new UserscriptSheet(this, mController.getUserscriptManager(), new UserscriptSheet.OnScriptActionListener() {
+            @Override
+            public void onRunScript(UserscriptMeta meta) {
+                if (mController != null) {
+                    boolean ok = mController.runUserscriptNow(meta);
+                    if (ok) {
+                        Toast.makeText(BrowserActivity.this, "已执行「" + meta.name + "」", Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(BrowserActivity.this, "「" + meta.name + "」不适用于当前页面 (" + meta.describeScope() + ")", Toast.LENGTH_LONG).show();
+                    }
+                }
+            }
+
+            @Override
+            public void onImportRequested() {
+                showImportScriptDialog();
+            }
+        });
+        mRootContainer.addView(mUserscriptSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
@@ -747,6 +799,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             modelCount
         );
         mMenuSheet.updateMcpState(mHttpServer != null && mHttpServer.isRunning());
+        if (mController != null) {
+            mMenuSheet.renderCustomTools(mController.getMenuUserscripts());
+        }
     }
 
     private void toggleMcpServer() {
@@ -796,6 +851,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         addOverlay(mProviderConfigSheet);
         addOverlay(mAboutSheet);
         addOverlay(mDownloadConfirmSheet);
+        addOverlay(mUserscriptSheet);
     }
 
     private void addOverlay(AcidOverlay overlay) {
@@ -1543,6 +1599,169 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 showDownloadConfirmDialog(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
             }
         });
+    }
+
+    @Override
+    public void onUserscriptInstallRequested(final String url, final String fileName) {
+        Toast.makeText(this, "正在获取脚本: " + fileName + "...", Toast.LENGTH_SHORT).show();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String fetchedContent = null;
+                try {
+                    java.net.URL u = new java.net.URL(url);
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
+                    conn.setConnectTimeout(8000);
+                    conn.setReadTimeout(12000);
+                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.3.6");
+                    if (conn.getResponseCode() == 200) {
+                        java.io.InputStream in = conn.getInputStream();
+                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                        byte[] buf = new byte[2048];
+                        int len;
+                        while ((len = in.read(buf)) != -1) {
+                            if (bos.size() > 64 * 1024) break;
+                            bos.write(buf, 0, len);
+                        }
+                        in.close();
+                        fetchedContent = new String(bos.toByteArray(), "UTF-8");
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to download userscript from " + url, e);
+                }
+
+                final String scriptContent = fetchedContent;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (scriptContent == null || scriptContent.trim().isEmpty()) {
+                            Toast.makeText(BrowserActivity.this, "获取脚本失败，请检查网络链接", Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        showUserscriptInstallDialog(url, fileName, scriptContent);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void showUserscriptInstallDialog(final String url, final String fileName, final String content) {
+        final UserscriptMeta meta = UserscriptMeta.parse(fileName, content);
+        AlertDialog.Builder b = AcidTheme.dialogBuilder(this, mIsDarkMode);
+        b.setTitle("安装用户脚本");
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int padH = dp(20);
+        int padV = dp(14);
+        box.setPadding(padH, padV, padH, padV);
+
+        TextView tvName = new TextView(this);
+        tvName.setText(meta.name + (!TextUtils.isEmpty(meta.version) ? " v" + meta.version : ""));
+        tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        tvName.setTypeface(Typeface.DEFAULT_BOLD);
+        tvName.setTextColor(AcidTheme.text(mIsDarkMode));
+        box.addView(tvName);
+
+        if (!TextUtils.isEmpty(meta.description)) {
+            TextView tvDesc = new TextView(this);
+            tvDesc.setText(meta.description);
+            tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            tvDesc.setTextColor(AcidTheme.text(mIsDarkMode));
+            tvDesc.setPadding(0, dp(4), 0, 0);
+            box.addView(tvDesc);
+        }
+
+        TextView tvScope = new TextView(this);
+        tvScope.setText("生效范围: " + meta.describeScope() + "\n时机: " + meta.runAt + "\n来源: " + url);
+        tvScope.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        tvScope.setTextColor(AcidTheme.muted(mIsDarkMode));
+        tvScope.setPadding(0, dp(8), 0, 0);
+        box.addView(tvScope);
+
+        TextView tvCode = new TextView(this);
+        String preview = content;
+        if (preview.length() > 350) preview = preview.substring(0, 350) + "\n…";
+        tvCode.setText(preview);
+        tvCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+        tvCode.setTypeface(Typeface.MONOSPACE);
+        tvCode.setTextColor(AcidTheme.DARK_CODE_TEXT);
+        tvCode.setPadding(dp(8), dp(8), dp(8), dp(8));
+        tvCode.setBackground(AcidTheme.pillBg(this, AcidTheme.codeBlockBg(mIsDarkMode), 0, 6));
+        LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cLp.topMargin = dp(10);
+        box.addView(tvCode, cLp);
+
+        b.setView(box);
+        b.setPositiveButton("安装", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                if (mController != null) {
+                    String err = mController.installUserscript(fileName, content);
+                    if (err == null) {
+                        Toast.makeText(BrowserActivity.this, "已成功安装脚本「" + meta.name + "」", Toast.LENGTH_SHORT).show();
+                        if (mUserscriptSheet != null && mUserscriptSheet.isShowing()) {
+                            mUserscriptSheet.renderScripts();
+                        }
+                        updateMenuSheetCards();
+                    } else {
+                        Toast.makeText(BrowserActivity.this, "安装失败: " + err, Toast.LENGTH_LONG).show();
+                    }
+                }
+            }
+        });
+        b.setNegativeButton("取消", null);
+        b.show();
+    }
+
+    private void showImportScriptDialog() {
+        AlertDialog.Builder b = AcidTheme.dialogBuilder(this, mIsDarkMode);
+        b.setTitle("导入用户脚本");
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int padH = dp(20);
+        int padV = dp(14);
+        box.setPadding(padH, padV, padH, padV);
+
+        TextView tvHint = new TextView(this);
+        tvHint.setText("输入脚本的在线 URL (.user.js) 或直接粘贴脚本代码：");
+        tvHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        tvHint.setTextColor(AcidTheme.text(mIsDarkMode));
+        box.addView(tvHint);
+
+        final EditText etInput = new EditText(this);
+        etInput.setHint("https://.../script.user.js 或 // ==UserScript==...");
+        etInput.setHintTextColor(AcidTheme.muted(mIsDarkMode));
+        etInput.setTextColor(AcidTheme.text(mIsDarkMode));
+        etInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        etInput.setBackground(AcidTheme.pillBg(this, AcidTheme.searchBg(mIsDarkMode), AcidTheme.searchBorder(mIsDarkMode), 8));
+        etInput.setPadding(dp(10), dp(10), dp(10), dp(10));
+        etInput.setMinLines(3);
+        etInput.setMaxLines(8);
+        LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        iLp.topMargin = dp(10);
+        box.addView(etInput, iLp);
+
+        b.setView(box);
+        b.setPositiveButton("解析并安装", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                String input = etInput.getText() != null ? etInput.getText().toString().trim() : "";
+                if (input.isEmpty()) return;
+                if (input.startsWith("http://") || input.startsWith("https://")) {
+                    onUserscriptInstallRequested(input, "script.user.js");
+                } else if (input.contains("==UserScript==")) {
+                    showUserscriptInstallDialog("手动导入", "custom.user.js", input);
+                } else {
+                    Toast.makeText(BrowserActivity.this, "未检测到有效 URL 或 ==UserScript== 元数据", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        b.setNegativeButton("取消", null);
+        b.show();
     }
 
     @Override
