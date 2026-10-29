@@ -58,6 +58,14 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     private LinearLayout mAgentInputBar;
     private EditText mEtAgentTaskInput;
     private AcidIcons.BadgeButton mBtnAgentSendStop;
+    private AcidIcons.BadgeButton mBtnSessions;
+    private AcidIcons.BadgeButton mBtnNewSession;
+    private View mBtnModelConfig;
+    private LinearLayout mContextUsagePill;
+    private TextView mTvContextUsageText;
+    private int mLastTotalTokens = 0;
+    private int mLastPromptTokens = 0;
+    private int mLastCachedTokens = 0;
     private final Map<String, ToolCardHolder> mToolCardHolders = new HashMap<String, ToolCardHolder>();
     private final Map<String, ThinkingViewHolder> mThinkingHolders = new HashMap<String, ThinkingViewHolder>();
     private final Map<String, AssistantViewHolder> mAssistantHolders = new HashMap<String, AssistantViewHolder>();
@@ -309,7 +317,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         headerRow.addView(titleCol, titleColLp);
 
         // Button: Sessions
-        AcidIcons.BadgeButton btnSessions = new AcidIcons.BadgeButton(
+        mBtnSessions = new AcidIcons.BadgeButton(
             ctx, AcidIcons.ICON_CHAT_LIST, "会话", AcidTheme.COLOR_BLUE, new OnClickListener() {
                 @Override
                 public void onClick(View v) {
@@ -319,10 +327,10 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 }
             }
         );
-        headerRow.addView(btnSessions);
+        headerRow.addView(mBtnSessions);
 
         // Button: New Session (+)
-        AcidIcons.BadgeButton btnNewSession = new AcidIcons.BadgeButton(
+        mBtnNewSession = new AcidIcons.BadgeButton(
             ctx, AcidIcons.ICON_PLUS, "新对话", AcidTheme.LIGHT_ACCENT, new OnClickListener() {
                 @Override
                 public void onClick(View v) {
@@ -332,10 +340,10 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 }
             }
         );
-        headerRow.addView(btnNewSession);
+        headerRow.addView(mBtnNewSession);
 
         // Button: Model Selector
-        LinearLayout btnConfig = AcidIcons.createToolbarIconBtn(ctx, AcidIcons.ICON_MODEL, AcidTheme.LIGHT_MUTED, new OnClickListener() {
+        mBtnModelConfig = AcidIcons.createToolbarIconBtn(ctx, AcidIcons.ICON_MODEL, AcidTheme.LIGHT_MUTED, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (mHostCallback != null) {
@@ -343,7 +351,41 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 }
             }
         });
-        headerRow.addView(btnConfig);
+        headerRow.addView(mBtnModelConfig);
+
+        // Context Usage & Cache Hit Rate Pill (Displayed when Agent is running/working)
+        mContextUsagePill = new LinearLayout(ctx);
+        mContextUsagePill.setOrientation(LinearLayout.HORIZONTAL);
+        mContextUsagePill.setGravity(Gravity.CENTER_VERTICAL);
+        int pillPadH = AcidTheme.dp(ctx, 8);
+        int pillPadV = AcidTheme.dp(ctx, 4);
+        mContextUsagePill.setPadding(pillPadH, pillPadV, pillPadH, pillPadV);
+        mContextUsagePill.setBackground(AcidTheme.cardBorderBg(ctx, Color.argb(32, 2, 132, 199), AcidTheme.COLOR_BLUE, 1, 8));
+        LinearLayout.LayoutParams pillLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pillLp.rightMargin = AcidTheme.dp(ctx, 6);
+        mContextUsagePill.setLayoutParams(pillLp);
+        mContextUsagePill.setVisibility(View.GONE);
+
+        mTvContextUsageText = new TextView(ctx);
+        mTvContextUsageText.setText("0k/1M (0.0%) · 缓存 0%");
+        mTvContextUsageText.setTextColor(AcidTheme.COLOR_BLUE);
+        mTvContextUsageText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        mTvContextUsageText.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        mContextUsagePill.addView(mTvContextUsageText);
+
+        mContextUsagePill.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                float pct = (mLastTotalTokens / 1000000.0f) * 100.0f;
+                float hitRate = mLastPromptTokens > 0 ? ((mLastCachedTokens * 100.0f) / mLastPromptTokens) : 0f;
+                Toast.makeText(
+                    getContext(),
+                    "上下文窗口: " + mLastTotalTokens + " / 1,000,000 (" + String.format(java.util.Locale.US, "%.2f%%", pct) + ")\n提示词缓存命中: " + String.format(java.util.Locale.US, "%.1f%%", hitRate) + " (" + mLastCachedTokens + " tokens)",
+                    Toast.LENGTH_SHORT
+                ).show();
+            }
+        });
+        headerRow.addView(mContextUsagePill);
 
         // Button: Close
         LinearLayout btnCloseDrawer = AcidIcons.createToolbarIconBtn(ctx, AcidIcons.ICON_CLOSE, AcidTheme.LIGHT_MUTED, new OnClickListener() {
@@ -433,6 +475,10 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         }
         if (mTvAgentLoopStatus != null && mAgentLoop != null && !mAgentLoop.isRunning()) {
             mTvAgentLoopStatus.setText(mAgentLoop.getModelStatusDisplay());
+        }
+        if (session != null) {
+            int tt = session.lastTotalTokens > 0 ? session.lastTotalTokens : (mAgentLoop != null ? mAgentLoop.computeEstimatedTokens(session) : 0);
+            updateContextUsage(tt, session.lastPromptTokens, session.lastCachedTokens);
         }
 
         if (session == null || session.uiItems.isEmpty()) {
@@ -1129,6 +1175,37 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 mBtnAgentSendStop.update(AcidIcons.ICON_SEND, "发送", accent);
             }
         }
+
+        boolean isWorking = running || pausedForTakeover;
+        if (mBtnSessions != null) mBtnSessions.setVisibility(isWorking ? View.GONE : View.VISIBLE);
+        if (mBtnNewSession != null) mBtnNewSession.setVisibility(isWorking ? View.GONE : View.VISIBLE);
+        if (mBtnModelConfig != null) mBtnModelConfig.setVisibility(isWorking ? View.GONE : View.VISIBLE);
+        if (mContextUsagePill != null) {
+            mContextUsagePill.setVisibility(isWorking ? View.VISIBLE : View.GONE);
+            if (isWorking && mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
+                AcidSessionStore.AgentSession s = mAgentLoop.getActiveSession();
+                int tt = s.lastTotalTokens > 0 ? s.lastTotalTokens : mAgentLoop.computeEstimatedTokens(s);
+                updateContextUsage(tt, s.lastPromptTokens, s.lastCachedTokens);
+            }
+        }
+    }
+
+    public void updateContextUsage(int totalTokens, int promptTokens, int cachedTokens) {
+        mLastTotalTokens = totalTokens;
+        mLastPromptTokens = promptTokens;
+        mLastCachedTokens = cachedTokens;
+
+        if (mTvContextUsageText == null) return;
+        float pct = (totalTokens / 1000000.0f) * 100.0f;
+        String tokenStr = totalTokens >= 1000
+            ? String.format(java.util.Locale.US, "%.1fk", totalTokens / 1000.0)
+            : String.valueOf(totalTokens);
+
+        float hitRate = promptTokens > 0 ? ((cachedTokens * 100.0f) / promptTokens) : 0f;
+        String hitStr = String.format(java.util.Locale.US, "%.0f%%", hitRate);
+
+        String display = tokenStr + "/1M (" + String.format(java.util.Locale.US, "%.1f%%", pct) + ") · 缓存 " + hitStr;
+        mTvContextUsageText.setText(display);
     }
 
     public void triggerAgentSubmitOrStop() {
