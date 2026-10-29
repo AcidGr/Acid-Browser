@@ -589,7 +589,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(Color.parseColor("#FFFBEB"));
+        bar.setBackgroundColor(AcidTheme.TAKEOVER_BG);
         bar.setPadding(dp(10), dp(6), dp(10), dp(6));
 
         mTakeoverIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_HUMAN, AcidTheme.COLOR_AMBER, 16);

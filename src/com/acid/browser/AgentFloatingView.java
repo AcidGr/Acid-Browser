@@ -202,8 +202,8 @@ public class AgentFloatingView extends FrameLayout {
         final Context ctx = getContext();
         final LinearLayout panel = new LinearLayout(ctx);
         panel.setOrientation(LinearLayout.VERTICAL);
-        int floatBg = mIsDarkMode ? Color.parseColor("#0F172A") : Color.parseColor("#F1F5F9");
-        int floatBorder = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#64748B");
+        int floatBg = AcidTheme.panelBg(mIsDarkMode);
+        int floatBorder = AcidTheme.panelBorder(mIsDarkMode);
         panel.setBackground(AcidTheme.cardBorderBg(ctx, floatBg, floatBorder, 2, 16));
         if (Build.VERSION.SDK_INT >= 21) {
             panel.setElevation(AcidTheme.dp(ctx, 16));
@@ -450,8 +450,8 @@ public class AgentFloatingView extends FrameLayout {
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
-        int bg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F1F5F9");
-        int border = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#CBD5E1");
+        int bg = AcidTheme.subtle(mIsDarkMode);
+        int border = AcidTheme.subtleBorder(mIsDarkMode);
         int textCol = AcidTheme.accent(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
 
@@ -549,8 +549,8 @@ public class AgentFloatingView extends FrameLayout {
         Context ctx = getContext();
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
-        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.WHITE;
-        int borderCol = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#E2E8F0");
+        int cardBg = AcidTheme.raised(mIsDarkMode);
+        int borderCol = AcidTheme.raisedBorder(mIsDarkMode);
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
 
@@ -586,7 +586,7 @@ public class AgentFloatingView extends FrameLayout {
             chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
             int pPad = AcidTheme.dp(ctx, 8);
             chip.setPadding(pPad, pPad, pPad, pPad);
-            chip.setBackground(AcidTheme.pillBg(ctx, mIsDarkMode ? AcidTheme.DARK_BG : Color.parseColor("#F1F5F9"), borderCol, 8));
+            chip.setBackground(AcidTheme.pillBg(ctx, mIsDarkMode ? AcidTheme.DARK_BG : AcidTheme.LIGHT_SEARCH_BG, borderCol, 8));
             LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             );
@@ -672,8 +672,8 @@ public class AgentFloatingView extends FrameLayout {
         Context ctx = getContext();
         final LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
-        int bg = mIsDarkMode ? Color.parseColor("#162032") : Color.parseColor("#F1F5F9");
-        int border = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#E2E8F0");
+        int bg = AcidTheme.thinkingBg(mIsDarkMode);
+        int border = AcidTheme.thinkingBorder(mIsDarkMode);
         int muted = AcidTheme.muted(mIsDarkMode);
 
         card.setBackground(AcidTheme.cardBorderBg(ctx, bg, border, 1, 8));
@@ -734,8 +734,8 @@ public class AgentFloatingView extends FrameLayout {
         Context ctx = getContext();
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
-        int bg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.WHITE;
-        int border = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#E2E8F0");
+        int bg = AcidTheme.raised(mIsDarkMode);
+        int border = AcidTheme.raisedBorder(mIsDarkMode);
 
         card.setBackground(AcidTheme.cardBorderBg(ctx, bg, border, 1, 12));
         int padH = AcidTheme.dp(ctx, 12);
@@ -758,7 +758,7 @@ public class AgentFloatingView extends FrameLayout {
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        int bg = mIsDarkMode ? Color.parseColor("#450A0A") : Color.parseColor("#FEF2F2");
+        int bg = AcidTheme.errorBg(mIsDarkMode);
         int border = AcidTheme.COLOR_RED;
         row.setBackground(AcidTheme.cardBorderBg(ctx, bg, border, 1, 10));
         int pad = AcidTheme.dp(ctx, 10);
@@ -856,7 +856,7 @@ public class AgentFloatingView extends FrameLayout {
 
             TextView lblArgs = new TextView(ctx);
             lblArgs.setText("调用参数 (Arguments):");
-            lblArgs.setTextColor(Color.parseColor("#64748B"));
+            lblArgs.setTextColor(AcidTheme.LIGHT_MUTED);
             lblArgs.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
             lblArgs.setTypeface(Typeface.DEFAULT_BOLD);
             mDetailContainer.addView(lblArgs);
@@ -864,8 +864,8 @@ public class AgentFloatingView extends FrameLayout {
             mTvArgsCode = new TextView(ctx);
             mTvArgsCode.setTypeface(Typeface.MONOSPACE);
             mTvArgsCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-            mTvArgsCode.setTextColor(Color.parseColor("#E2E8F0"));
-            mTvArgsCode.setBackground(AcidTheme.pillBg(ctx, Color.parseColor("#0F172A"), Color.parseColor("#334155"), 6));
+            mTvArgsCode.setTextColor(AcidTheme.DARK_CODE_TEXT);
+            mTvArgsCode.setBackground(AcidTheme.pillBg(ctx, AcidTheme.DARK_PANEL_BG, AcidTheme.DARK_PANEL_BORDER, 6));
             mTvArgsCode.setPadding(AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 6));
             mTvArgsCode.setTextIsSelectable(true);
             LinearLayout.LayoutParams argsLp = new LinearLayout.LayoutParams(
@@ -877,7 +877,7 @@ public class AgentFloatingView extends FrameLayout {
 
             TextView lblRes = new TextView(ctx);
             lblRes.setText("返回结果 (Output):");
-            lblRes.setTextColor(Color.parseColor("#64748B"));
+            lblRes.setTextColor(AcidTheme.LIGHT_MUTED);
             lblRes.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
             lblRes.setTypeface(Typeface.DEFAULT_BOLD);
             mDetailContainer.addView(lblRes);
@@ -885,8 +885,8 @@ public class AgentFloatingView extends FrameLayout {
             mTvResultCode = new TextView(ctx);
             mTvResultCode.setTypeface(Typeface.MONOSPACE);
             mTvResultCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.8f);
-            mTvResultCode.setTextColor(Color.parseColor("#A7F3D0"));
-            mTvResultCode.setBackground(AcidTheme.pillBg(ctx, Color.parseColor("#0F172A"), Color.parseColor("#334155"), 6));
+            mTvResultCode.setTextColor(AcidTheme.COLOR_CODE_SUCCESS);
+            mTvResultCode.setBackground(AcidTheme.pillBg(ctx, AcidTheme.DARK_PANEL_BG, AcidTheme.DARK_PANEL_BORDER, 6));
             mTvResultCode.setPadding(AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 6));
             mTvResultCode.setTextIsSelectable(true);
             LinearLayout.LayoutParams resLp = new LinearLayout.LayoutParams(
@@ -909,8 +909,8 @@ public class AgentFloatingView extends FrameLayout {
 
         public void bind(AcidSessionStore.UiMessageItem item, boolean dark) {
             Context ctx = getContext();
-            int cardBg = dark ? Color.parseColor("#1E293B") : Color.WHITE;
-            int borderCol = dark ? Color.parseColor("#334155") : Color.parseColor("#E2E8F0");
+            int cardBg = AcidTheme.raised(dark);
+            int borderCol = AcidTheme.raisedBorder(dark);
             int textCol = AcidTheme.text(dark);
             int mutedCol = AcidTheme.muted(dark);
             int accent = AcidTheme.accent(dark);
@@ -1043,8 +1043,8 @@ public class AgentFloatingView extends FrameLayout {
         int searchBorder = AcidTheme.searchBorder(isDark);
 
         if (mDrawerPanel != null) {
-            int floatBg = isDark ? Color.parseColor("#0F172A") : Color.parseColor("#F1F5F9");
-            int floatBorder = isDark ? Color.parseColor("#334155") : Color.parseColor("#64748B");
+            int floatBg = AcidTheme.panelBg(isDark);
+            int floatBorder = AcidTheme.panelBorder(isDark);
             mDrawerPanel.setBackground(AcidTheme.cardBorderBg(ctx, floatBg, floatBorder, 2, 16));
         }
         if (mAgentHeaderBar != null) {

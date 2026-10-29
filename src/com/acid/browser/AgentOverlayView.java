@@ -51,9 +51,9 @@ public class AgentOverlayView extends View {
         mPulsePaint.setStyle(Paint.Style.STROKE);
 
         mLabelBgPaint.setStyle(Paint.Style.FILL);
-        mLabelBgPaint.setColor(Color.parseColor("#E60A0E14"));
+        mLabelBgPaint.setColor(AcidTheme.OVERLAY_LABEL_BG);
 
-        mLabelTextPaint.setColor(Color.parseColor("#00FF88"));
+        mLabelTextPaint.setColor(AcidTheme.DARK_ACCENT);
         mLabelTextPaint.setTextSize(dp(11));
         mLabelTextPaint.setFakeBoldText(true);
     }
@@ -123,8 +123,8 @@ public class AgentOverlayView extends View {
             double phase = (now % 1800) / 1800.0 * Math.PI * 2.0;
             float alphaFactor = (float) (0.45 + 0.55 * (0.5 + 0.5 * Math.sin(phase)));
             int baseColor = (mControlMode == MODE_AGENT)
-                ? Color.parseColor("#00FF88") // Acid green for AI driving
-                : Color.parseColor("#FFB300"); // Amber for human takeover alert
+                ? AcidTheme.DARK_ACCENT // Acid green for AI driving
+                : AcidTheme.COLOR_AMBER_ALERT; // Amber for human takeover alert
 
             int alpha = Math.min(255, Math.max(40, (int) (220 * alphaFactor)));
             mBorderPaint.setColor(Color.argb(alpha, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor)));

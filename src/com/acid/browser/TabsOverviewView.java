@@ -224,7 +224,7 @@ public class TabsOverviewView extends FrameLayout {
         head.setPadding(AcidTheme.dp(ctx, 10), 0, AcidTheme.dp(ctx, 2), 0);
 
         GradientDrawable headGd = new GradientDrawable();
-        headGd.setColor(mIsDarkMode ? Color.parseColor("#121212") : Color.parseColor("#F8FAFC"));
+        headGd.setColor(AcidTheme.overviewHeaderBg(mIsDarkMode));
         float r = AcidTheme.dp(ctx, 14);
         headGd.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
         head.setBackground(headGd);
@@ -280,14 +280,14 @@ public class TabsOverviewView extends FrameLayout {
             LinearLayout empty = new LinearLayout(ctx);
             empty.setOrientation(LinearLayout.VERTICAL);
             empty.setGravity(Gravity.CENTER);
-            empty.setBackgroundColor(mIsDarkMode ? AcidTheme.DARK_BG : Color.parseColor("#F8FAFC"));
+            empty.setBackgroundColor(mIsDarkMode ? AcidTheme.DARK_BG : AcidTheme.LIGHT_MENU_ITEM_BG);
 
-            AcidIcons.SvgIconView emptyIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_GLOBE, Color.parseColor("#CBD5E1"), 28);
+            AcidIcons.SvgIconView emptyIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_GLOBE, AcidTheme.handle(mIsDarkMode), 28);
             empty.addView(emptyIcon);
 
             TextView tip = new TextView(ctx);
             tip.setText("空白页面");
-            tip.setTextColor(Color.parseColor("#94A3B8"));
+            tip.setTextColor(AcidTheme.DARK_TEXT_SECONDARY);
             tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             LinearLayout.LayoutParams tipLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             tipLp.topMargin = AcidTheme.dp(ctx, 4);

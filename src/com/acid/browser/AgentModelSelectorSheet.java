@@ -78,7 +78,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
         final AcidModelStore.ModelEntry activeModel = mModelStore.getActiveModel();
         final String activeEffort = mModelStore.getSelectedReasoningEffort();
 
-        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
         int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
@@ -268,7 +268,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
     ) {
         container.removeAllViews();
         Context ctx = getContext();
-        int cardBg = mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC");
+        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
         int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
@@ -328,7 +328,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
                 row.setGravity(Gravity.CENTER_VERTICAL);
                 int padR = AcidTheme.dp(ctx, 10);
                 row.setPadding(padR, padR, padR, padR);
-                int rBg = isSelected ? (mIsDarkMode ? Color.parseColor("#0C4A6E") : Color.parseColor("#E0F2FE")) : cardBg;
+                int rBg = isSelected ? AcidTheme.selectedBg(mIsDarkMode) : cardBg;
                 int rStroke = isSelected ? blue : borderCol;
                 row.setBackground(AcidTheme.pillBg(ctx, rBg, rStroke, 10));
                 LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(

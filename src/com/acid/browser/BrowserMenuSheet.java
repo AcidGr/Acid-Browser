@@ -302,7 +302,7 @@ public class BrowserMenuSheet extends FrameLayout {
 
         // 1. Semi-transparent scrim
         mMenuScrim = new View(context);
-        mMenuScrim.setBackgroundColor(Color.parseColor("#80000000"));
+        mMenuScrim.setBackgroundColor(AcidTheme.SCRIM);
         mMenuScrim.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -321,7 +321,7 @@ public class BrowserMenuSheet extends FrameLayout {
 
         // Top drag handle
         mHandle = new View(context);
-        mHandle.setBackground(AcidTheme.pillBg(context, Color.parseColor("#CBD5E1"), 0, 2));
+        mHandle.setBackground(AcidTheme.pillBg(context, AcidTheme.handle(false), 0, 2));
         LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(AcidTheme.dp(context, 36), AcidTheme.dp(context, 4));
         hLp.gravity = Gravity.CENTER_HORIZONTAL;
         hLp.bottomMargin = AcidTheme.dp(context, 8);
@@ -591,7 +591,7 @@ public class BrowserMenuSheet extends FrameLayout {
         mIndicatorBar.addView(mDot1);
 
         mDot2 = new View(context);
-        mDot2.setBackground(AcidTheme.pillBg(context, Color.parseColor("#CBD5E1"), 0, 3.5f));
+        mDot2.setBackground(AcidTheme.pillBg(context, AcidTheme.handle(false), 0, 3.5f));
         LinearLayout.LayoutParams dotLp2 = new LinearLayout.LayoutParams(dotSize, dotSize);
         mDot2.setLayoutParams(dotLp2);
         mDot2.setOnClickListener(new OnClickListener() {
@@ -651,7 +651,7 @@ public class BrowserMenuSheet extends FrameLayout {
         mCurrentPage = page;
         Context ctx = getContext();
         int activeDot = AcidTheme.accent(mIsDarkMode);
-        int inactiveDot = mIsDarkMode ? AcidTheme.DARK_BORDER : Color.parseColor("#CBD5E1");
+        int inactiveDot = AcidTheme.handle(mIsDarkMode);
 
         mDot1.setBackground(AcidTheme.pillBg(ctx, page == 0 ? activeDot : inactiveDot, 0, 3.5f));
         mDot2.setBackground(AcidTheme.pillBg(ctx, page == 1 ? activeDot : inactiveDot, 0, 3.5f));
@@ -749,7 +749,7 @@ public class BrowserMenuSheet extends FrameLayout {
         mBtnMenuClose.setColor(muted);
         mHandle.setBackground(AcidTheme.pillBg(
             getContext(),
-            isDark ? AcidTheme.DARK_BORDER : Color.parseColor("#CBD5E1"),
+            AcidTheme.handle(isDark),
             0,
             2
         ));

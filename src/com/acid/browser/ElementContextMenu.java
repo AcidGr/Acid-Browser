@@ -55,8 +55,8 @@ public final class ElementContextMenu {
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
 
-        int bgColor = isDarkMode ? Color.parseColor("#121212") : Color.WHITE;
-        int borderColor = isDarkMode ? Color.parseColor("#27272A") : Color.parseColor("#E2E8F0");
+        int bgColor = AcidTheme.popupBg(isDarkMode);
+        int borderColor = AcidTheme.popupBorder(isDarkMode);
         root.setBackground(AcidTheme.cardBorderBg(context, bgColor, borderColor, 1, 12));
 
         int padV = AcidTheme.dp(context, 6);
@@ -217,7 +217,7 @@ public final class ElementContextMenu {
         TextView tv = new TextView(context);
         tv.setText(text);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
-        tv.setTextColor(isDarkMode ? Color.parseColor("#F1F5F9") : Color.parseColor("#1E293B"));
+        tv.setTextColor(AcidTheme.popupText(isDarkMode));  // dark #F1F5F9 / light #1E293B
         tv.setTypeface(Typeface.DEFAULT);
         tv.setGravity(Gravity.CENTER_VERTICAL);
 
@@ -225,7 +225,7 @@ public final class ElementContextMenu {
         tv.setPadding(padH, 0, padH, 0);
 
         StateListDrawable sld = new StateListDrawable();
-        int pressedColor = isDarkMode ? Color.parseColor("#27272A") : Color.parseColor("#F1F5F9");
+        int pressedColor = AcidTheme.pressedBg(isDarkMode);
         GradientDrawable pressed = new GradientDrawable();
         pressed.setColor(pressedColor);
         pressed.setCornerRadius(AcidTheme.dp(context, 8));
