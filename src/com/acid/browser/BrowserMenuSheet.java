@@ -43,6 +43,7 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         void onOpenAbout();
         void onToggleMcpServer();
         void onOpenUserscripts();
+        void onOpenAdBlock();
         void onRunCustomTool(UserscriptMeta meta);
         void onEnableCustomTool(UserscriptMeta meta);
     }
@@ -328,10 +329,11 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
     private final MenuCardItem mMenuItemAgent;
     private final MenuCardItem mMenuItemModelConfig;
 
-    // Page 2: 9th, 10th & 11th tools (About, MCP Server, Userscripts)
+    // Page 2: 9th, 10th, 11th & 12th tools (About, MCP Server, Userscripts, AdBlock)
     private final MenuCardItem mMenuItemAbout;
     private final MenuCardItem mMenuItemMcp;
     private final MenuCardItem mMenuItemScripts;
+    private final MenuCardItem mMenuItemAdBlock;
     private boolean mIsMcpRunning = false;
 
     private final MenuActionListener mListener;
@@ -595,11 +597,20 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         scriptsLp.rightMargin = AcidTheme.dp(context, 2);
         page2Row1.addView(mMenuItemScripts, scriptsLp);
 
-        // 1 transparent placeholder cell to maintain identical 4-column widths
-        View placeholder = new View(context);
-        LinearLayout.LayoutParams phLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        phLp.leftMargin = AcidTheme.dp(context, 2);
-        page2Row1.addView(placeholder, phLp);
+        mMenuItemAdBlock = new MenuCardItem(
+            context, AcidIcons.ICON_ADBLOCK, "广告拦截",
+            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    dismiss();
+                    if (mListener != null) mListener.onOpenAdBlock();
+                }
+            }
+        );
+        LinearLayout.LayoutParams adBlockLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        adBlockLp.leftMargin = AcidTheme.dp(context, 2);
+        page2Row1.addView(mMenuItemAdBlock, adBlockLp);
         page2.addView(page2Row1);
 
         // Row 2 placeholder row on Page 2 for identical height stability
@@ -800,6 +811,12 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         mMenuItemModelConfig.update(AcidIcons.ICON_MODEL, "模型配置", muted, text, itemBg);
         mMenuItemAbout.update(AcidIcons.ICON_INFO, "关于", muted, text, itemBg);
         mMenuItemScripts.update(AcidIcons.ICON_FILE, "脚本管理", muted, text, itemBg);
+        boolean adBlockEnabled = AdBlockManager.getInstance(getContext()).isEnabled();
+        mMenuItemAdBlock.update(
+            AcidIcons.ICON_ADBLOCK, "广告拦截",
+            adBlockEnabled ? accent : muted,
+            text, itemBg
+        );
         updateMcpState(mIsMcpRunning);
 
         updateIndicator(mCurrentPage);

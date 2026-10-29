@@ -108,6 +108,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AcidBottomSheetView mAboutSheet;
     private AcidBottomSheetView mDownloadConfirmSheet;
     private UserscriptSheet mUserscriptSheet;
+    private AdBlockSheet mAdBlockSheet;
     private BroadcastReceiver mDownloadReceiver;
 
     /**
@@ -319,6 +320,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
 
             @Override
+            public void onOpenAdBlock() {
+                if (mAdBlockSheet != null) {
+                    mAdBlockSheet.showAdBlock();
+                }
+            }
+
+            @Override
             public void onRunCustomTool(UserscriptMeta meta) {
                 if (mController != null) {
                     boolean ok = mController.runUserscriptNow(meta);
@@ -390,6 +398,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         });
         mRootContainer.addView(mUserscriptSheet, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        mAdBlockSheet = new AdBlockSheet(this, AdBlockManager.getInstance(this));
+        mRootContainer.addView(mAdBlockSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
@@ -501,8 +514,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         shieldBox.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                int blocked = mController.getBlockedDeepLinksCount();
-                Toast.makeText(BrowserActivity.this, "Acid 安全护盾: 已成功拦截 " + blocked + " 次恶意唤醒跳转", Toast.LENGTH_SHORT).show();
+                if (mAdBlockSheet != null) {
+                    mAdBlockSheet.showAdBlock();
+                }
             }
         });
         mTopBar.addView(shieldBox);
@@ -870,6 +884,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         addOverlay(mAboutSheet);
         addOverlay(mDownloadConfirmSheet);
         addOverlay(mUserscriptSheet);
+        addOverlay(mAdBlockSheet);
     }
 
     private void addOverlay(AcidOverlay overlay) {

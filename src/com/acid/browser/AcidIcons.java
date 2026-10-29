@@ -77,6 +77,7 @@ public class AcidIcons {
     public static final int ICON_FILE_VIDEO = 45;     // film / play frame
     public static final int ICON_FILE_AUDIO = 46;     // music note
     public static final int ICON_FILE_OTHER = 47;     // generic unknown file
+    public static final int ICON_ADBLOCK = 48;        // adblock shield with slash
 
     /**
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
@@ -462,6 +463,12 @@ public class AcidIcons {
                 ));
                 p.addCircle(7.2f, 16f, 3.8f, Path.Direction.CW);
                 p.addCircle(16.8f, 16f, 3.8f, Path.Direction.CW);
+                break;
+
+            case ICON_ADBLOCK:
+                // SVG Security Shield with diagonal block slash
+                p.addPath(parseSvgPath("M 12 2.5 L 4 6 V 11.5 C 4 16.8 7.4 20.6 12 22 C 16.6 20.6 20 16.8 20 11.5 V 6 L 12 2.5 Z"));
+                p.addPath(parseSvgPath("M 8 16 L 16 8"));
                 break;
 
             case ICON_FILE_APK:

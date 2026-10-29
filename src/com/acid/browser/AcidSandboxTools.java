@@ -615,6 +615,10 @@ public class AcidSandboxTools {
             }
             writeFileUtf8(f, content);
             mController.emitLog("[WRITE] Saved " + f.getName() + " (" + content.length() + " chars)");
+            if (isInsideAdBlock(f)) {
+                AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
+                mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
+            }
             return "Successfully wrote " + content.length() + " characters to " + f.getAbsolutePath() +
                 " (Accessible in browser via: file://" + f.getAbsolutePath() + ")";
         } catch (Exception e) {
@@ -631,6 +635,18 @@ public class AcidSandboxTools {
             return target.getParentFile() != null && target.getParentFile().equals(dir);
         } catch (Exception e) {
             Log.w(TAG, "Could not resolve userscripts directory for " + f, e);
+            return false;
+        }
+    }
+
+    /** True when {@code f} lives inside the adblock directory. */
+    private boolean isInsideAdBlock(File f) {
+        if (f == null) return false;
+        try {
+            File dir = new File(mWorkspaceDir, "adblock").getCanonicalFile();
+            File target = f.getCanonicalFile();
+            return target.getParentFile() != null && target.getParentFile().equals(dir);
+        } catch (Exception e) {
             return false;
         }
     }
@@ -666,6 +682,10 @@ public class AcidSandboxTools {
             }
             writeFileUtf8(f, updated);
             mController.emitLog("[EDIT] Updated " + f.getName());
+            if (isInsideAdBlock(f)) {
+                AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
+                mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
+            }
             return "Successfully edited " + f.getAbsolutePath();
         } catch (Exception e) {
             return "Error editing file: " + e.getMessage();
