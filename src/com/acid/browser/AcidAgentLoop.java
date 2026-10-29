@@ -9,14 +9,18 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Autonomous In-App Agent Loop Engine for Acid Browser (Multi-Session Edition).
@@ -122,6 +126,10 @@ public class AcidAgentLoop {
 
     public boolean isPausedForTakeover() {
         return mPausedForTakeover;
+    }
+
+    public boolean isStopRequested() {
+        return mStopRequested;
     }
 
     // =========================================================================
@@ -301,36 +309,12 @@ public class AcidAgentLoop {
                 notifyState(true, false, step);
 
                 JSONArray payloadMessages = buildPrunedMessagesForRequest(session);
-                JSONObject responseMsg = callChatCompletionsApi(payloadMessages);
+                JSONObject responseMsg = callChatCompletionsStream(session, payloadMessages, step);
 
                 if (mStopRequested || responseMsg == null) break;
 
                 String reasoning = responseMsg.optString("reasoning_content", "");
                 String content = responseMsg.isNull("content") ? "" : responseMsg.optString("content", "");
-
-                if (content.contains("<think>") && content.contains("</think>")) {
-                    int s = content.indexOf("<think>");
-                    int e = content.indexOf("</think>");
-                    if (e > s) {
-                        String inlineThink = content.substring(s + 7, e).trim();
-                        if (!inlineThink.isEmpty() && (reasoning == null || reasoning.isEmpty())) {
-                            reasoning = inlineThink;
-                        }
-                        content = (content.substring(0, s) + content.substring(e + 8)).trim();
-                    }
-                }
-
-                if (reasoning != null && !reasoning.trim().isEmpty()) {
-                    AcidSessionStore.UiMessageItem thinkItem = new AcidSessionStore.UiMessageItem();
-                    thinkItem.type = AcidSessionStore.TYPE_THINKING;
-                    thinkItem.text = reasoning.trim();
-                    thinkItem.timestamp = System.currentTimeMillis();
-                    synchronized (mSessionStore) {
-                        session.uiItems.add(thinkItem);
-                    }
-                    notifyItemAdded(thinkItem);
-                }
-
                 JSONArray toolCalls = responseMsg.optJSONArray("tool_calls");
 
                 // Save assistant API message
@@ -349,20 +333,6 @@ public class AcidAgentLoop {
                 }
                 synchronized (mSessionStore) {
                     session.apiMessages.add(assistantEntry);
-                }
-
-                if (!content.isEmpty()) {
-                    AcidSessionStore.UiMessageItem replyItem = new AcidSessionStore.UiMessageItem();
-                    replyItem.type = AcidSessionStore.TYPE_ASSISTANT;
-                    replyItem.text = content;
-                    replyItem.timestamp = System.currentTimeMillis();
-                    synchronized (mSessionStore) {
-                        session.uiItems.add(replyItem);
-                    }
-                    notifyItemAdded(replyItem);
-                }
-
-                synchronized (mSessionStore) {
                     mSessionStore.saveActiveSession();
                 }
 
@@ -594,7 +564,19 @@ public class AcidAgentLoop {
         return sb.toString().trim();
     }
 
-    private JSONObject callChatCompletionsApi(JSONArray messages) throws Exception {
+    private static class StreamingToolCall {
+        int index;
+        String id = "";
+        String type = "function";
+        String name = "";
+        final StringBuilder arguments = new StringBuilder();
+    }
+
+    private JSONObject callChatCompletionsStream(
+        AcidSessionStore.AgentSession session,
+        JSONArray messages,
+        int step
+    ) throws Exception {
         String base = getBaseUrl().trim();
         while (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
@@ -606,6 +588,7 @@ public class AcidAgentLoop {
         reqBody.put("messages", messages);
         reqBody.put("tools", mToolsSchema);
         reqBody.put("temperature", 0.2);
+        reqBody.put("stream", true);
 
         AcidModelStore.ModelEntry activeModel = mModelStore.getActiveModel();
         String effort = mModelStore.getSelectedReasoningEffort();
@@ -627,6 +610,7 @@ public class AcidAgentLoop {
         conn.setReadTimeout(90000);
         conn.setDoOutput(true);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        conn.setRequestProperty("Accept", "text/event-stream");
         String key = getApiKey();
         if (!key.isEmpty()) {
             conn.setRequestProperty("Authorization", "Bearer " + key);
@@ -638,20 +622,280 @@ public class AcidAgentLoop {
         os.close();
 
         int code = conn.getResponseCode();
-        InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
-        String respStr = readStreamUtf8(is);
-        conn.disconnect();
-
         if (code < 200 || code >= 300) {
-            throw new Exception("HTTP " + code + ": " + (respStr.length() > 300 ? respStr.substring(0, 300) : respStr));
+            InputStream es = conn.getErrorStream();
+            String errStr = readStreamUtf8(es);
+            conn.disconnect();
+            throw new Exception("HTTP " + code + ": " + (errStr.length() > 300 ? errStr.substring(0, 300) : errStr));
         }
 
-        JSONObject respJson = new JSONObject(respStr);
-        JSONArray choices = respJson.optJSONArray("choices");
-        if (choices == null || choices.length() == 0) {
-            throw new Exception("Empty choices from LLM API: " + respStr);
+        InputStream is = conn.getInputStream();
+        BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+
+        StringBuilder reasoningSb = new StringBuilder();
+        StringBuilder contentSb = new StringBuilder();
+        Map<Integer, StreamingToolCall> toolCallsMap = new TreeMap<Integer, StreamingToolCall>();
+
+        AcidSessionStore.UiMessageItem currentThinkItem = null;
+        AcidSessionStore.UiMessageItem currentReplyItem = null;
+
+        long lastUiUpdate = 0;
+        final long THROTTLE_MS = 60;
+        boolean insideThinkTag = false;
+
+        try {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (mStopRequested) {
+                    conn.disconnect();
+                    break;
+                }
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith(":")) {
+                    continue;
+                }
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                String data = line.substring(5).trim();
+                if ("[DONE]".equals(data)) {
+                    break;
+                }
+
+                JSONObject chunk;
+                try {
+                    chunk = new JSONObject(data);
+                } catch (Exception e) {
+                    continue;
+                }
+
+                JSONArray choices = chunk.optJSONArray("choices");
+                if (choices == null || choices.length() == 0) continue;
+                JSONObject choice0 = choices.optJSONObject(0);
+                if (choice0 == null) continue;
+                JSONObject delta = choice0.optJSONObject("delta");
+                if (delta == null) continue;
+
+                // 1. Process reasoning_content (DeepSeek R1 / Reasoner native)
+                String rChunk = delta.isNull("reasoning_content") ? "" : delta.optString("reasoning_content", "");
+                if ("null".equals(rChunk)) rChunk = "";
+                if (!rChunk.isEmpty()) {
+                    if (currentThinkItem == null) {
+                        currentThinkItem = new AcidSessionStore.UiMessageItem();
+                        currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
+                        currentThinkItem.isRunning = true;
+                        currentThinkItem.timestamp = System.currentTimeMillis();
+                        synchronized (mSessionStore) {
+                            session.uiItems.add(currentThinkItem);
+                        }
+                        notifyItemAdded(currentThinkItem);
+                    }
+                    reasoningSb.append(rChunk);
+                    long now = System.currentTimeMillis();
+                    if (now - lastUiUpdate >= THROTTLE_MS) {
+                        lastUiUpdate = now;
+                        currentThinkItem.text = reasoningSb.toString();
+                        notifyItemUpdated(currentThinkItem);
+                    }
+                }
+
+                // 2. Process content (including handling potential inline <think> tags)
+                String cChunk = delta.isNull("content") ? "" : delta.optString("content", "");
+                if ("null".equals(cChunk)) cChunk = "";
+                if (!cChunk.isEmpty()) {
+                    if (cChunk.contains("<think>")) {
+                        insideThinkTag = true;
+                        int s = cChunk.indexOf("<think>");
+                        String before = cChunk.substring(0, s);
+                        String after = cChunk.substring(s + 7);
+                        if (!before.isEmpty()) {
+                            contentSb.append(before);
+                        }
+                        cChunk = after;
+                    }
+
+                    if (insideThinkTag) {
+                        if (cChunk.contains("</think>")) {
+                            insideThinkTag = false;
+                            int e = cChunk.indexOf("</think>");
+                            String inside = cChunk.substring(0, e);
+                            String after = cChunk.substring(e + 8);
+                            if (!inside.isEmpty()) {
+                                if (currentThinkItem == null) {
+                                    currentThinkItem = new AcidSessionStore.UiMessageItem();
+                                    currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
+                                    currentThinkItem.isRunning = true;
+                                    currentThinkItem.timestamp = System.currentTimeMillis();
+                                    synchronized (mSessionStore) {
+                                        session.uiItems.add(currentThinkItem);
+                                    }
+                                    notifyItemAdded(currentThinkItem);
+                                }
+                                reasoningSb.append(inside);
+                            }
+                            if (currentThinkItem != null) {
+                                currentThinkItem.isRunning = false;
+                                currentThinkItem.text = reasoningSb.toString().trim();
+                                notifyItemUpdated(currentThinkItem);
+                            }
+                            cChunk = after;
+                        } else {
+                            if (currentThinkItem == null) {
+                                currentThinkItem = new AcidSessionStore.UiMessageItem();
+                                currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
+                                currentThinkItem.isRunning = true;
+                                currentThinkItem.timestamp = System.currentTimeMillis();
+                                synchronized (mSessionStore) {
+                                    session.uiItems.add(currentThinkItem);
+                                }
+                                notifyItemAdded(currentThinkItem);
+                            }
+                            reasoningSb.append(cChunk);
+                            long now = System.currentTimeMillis();
+                            if (now - lastUiUpdate >= THROTTLE_MS) {
+                                lastUiUpdate = now;
+                                currentThinkItem.text = reasoningSb.toString();
+                                notifyItemUpdated(currentThinkItem);
+                            }
+                            cChunk = "";
+                        }
+                    }
+
+                    if (!cChunk.isEmpty()) {
+                        if (currentThinkItem != null && currentThinkItem.isRunning) {
+                            currentThinkItem.isRunning = false;
+                            currentThinkItem.text = reasoningSb.toString().trim();
+                            notifyItemUpdated(currentThinkItem);
+                        }
+
+                        if (currentReplyItem == null) {
+                            currentReplyItem = new AcidSessionStore.UiMessageItem();
+                            currentReplyItem.type = AcidSessionStore.TYPE_ASSISTANT;
+                            currentReplyItem.isRunning = true;
+                            currentReplyItem.timestamp = System.currentTimeMillis();
+                            synchronized (mSessionStore) {
+                                session.uiItems.add(currentReplyItem);
+                            }
+                            notifyItemAdded(currentReplyItem);
+                        }
+                        contentSb.append(cChunk);
+                        long now = System.currentTimeMillis();
+                        if (now - lastUiUpdate >= THROTTLE_MS) {
+                            lastUiUpdate = now;
+                            currentReplyItem.text = contentSb.toString();
+                            notifyItemUpdated(currentReplyItem);
+                        }
+                    }
+                }
+
+                // 3. Process tool_calls delta chunks
+                JSONArray toolCallsDelta = delta.optJSONArray("tool_calls");
+                if (toolCallsDelta != null) {
+                    for (int i = 0; i < toolCallsDelta.length(); i++) {
+                        JSONObject tc = toolCallsDelta.optJSONObject(i);
+                        if (tc == null) continue;
+                        int idx = tc.optInt("index", toolCallsMap.size());
+                        StreamingToolCall call = toolCallsMap.get(idx);
+                        if (call == null) {
+                            call = new StreamingToolCall();
+                            call.index = idx;
+                            toolCallsMap.put(idx, call);
+                        }
+                        if (tc.has("id")) {
+                            String tid = tc.optString("id", "");
+                            if (!tid.isEmpty()) call.id = tid;
+                        }
+                        if (tc.has("type")) {
+                            String tType = tc.optString("type", "");
+                            if (!tType.isEmpty()) call.type = tType;
+                        }
+                        JSONObject fn = tc.optJSONObject("function");
+                        if (fn != null) {
+                            if (fn.has("name")) {
+                                String name = fn.optString("name", "");
+                                if (!name.isEmpty()) call.name += name;
+                            }
+                            if (fn.has("arguments")) {
+                                String args = fn.optString("arguments", "");
+                                if (!args.isEmpty()) call.arguments.append(args);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            if (currentThinkItem != null && currentThinkItem.isRunning) {
+                currentThinkItem.isRunning = false;
+                notifyItemUpdated(currentThinkItem);
+            }
+            if (currentReplyItem != null && currentReplyItem.isRunning) {
+                currentReplyItem.isRunning = false;
+                notifyItemUpdated(currentReplyItem);
+            }
+            throw e;
+        } finally {
+            try {
+                reader.close();
+            } catch (Exception ignored) {}
+            conn.disconnect();
         }
-        return choices.getJSONObject(0).getJSONObject("message");
+
+        // Finalize thinking item
+        if (currentThinkItem != null) {
+            String finR = reasoningSb.toString().trim();
+            if (finR.isEmpty() || "null".equals(finR)) {
+                synchronized (mSessionStore) {
+                    session.uiItems.remove(currentThinkItem);
+                }
+                currentThinkItem.text = "";
+                currentThinkItem.isRunning = false;
+                notifyItemUpdated(currentThinkItem);
+            } else {
+                currentThinkItem.isRunning = false;
+                currentThinkItem.text = finR;
+                notifyItemUpdated(currentThinkItem);
+            }
+        }
+
+        // Finalize reply item
+        if (currentReplyItem != null) {
+            currentReplyItem.isRunning = false;
+            currentReplyItem.text = contentSb.toString();
+            notifyItemUpdated(currentReplyItem);
+        }
+
+        // Assemble tool calls
+        JSONArray assembledToolCalls = null;
+        if (!toolCallsMap.isEmpty()) {
+            assembledToolCalls = new JSONArray();
+            for (StreamingToolCall call : toolCallsMap.values()) {
+                JSONObject tc = new JSONObject();
+                tc.put("id", (call.id != null && !call.id.isEmpty()) ? call.id : ("call_" + step + "_" + call.index));
+                tc.put("type", (call.type != null && !call.type.isEmpty()) ? call.type : "function");
+                JSONObject fn = new JSONObject();
+                fn.put("name", call.name != null ? call.name : "");
+                fn.put("arguments", call.arguments.toString());
+                tc.put("function", fn);
+                assembledToolCalls.put(tc);
+            }
+        }
+
+        JSONObject resultMsg = new JSONObject();
+        resultMsg.put("role", "assistant");
+        String finalContent = contentSb.toString();
+        if (!finalContent.isEmpty()) {
+            resultMsg.put("content", finalContent);
+        } else {
+            resultMsg.put("content", JSONObject.NULL);
+        }
+        String finalReasoning = reasoningSb.toString().trim();
+        if (!finalReasoning.isEmpty()) {
+            resultMsg.put("reasoning_content", finalReasoning);
+        }
+        if (assembledToolCalls != null && assembledToolCalls.length() > 0) {
+            resultMsg.put("tool_calls", assembledToolCalls);
+        }
+        return resultMsg;
     }
 
     private String readStreamUtf8(InputStream is) throws Exception {

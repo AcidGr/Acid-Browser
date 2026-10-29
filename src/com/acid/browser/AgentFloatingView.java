@@ -59,6 +59,8 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     private EditText mEtAgentTaskInput;
     private AcidIcons.BadgeButton mBtnAgentSendStop;
     private final Map<String, ToolCardHolder> mToolCardHolders = new HashMap<String, ToolCardHolder>();
+    private final Map<String, ThinkingViewHolder> mThinkingHolders = new HashMap<String, ThinkingViewHolder>();
+    private final Map<String, AssistantViewHolder> mAssistantHolders = new HashMap<String, AssistantViewHolder>();
 
     private static final int INITIAL_RECENT_ITEMS_COUNT = 15;
     private static final int LOAD_MORE_BATCH_SIZE = 25;
@@ -420,6 +422,8 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         if (mChatStreamContainer == null) return;
         mChatStreamContainer.removeAllViews();
         mToolCardHolders.clear();
+        mThinkingHolders.clear();
+        mAssistantHolders.clear();
         mLoadEarlierHeaderCard = null;
         mTvLoadEarlierSummary = null;
         mCurrentRenderedSession = session;
@@ -544,10 +548,32 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     }
 
     public void updateToolCard(AcidSessionStore.UiMessageItem item) {
-        if (item != null && item.toolCallId != null) {
-            ToolCardHolder holder = mToolCardHolders.get(item.toolCallId);
-            if (holder != null) {
-                holder.bind(item, mIsDarkMode);
+        updateUiMessageItem(item);
+    }
+
+    public void updateUiMessageItem(AcidSessionStore.UiMessageItem item) {
+        if (item == null) return;
+        String type = item.type != null ? item.type : "";
+        if (AcidSessionStore.TYPE_TOOL.equals(type)) {
+            if (item.toolCallId != null) {
+                ToolCardHolder holder = mToolCardHolders.get(item.toolCallId);
+                if (holder != null) {
+                    holder.bind(item, mIsDarkMode);
+                }
+            }
+        } else if (AcidSessionStore.TYPE_THINKING.equals(type)) {
+            if (item.id != null) {
+                ThinkingViewHolder holder = mThinkingHolders.get(item.id);
+                if (holder != null) {
+                    holder.update(item, mIsDarkMode);
+                }
+            }
+        } else if (AcidSessionStore.TYPE_ASSISTANT.equals(type)) {
+            if (item.id != null) {
+                AssistantViewHolder holder = mAssistantHolders.get(item.id);
+                if (holder != null) {
+                    holder.update(item, mIsDarkMode);
+                }
             }
         }
         scrollChatToBottom();
@@ -632,7 +658,11 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         if (AcidSessionStore.TYPE_USER.equals(type)) {
             return buildUserBubbleView(item);
         } else if (AcidSessionStore.TYPE_THINKING.equals(type)) {
-            return buildThinkingCardView(item);
+            ThinkingViewHolder holder = buildThinkingCardViewHolder(item);
+            if (item.id != null && !item.id.isEmpty()) {
+                mThinkingHolders.put(item.id, holder);
+            }
+            return holder.rootView;
         } else if (AcidSessionStore.TYPE_TOOL.equals(type)) {
             ToolCardHolder holder = new ToolCardHolder(getContext());
             holder.bind(item, mIsDarkMode);
@@ -643,7 +673,11 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         } else if (AcidSessionStore.TYPE_ERROR.equals(type)) {
             return buildErrorBubbleView(item);
         } else {
-            return buildAssistantMarkdownBubbleView(item);
+            AssistantViewHolder holder = buildAssistantViewHolder(item);
+            if (item.id != null && !item.id.isEmpty()) {
+                mAssistantHolders.put(item.id, holder);
+            }
+            return holder.cardView;
         }
     }
 
@@ -676,7 +710,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         return row;
     }
 
-    private View buildThinkingCardView(AcidSessionStore.UiMessageItem item) {
+    private ThinkingViewHolder buildThinkingCardViewHolder(AcidSessionStore.UiMessageItem item) {
         Context ctx = getContext();
         final LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -701,10 +735,11 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_AGENT, muted, 13);
         head.addView(icon);
 
-        TextView title = new TextView(ctx);
+        final TextView title = new TextView(ctx);
         String preview = item.text != null ? item.text.replace("\n", " ").trim() : "";
+        if ("null".equals(preview)) preview = "";
         if (preview.length() > 36) preview = preview.substring(0, 36) + "...";
-        title.setText("思考过程 · " + preview);
+        title.setText(item.isRunning ? ("思考中 · " + preview) : ("思考过程 · " + preview));
         title.setTextColor(muted);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
         title.setSingleLine(true);
@@ -713,18 +748,29 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         tLp.leftMargin = AcidTheme.dp(ctx, 6);
         head.addView(title, tLp);
 
-        final AcidIcons.SvgIconView chevron = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CHEVRON_DOWN, muted, 14);
+        final AcidIcons.SvgIconView chevron = new AcidIcons.SvgIconView(
+            ctx,
+            item.isRunning ? AcidIcons.ICON_CHEVRON_UP : AcidIcons.ICON_CHEVRON_DOWN,
+            muted,
+            14
+        );
         head.addView(chevron);
         card.addView(head);
 
+        String bodyText = item.text != null ? item.text : "";
+        if ("null".equals(bodyText)) bodyText = "";
         final TextView body = new TextView(ctx);
-        body.setText(item.text);
+        body.setText(bodyText);
         body.setTextColor(muted);
         body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         body.setPadding(0, AcidTheme.dp(ctx, 6), 0, AcidTheme.dp(ctx, 2));
         body.setTextIsSelectable(true);
-        body.setVisibility(View.GONE);
+        body.setVisibility(item.isRunning ? View.VISIBLE : View.GONE);
         card.addView(body);
+
+        if (!item.isRunning && (bodyText.trim().isEmpty() || "null".equals(bodyText.trim()))) {
+            card.setVisibility(View.GONE);
+        }
 
         head.setOnClickListener(new OnClickListener() {
             @Override
@@ -735,10 +781,10 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             }
         });
 
-        return card;
+        return new ThinkingViewHolder(card, title, body, chevron);
     }
 
-    private View buildAssistantMarkdownBubbleView(AcidSessionStore.UiMessageItem item) {
+    private AssistantViewHolder buildAssistantViewHolder(AcidSessionStore.UiMessageItem item) {
         Context ctx = getContext();
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -757,8 +803,20 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         lp.bottomMargin = AcidTheme.dp(ctx, 6);
         card.setLayoutParams(lp);
 
-        AcidMarkdownView.renderInto(card, item.text != null ? item.text : "", mIsDarkMode);
-        return card;
+        TextView streamingTv = new TextView(ctx);
+        streamingTv.setTextColor(AcidTheme.markdownText(mIsDarkMode));
+        streamingTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        streamingTv.setLineSpacing(0f, 1.25f);
+        streamingTv.setTextIsSelectable(true);
+        streamingTv.setText(item.text != null ? item.text : "");
+
+        if (item.isRunning) {
+            card.addView(streamingTv);
+            return new AssistantViewHolder(card, streamingTv, false);
+        } else {
+            AcidMarkdownView.renderInto(card, item.text != null ? item.text : "", mIsDarkMode);
+            return new AssistantViewHolder(card, streamingTv, true);
+        }
     }
 
     private View buildErrorBubbleView(AcidSessionStore.UiMessageItem item) {
@@ -791,6 +849,69 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         row.addView(errTv, eLp);
 
         return row;
+    }
+
+    private static class ThinkingViewHolder {
+        public final View rootView;
+        private final TextView mTitleView;
+        private final TextView mBodyView;
+        private final AcidIcons.SvgIconView mChevron;
+
+        public ThinkingViewHolder(View root, TextView title, TextView body, AcidIcons.SvgIconView chevron) {
+            this.rootView = root;
+            this.mTitleView = title;
+            this.mBodyView = body;
+            this.mChevron = chevron;
+        }
+
+        public void update(AcidSessionStore.UiMessageItem item, boolean isDarkMode) {
+            String text = item.text != null ? item.text : "";
+            if (text.trim().isEmpty() || "null".equals(text.trim())) {
+                rootView.setVisibility(View.GONE);
+                return;
+            }
+            rootView.setVisibility(View.VISIBLE);
+            mBodyView.setText(text);
+            String preview = text.replace("\n", " ").trim();
+            if (preview.length() > 36) preview = preview.substring(0, 36) + "...";
+            if (item.isRunning) {
+                mTitleView.setText("思考中 · " + preview);
+                if (mBodyView.getVisibility() != View.VISIBLE) {
+                    mBodyView.setVisibility(View.VISIBLE);
+                    mChevron.setIcon(AcidIcons.ICON_CHEVRON_UP);
+                }
+            } else {
+                mTitleView.setText("思考过程 · " + preview);
+            }
+        }
+    }
+
+    private static class AssistantViewHolder {
+        public final LinearLayout cardView;
+        private final TextView mStreamingTextView;
+        private boolean mRenderedFinalMarkdown;
+
+        public AssistantViewHolder(LinearLayout card, TextView streamingTv, boolean isFinal) {
+            this.cardView = card;
+            this.mStreamingTextView = streamingTv;
+            this.mRenderedFinalMarkdown = isFinal;
+        }
+
+        public void update(AcidSessionStore.UiMessageItem item, boolean isDarkMode) {
+            String text = item.text != null ? item.text : "";
+            if (item.isRunning) {
+                mRenderedFinalMarkdown = false;
+                if (mStreamingTextView != null) {
+                    mStreamingTextView.setText(text);
+                    mStreamingTextView.setVisibility(View.VISIBLE);
+                }
+            } else {
+                if (!mRenderedFinalMarkdown) {
+                    mRenderedFinalMarkdown = true;
+                    AcidMarkdownView.renderInto(cardView, text, isDarkMode);
+                }
+            }
+        }
     }
 
     private class ToolCardHolder {
@@ -996,11 +1117,6 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 mTvAgentLoopStatus.setTextColor(muted);
             }
         }
-        if (!running && !pausedForTakeover) {
-            if (!isShowing()) {
-                mHasUnreadAgentMessage = true;
-            }
-        }
         if (mTvAgentSessionTitle != null && mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
             mTvAgentSessionTitle.setText(mAgentLoop.getActiveSession().title);
         }
@@ -1019,10 +1135,12 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         if (mAgentLoop == null) return;
         if (mAgentLoop.isRunning()) {
             mAgentLoop.stopLoop();
+            setHasUnread(false);
             Toast.makeText(getContext(), "已停止当前 Agent 任务", Toast.LENGTH_SHORT).show();
             return;
         }
         if (mAgentLoop.isPausedForTakeover()) {
+            setHasUnread(false);
             mAgentLoop.resumeFromTakeover();
             return;
         }
@@ -1032,6 +1150,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             return;
         }
         mEtAgentTaskInput.setText("");
+        setHasUnread(false);
         hideKeyboard();
         mAgentLoop.submitUserTask(task);
     }

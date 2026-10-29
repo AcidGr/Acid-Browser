@@ -149,11 +149,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         // 2. Initialize Agent Loop & Agent Floating View
         mAgentLoop = new AcidAgentLoop(this, mController, new AcidAgentLoop.AgentLoopListener() {
+            private boolean mWasRunning = false;
+
             @Override
             public void onLoopStateChanged(boolean running, boolean pausedForTakeover, int step) {
                 if (mAgentFloatingView != null) {
                     mAgentFloatingView.onLoopStateChanged(running, pausedForTakeover, step);
                 }
+                if (mWasRunning && !running && !pausedForTakeover) {
+                    // Agent loop completed naturally or halted by error
+                    if (mAgentLoop != null && !mAgentLoop.isStopRequested()) {
+                        if (mAgentFloatingView != null && !mAgentFloatingView.isShowing()) {
+                            mAgentFloatingView.setHasUnread(true);
+                        }
+                    }
+                }
+                mWasRunning = running;
                 updateTopAgentButton(running, pausedForTakeover);
             }
 
@@ -167,11 +178,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onUiItemAdded(AcidSessionStore.UiMessageItem item) {
                 if (mAgentFloatingView != null) {
-                    if (!mAgentFloatingView.isShowing()) {
-                        if (item != null && (AcidSessionStore.TYPE_ASSISTANT.equals(item.type) || AcidSessionStore.TYPE_ERROR.equals(item.type))) {
-                            mAgentFloatingView.setHasUnread(true);
-                        }
-                    }
                     mAgentFloatingView.appendUiMessageItemView(item, true);
                 }
             }
@@ -179,7 +185,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onUiItemUpdated(AcidSessionStore.UiMessageItem item) {
                 if (mAgentFloatingView != null) {
-                    mAgentFloatingView.updateToolCard(item);
+                    mAgentFloatingView.updateUiMessageItem(item);
                 }
             }
         });
