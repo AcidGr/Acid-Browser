@@ -41,6 +41,7 @@ public class AcidSessionStore {
     public static final String TYPE_ERROR = "error";
 
     public static class UiMessageItem {
+        public String id = "ui_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 100000);
         public String type;
         public String text;          // For user, thinking, assistant, error
         public String toolCallId;    // For tool
@@ -48,13 +49,14 @@ public class AcidSessionStore {
         public String toolSummary;   // Short one-line summary shown on the collapsed pill
         public String toolArgsJson;  // Pretty JSON input parameters
         public String toolResult;    // Full tool execution output
-        public boolean isRunning;    // True while tool is executing
+        public boolean isRunning;    // True while tool is executing or while streaming
         public boolean isError;      // True if tool returned an error
         public long timestamp;
 
         public JSONObject toJson() {
             JSONObject o = new JSONObject();
             try {
+                if (id != null) o.put("id", id);
                 o.put("type", type != null ? type : TYPE_ASSISTANT);
                 if (text != null) o.put("text", text);
                 if (toolCallId != null) o.put("toolCallId", toolCallId);
@@ -75,6 +77,7 @@ public class AcidSessionStore {
 
         public static UiMessageItem fromJson(JSONObject o) {
             UiMessageItem it = new UiMessageItem();
+            it.id = o.optString("id", "ui_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 100000));
             it.type = o.optString("type", TYPE_ASSISTANT);
             it.text = o.optString("text", "");
             it.toolCallId = o.optString("toolCallId", "");
