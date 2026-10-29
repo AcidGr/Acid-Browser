@@ -145,22 +145,6 @@ public class UserscriptManager {
         return loadedScripts();
     }
 
-    /** Scripts flagged with {@code @acid-menu true}, ordered by {@code @acid-order}. */
-    public List<UserscriptMeta> getMenuScripts() {
-        List<UserscriptMeta> out = new ArrayList<UserscriptMeta>();
-        for (UserscriptMeta m : loadedScripts()) {
-            if (m.showInMenu) out.add(m);
-        }
-        Collections.sort(out, new Comparator<UserscriptMeta>() {
-            @Override
-            public int compare(UserscriptMeta a, UserscriptMeta b) {
-                if (a.menuOrder != b.menuOrder) return a.menuOrder - b.menuOrder;
-                return a.name.compareTo(b.name);
-            }
-        });
-        return out;
-    }
-
     // =========================================================================
     // Injection
     // =========================================================================

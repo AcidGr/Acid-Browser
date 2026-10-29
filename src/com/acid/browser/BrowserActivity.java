@@ -325,28 +325,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mAdBlockSheet.showAdBlock();
                 }
             }
-
-            @Override
-            public void onRunCustomTool(UserscriptMeta meta) {
-                if (mController != null) {
-                    boolean ok = mController.runUserscriptNow(meta);
-                    if (ok) {
-                        Toast.makeText(BrowserActivity.this, "已执行「" + meta.name + "」", Toast.LENGTH_SHORT).show();
-                    } else {
-                        Toast.makeText(BrowserActivity.this, "「" + meta.name + "」不适用于当前页面 (" + meta.describeScope() + ")", Toast.LENGTH_LONG).show();
-                    }
-                }
-            }
-
-            @Override
-            public void onEnableCustomTool(UserscriptMeta meta) {
-                if (mController != null) {
-                    mController.setUserscriptEnabled(meta.fileName, true);
-                    updateMenuSheetCards();
-                    Toast.makeText(BrowserActivity.this, "已启用「" + meta.name + "」", Toast.LENGTH_SHORT).show();
-                    mController.runUserscriptNow(meta);
-                }
-            }
         });
         mRootContainer.addView(mMenuSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
@@ -831,9 +809,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             modelCount
         );
         mMenuSheet.updateMcpState(mHttpServer != null && mHttpServer.isRunning());
-        if (mController != null) {
-            mMenuSheet.renderCustomTools(mController.getMenuUserscripts());
-        }
     }
 
     private void toggleMcpServer() {

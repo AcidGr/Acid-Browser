@@ -1507,11 +1507,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mUserscriptManager.getScripts();
     }
 
-    /** Scripts marked {@code @acid-menu true}, ordered for the menu grid. */
-    public List<UserscriptMeta> getMenuUserscripts() {
-        return mUserscriptManager.getMenuScripts();
-    }
-
     /**
      * Installs a userscript after validation.
      *
