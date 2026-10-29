@@ -1,18 +1,19 @@
 # Skill: Browser Feature & Userscript Authoring
 
-Authoring persistent in-browser extensions, user scripts, and dynamic menu-card tools inside Acid Android Browser via standard `write`.
+Authoring persistent in-browser extensions and user scripts inside Acid Android Browser via standard `write`.
 
 ---
 
 ## 1. Overview & Trigger Criteria
 
-Acid Android Browser embeds a native Userscript Engine that turns standard user scripts into **first-class browser features**. When marked with Acid metadata, scripts written into the `userscripts/` directory are dynamically parsed and rendered as native interactive cards in the browser's bottom-right functional menu (`BrowserMenuSheet`).
+Acid Android Browser embeds a native Userscript Engine that executes standard userscripts on matching webpages. All installed scripts live under the `userscripts/` directory and are managed cleanly inside the browser's dedicated **「脚本管理」 (Userscript Management Sheet)** panel, where users can view script details, toggle them on/off, or delete scripts.
+
+> **Note**: Userscripts run automatically in the background on matching websites. They do **not** appear as tool buttons in the browser menu.
 
 ### When to Use This Skill
 - **Write a userscript (`write(file_path='userscripts/<name>.user.js', ...)`) when**:
   - The user requests a **persistent, reusable capability** (e.g., "Add a reader mode", "block banners on this domain", "add a button to export tables", "auto-expand collapsed text", "force dark mode").
   - The feature should remain available across page reloads and tab navigations.
-  - The user wants a convenient button/toggle in the browser menu.
 - **Do NOT write a userscript when**:
   - The task is a one-off inspection or transient interaction (e.g., "click the next button", "what is the price of this item?") -> Use `browser(action='click'|'fill'|'eval')` instead.
   - The user only asks to inspect workspace files -> Use `read`/`bash`.
@@ -21,7 +22,7 @@ Acid Android Browser embeds a native Userscript Engine that turns standard user 
 
 ## 2. Authoring Workflow via `write` Tool
 
-To create a new browser feature, call `write` targeting a `.user.js` file inside `userscripts/`:
+To create a new browser script, call `write` targeting a `.user.js` file inside `userscripts/`:
 - **`file_path`**: Must be formatted as `userscripts/<script_name>.user.js` (e.g. `userscripts/reader_mode.user.js`).
 - **`content`**: Full JavaScript file containing the standard `// ==UserScript==` metadata block followed by the implementation wrapped in an IIFE.
 
@@ -34,10 +35,6 @@ To create a new browser feature, call `write` targeting a `.user.js` file inside
 // @description  优化知乎正文阅读排版与去除侧边栏
 // @match        *://*.zhihu.com/*
 // @run-at       document-idle
-// @acid-icon    M 5 4 H 19 V 20 H 5 Z M 8 8 H 16 M 8 12 H 16 M 8 16 H 13
-// @acid-menu    true
-// @acid-enabled false
-// @acid-order   100
 // ==/UserScript==
 
 (function () {
@@ -50,52 +47,24 @@ To create a new browser feature, call `write` targeting a `.user.js` file inside
 
 | Directive | Format | Required | Description |
 | :--- | :--- | :---: | :--- |
-| `@name` | string | **Yes** | Menu label shown to the user. **Keep it concise** (<= 6 Chinese characters or <= 15 English characters), e.g., `"看书模式"`, `"去广告"`, `"导出表格"`. |
-| `@description`| string | No | One sentence explaining what the feature accomplishes. Shown in the management list. |
-| `@match` | glob pattern | **Yes** | Target site glob (e.g. `*://*.zhihu.com/*`). Can specify multiple `@match` lines for multiple domains! Use `*://*/*` only for universal features. |
+| `@name` | string | **Yes** | Display name of the script shown in the script management sheet. Keep it clear, e.g., `"知乎阅读模式"`, `"表格一键导出"`. |
+| `@description`| string | No | One sentence explaining what the script accomplishes. Shown in the script detail sheet. |
+| `@match` | glob pattern | **Yes** | Target site glob (e.g. `*://*.zhihu.com/*`). Can specify multiple `@match` lines for multiple domains! Use `*://*/*` only for universal scripts. |
 | `@run-at` | string | No | Execution timing: `"document-idle"` (default, recommended), `"document-end"`, or `"document-start"`. |
-| `@acid-icon` | SVG path | **Yes** | SVG path command string within a `24x24` viewport. **Must strictly adhere to Acid SVG subset rules**. |
-| `@acid-menu` | boolean | No | Set `true` so the feature appears as a native card in the browser menu. |
-| `@acid-enabled`| boolean | No | Default `false` (pending user review). User can tap Enable in the menu. |
-| `@acid-order` | integer | No | Sorting priority in the menu card grid (default: 100). Lower numbers appear first. |
+| `@version` | string | No | Semantic version string, e.g., `"1.0.0"`. |
+| `@namespace` | string | No | Script namespace / author identifier, e.g., `"acid.agent"`. |
 
 ---
 
-## 3. Acid SVG Path Grammar & Constraints
+## 3. Runtime Boundaries & Android WebView Constraints
 
-The in-app vector renderer (`AcidIcons.java`) uses a lightweight, high-performance canvas path builder. **It is strict and will reject invalid paths.**
-
-### Whitelist & Blacklist
-- **ALLOWED Commands**: `M`, `L`, `H`, `V`, `C`, `Q`, `Z` (case-insensitive, coordinates separated by spaces or commas).
-- **FORBIDDEN Commands**: `A` (elliptic arcs), `S` (smooth cubic curves), `T` (smooth quadratic curves).
-  > **CRITICAL**: Never emit `A`, `S`, or `T`. Any path containing these characters triggers `Error: invalid icon_path` and fails installation.
-- **Viewport**: Strictly `24 x 24` (coordinates from `0` to `24`).
-
-### Curated Ready-to-Use Icon Library
-Copy and adapt from these verified SVG paths:
-
-| Icon | Purpose | SVG Path (`@acid-icon`) |
-| :--- | :--- | :--- |
-| 📖 **Book / Reader** | Reading mode, focus mode | `M 5 4 H 19 V 20 H 5 Z M 8 8 H 16 M 8 12 H 16 M 8 16 H 13` |
-| 🛡 **Shield / Guard** | Ad blocker, anti-hijack | `M 12 3 L 20 6 V 12 C 20 16 16 20 12 21 C 8 20 4 16 4 12 V 6 Z` |
-| 🧹 **Broom / Cleaner** | Clean clutter, strip banners | `M 15 3 L 21 9 L 14 16 L 8 10 Z M 8 10 L 4 14 V 20 H 10 L 14 16` |
-| 🔤 **Text / Font** | Typography, font size | `M 4 5 H 20 M 12 5 V 19 M 8 19 H 16` |
-| ☀️ **Sun / Contrast** | Theme switch, contrast | `M 12 7 C 9.24 7 7 9.24 7 12 C 7 14.76 9.24 17 12 17 C 14.76 17 17 14.76 17 12 C 17 9.24 14.76 7 12 7 Z M 12 2 V 4 M 12 20 V 22 M 2 12 H 4 M 20 12 H 22` |
-| 📥 **Download / Export**| Extract data, save table | `M 12 3 V 15 M 7 10 L 12 15 L 17 10 M 4 20 H 20` |
-| ⚡ **Lightning / Action** | Speedup, one-click action | `M 13 2 L 4 14 H 11 L 9 22 L 20 10 H 13 Z` |
-| 👁 **Eye / Unhide** | Reveal hidden content | `M 2 12 C 4 7 8 4 12 4 C 16 4 20 7 22 12 C 20 17 16 20 12 20 C 8 20 4 17 2 12 Z M 12 9 C 10.34 9 9 10.34 9 12 C 9 13.66 10.34 15 12 15 C 13.66 15 15 13.66 15 12 C 15 10.34 13.66 9 12 9 Z` |
-
----
-
-## 4. Runtime Boundaries & Android WebView Constraints
-
-Acid Browser runs scripts directly inside the Android WebView page context (`evaluateJavascript`). Understand the following runtime limitations:
+Acid Browser runs scripts directly inside the Android WebView page context (`evaluateJavascript`). Understand the following runtime boundaries:
 
 1. **NO `GM_*` APIs**:
    - There is NO Tampermonkey extension sandbox (`GM_xmlhttpRequest`, `GM_setValue`, `GM_getValue`, `GM_addStyle`, `GM_setClipboard`, etc. are **UNDEFINED**).
    - Use standard Web APIs: `window.localStorage`, `window.sessionStorage`, `window.fetch`, and `navigator.clipboard`.
 2. **NO `@require` or `@resource`**:
-   - External script CDNs (such as external jQuery bundles) are not pre-fetched. Write vanilla JavaScript.
+   - External script CDNs (such as external jQuery bundles) are not pre-fetched. Write clean vanilla JavaScript.
 3. **Script Size Limit**:
    - Maximum script size is **20 MB** (`MAX_SCRIPT_BYTES`). Easily accommodates heavy frontend bundles, UI component libraries, and embedded offline resources.
 4. **Lifecycle (`@run-at`) Differences**:
@@ -110,17 +79,20 @@ Acid Browser runs scripts directly inside the Android WebView page context (`eva
 
 ---
 
-## 5. Security & Human-in-the-Loop Activation
+## 4. Script Management & User Control
 
 When a userscript is written to `userscripts/*.user.js` via `write`:
-1. The Userscript Engine automatically validates metadata and SVG icon path, installs it, and registers it as a native card in the browser menu.
-2. If marked with `@acid-menu true` and `@acid-enabled false`, it appears immediately under **快捷工具 (Custom Tools)** marked as `(待启用)` with an amber indicator.
-3. **It will NOT run until the human user opens the menu and taps "Enable"** after reviewing the code.
-4. **Agent Action**: Always tell the user that the tool has been authored and guide them to open the menu (`功能 -> 快捷工具`) to review and enable it.
+1. The Userscript Engine automatically validates metadata, registers it, and installs it into `userscripts/`.
+2. Once installed, it is active and will execute automatically whenever the browser navigates to a URL matching `@match`.
+3. **User Control**: The user can open **「功能 -> 脚本管理」** at any time to:
+   - View all installed scripts and their target URL scopes;
+   - Enable or disable any script via an ON/OFF toggle switch;
+   - View script code or delete scripts.
+4. **Agent Action**: Inform the user that the script has been installed and is active on matching websites, and they can manage or toggle it anytime in 「功能 -> 脚本管理」.
 
 ---
 
-## 6. Complete Authoring Examples
+## 5. Complete Authoring Examples
 
 ### Pattern A: Clean Reading Mode (DOM Cleaner + Style Injection)
 ```javascript
@@ -133,10 +105,6 @@ When a userscript is written to `userscripts/*.user.js` via `write`:
 // @match        *://*.zhihu.com/*
 // @match        *://*.juejin.cn/*
 // @run-at       document-idle
-// @acid-icon    M 5 4 H 19 V 20 H 5 Z M 8 8 H 16 M 8 12 H 16 M 8 16 H 13
-// @acid-menu    true
-// @acid-enabled false
-// @acid-order   100
 // ==/UserScript==
 
 (function () {
@@ -156,7 +124,7 @@ When a userscript is written to `userscripts/*.user.js` via `write`:
 })();
 ```
 
-### Pattern B: Continuous Floating Banner & App-Hijack Remover
+### Pattern B: Continuous Floating Banner Remover
 ```javascript
 // Call write(file_path="userscripts/anti_app_hijack.user.js", content=...)
 // ==UserScript==
@@ -166,10 +134,6 @@ When a userscript is written to `userscripts/*.user.js` via `write`:
 // @description  自动清理唤端拦截弹窗与遮罩
 // @match        *://*/*
 // @run-at       document-idle
-// @acid-icon    M 12 3 L 20 6 V 12 C 20 16 16 20 12 21 C 8 20 4 16 4 12 V 6 Z
-// @acid-menu    true
-// @acid-enabled false
-// @acid-order   10
 // ==/UserScript==
 
 (function () {
@@ -178,50 +142,56 @@ When a userscript is written to `userscripts/*.user.js` via `write`:
         const targets = document.querySelectorAll('.open-app-banner, [class*="download-app"], [id*="openInApp"]');
         targets.forEach(el => el.remove());
         if (document.body) document.body.style.overflow = 'auto';
-        if (document.documentElement) document.documentElement.style.overflow = 'auto';
     }
+
     purgeAnnoyances();
     const observer = new MutationObserver(purgeAnnoyances);
     observer.observe(document.documentElement, { childList: true, subtree: true });
 })();
 ```
 
-### Pattern C: Table Exporter to CSV
+### Pattern C: Floating Table Exporter Button
 ```javascript
-// Call write(file_path="userscripts/export_table.user.js", content=...)
+// Call write(file_path="userscripts/table_exporter.user.js", content=...)
 // ==UserScript==
-// @name         导出表格
+// @name         网页表格导出器
 // @namespace    acid.agent
 // @version      1.0.0
-// @description  一键将网页表格数据导出为 CSV 文件
+// @description  在包含表格的页面生成悬浮下载 CSV 按钮
 // @match        *://*/*
 // @run-at       document-idle
-// @acid-icon    M 12 3 V 15 M 7 10 L 12 15 L 17 10 M 4 20 H 20
-// @acid-menu    true
-// @acid-enabled false
-// @acid-order   50
 // ==/UserScript==
 
 (function () {
     'use strict';
-    const tables = document.querySelectorAll('table');
-    if (!tables.length) {
-        alert('当前页面未检测到数据表格');
-        return;
-    }
-    let csv = [];
-    const rows = tables[0].querySelectorAll('tr');
-    rows.forEach(row => {
-        const cols = row.querySelectorAll('th, td');
-        const rowData = Array.from(cols).map(c => '"' + (c.innerText || '').replace(/"/g, '""').trim() + '"');
-        csv.push(rowData.join(','));
+    if (window.__acidTableExporterLoaded) return;
+    window.__acidTableExporterLoaded = true;
+
+    window.addEventListener('load', () => {
+        const tables = document.querySelectorAll('table');
+        if (!tables.length) return;
+
+        const btn = document.createElement('button');
+        btn.textContent = `📊 导出表格 (${tables.length})`;
+        btn.style.cssText = `
+            position: fixed; bottom: 80px; right: 20px; z-index: 999999;
+            background: #00BA76; color: #fff; border: none; padding: 10px 14px;
+            border-radius: 20px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+            font-size: 13px; cursor: pointer;
+        `;
+        btn.onclick = () => {
+            let csv = '';
+            tables[0].querySelectorAll('tr').forEach(tr => {
+                const row = Array.from(tr.querySelectorAll('th, td')).map(td => `"${td.innerText.replace(/"/g, '""')}"`).join(',');
+                csv += row + '\n';
+            });
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `table_export_${Date.now()}.csv`;
+            a.click();
+        };
+        document.body.appendChild(btn);
     });
-    const blob = new Blob([csv.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = (document.title || 'table_export') + '.csv';
-    a.click();
-    URL.revokeObjectURL(url);
 })();
 ```

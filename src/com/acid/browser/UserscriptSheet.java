@@ -116,17 +116,9 @@ public class UserscriptSheet extends AcidBottomSheetView {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rLp.bottomMargin = AcidTheme.dp(ctx, 6);
 
-        // Glyph: the agent-drawn icon when present, otherwise a generic file icon.
-        AcidIcons.SvgIconView icon;
-        int glyphColor = meta.enabled
-            ? (!TextUtils.isEmpty(meta.iconPath) ? AcidTheme.accent(mIsDarkMode) : AcidTheme.muted(mIsDarkMode))
-            : AcidTheme.iconDisabled(mIsDarkMode);
-        if (!TextUtils.isEmpty(meta.iconPath)) {
-            icon = new AcidIcons.SvgIconView(ctx, meta.iconPath, glyphColor, 19);
-        } else {
-            icon = new AcidIcons.SvgIconView(
-                ctx, AcidIcons.ICON_FILE, glyphColor, 19);
-        }
+        // Script file icon
+        int glyphColor = meta.enabled ? AcidTheme.accent(mIsDarkMode) : AcidTheme.iconDisabled(mIsDarkMode);
+        AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_FILE, glyphColor, 19);
         row.addView(icon);
 
         LinearLayout textBox = new LinearLayout(ctx);

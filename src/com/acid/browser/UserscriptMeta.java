@@ -42,14 +42,7 @@ public class UserscriptMeta {
     public final List<String> includes = new ArrayList<String>();
     public final List<String> excludes = new ArrayList<String>();
     public String runAt = RUN_AT_IDLE;
-
-    /** Acid extension: 24x24 SVG path drawn by the agent, shown as the menu glyph. */
-    public String iconPath = "";
-    /** Acid extension: expose this script as a button in the browser menu. */
-    public boolean showInMenu = false;
-    /** Acid extension: ordering hint among menu entries. */
-    public int menuOrder = 0;
-    /** Whether this script is active. Pending scripts created by agent are disabled by default. */
+    /** Whether this script is active. Can be toggled on/off in the userscripts sheet. */
     public boolean enabled = true;
 
     /** Script source with the metadata block stripped. */
@@ -142,16 +135,6 @@ public class UserscriptMeta {
             String v = value.toLowerCase();
             if (RUN_AT_START.equals(v) || RUN_AT_END.equals(v) || RUN_AT_IDLE.equals(v)) {
                 runAt = v;
-            }
-        } else if ("acid-icon".equals(key)) {
-            iconPath = value;
-        } else if ("acid-menu".equals(key)) {
-            showInMenu = "true".equalsIgnoreCase(value) || "1".equals(value);
-        } else if ("acid-order".equals(key)) {
-            try {
-                menuOrder = Integer.parseInt(value.trim());
-            } catch (NumberFormatException ignored) {
-                // Ordering is cosmetic; a bad value just keeps the default.
             }
         } else if ("acid-enabled".equals(key) || "enabled".equals(key)) {
             enabled = !"false".equalsIgnoreCase(value) && !"0".equals(value);
@@ -271,9 +254,6 @@ public class UserscriptMeta {
             o.put("description", description);
             o.put("runAt", runAt);
             o.put("scope", describeScope());
-            o.put("iconPath", iconPath);
-            o.put("showInMenu", showInMenu);
-            o.put("menuOrder", menuOrder);
             o.put("enabled", enabled);
             o.put("hasMetadata", hasMetadata);
             JSONArray m = new JSONArray();
