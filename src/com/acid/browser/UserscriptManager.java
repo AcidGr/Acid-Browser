@@ -94,11 +94,9 @@ public class UserscriptManager {
             skillsDir.mkdirs();
         }
         File defaultSkill = new File(skillsDir, "userscript_dev.md");
-        if (!defaultSkill.exists()) {
-            String skillSrc = readAssetText("skills/userscript_dev.md");
-            if (!skillSrc.isEmpty()) {
-                writeFileText(defaultSkill, skillSrc);
-            }
+        String skillSrc = readAssetText("skills/userscript_dev.md");
+        if (!skillSrc.isEmpty()) {
+            writeFileText(defaultSkill, skillSrc);
         }
     }
 
