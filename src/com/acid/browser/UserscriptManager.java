@@ -302,7 +302,7 @@ public class UserscriptManager {
         String content = readFileText(f);
         if (content.isEmpty()) return false;
 
-        String pattern = "(?m)^//\\s*@acid-enabled\\s+.*$";
+        String pattern = "(?m)^\\s*//+\\s*@acid-enabled\\s+.*$";
         String replacement = "// @acid-enabled  " + enabled;
         String newContent;
         if (Pattern.compile(pattern).matcher(content).find()) {
@@ -310,7 +310,12 @@ public class UserscriptManager {
         } else {
             int end = content.indexOf("==/UserScript==");
             if (end >= 0) {
-                newContent = content.substring(0, end) + replacement + "\n" + content.substring(end);
+                int lineStart = content.lastIndexOf('\n', end);
+                if (lineStart >= 0) {
+                    newContent = content.substring(0, lineStart + 1) + replacement + "\n" + content.substring(lineStart + 1);
+                } else {
+                    newContent = replacement + "\n" + content;
+                }
             } else {
                 newContent = replacement + "\n" + content;
             }

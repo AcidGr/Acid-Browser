@@ -3,16 +3,20 @@ package com.acid.browser;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
+import android.os.Build;
 import android.text.TextUtils;
 import android.text.format.DateFormat;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.CompoundButton;
 import android.widget.LinearLayout;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -33,6 +37,8 @@ public class UserscriptSheet extends AcidBottomSheetView {
         void onRunScript(UserscriptMeta meta);
         /** Asks the host to open the install dialog for a local file. */
         void onImportRequested();
+        /** Notifies host when a script's enabled state was toggled. */
+        void onScriptToggle(UserscriptMeta meta, boolean enabled);
     }
 
     private final UserscriptManager mManager;
@@ -112,11 +118,14 @@ public class UserscriptSheet extends AcidBottomSheetView {
 
         // Glyph: the agent-drawn icon when present, otherwise a generic file icon.
         AcidIcons.SvgIconView icon;
+        int glyphColor = meta.enabled
+            ? (!TextUtils.isEmpty(meta.iconPath) ? AcidTheme.accent(mIsDarkMode) : AcidTheme.muted(mIsDarkMode))
+            : AcidTheme.iconDisabled(mIsDarkMode);
         if (!TextUtils.isEmpty(meta.iconPath)) {
-            icon = new AcidIcons.SvgIconView(ctx, meta.iconPath, AcidTheme.accent(mIsDarkMode), 19);
+            icon = new AcidIcons.SvgIconView(ctx, meta.iconPath, glyphColor, 19);
         } else {
             icon = new AcidIcons.SvgIconView(
-                ctx, AcidIcons.ICON_FILE, AcidTheme.muted(mIsDarkMode), 19);
+                ctx, AcidIcons.ICON_FILE, glyphColor, 19);
         }
         row.addView(icon);
 
@@ -125,18 +134,23 @@ public class UserscriptSheet extends AcidBottomSheetView {
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         tLp.leftMargin = AcidTheme.dp(ctx, 10);
+        tLp.rightMargin = AcidTheme.dp(ctx, 8);
 
         TextView title = new TextView(ctx);
         title.setText(meta.name);
-        title.setTextColor(textCol);
+        title.setTextColor(meta.enabled ? textCol : mutedCol);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTypeface(meta.enabled ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         textBox.addView(title);
 
         TextView sub = new TextView(ctx);
-        StringBuilder sb = new StringBuilder(meta.describeScope());
+        StringBuilder sb = new StringBuilder();
+        if (!meta.enabled) {
+            sb.append("[已停用] · ");
+        }
+        sb.append(meta.describeScope());
         if (!TextUtils.isEmpty(meta.version)) sb.append(" · v").append(meta.version);
         sb.append(" · ").append(meta.runAt);
         sub.setText(sb.toString());
@@ -149,6 +163,36 @@ public class UserscriptSheet extends AcidBottomSheetView {
 
         row.addView(textBox, tLp);
 
+        // Right side: Toggle Switch
+        final Switch sw = new Switch(ctx);
+        sw.setChecked(meta.enabled);
+        if (Build.VERSION.SDK_INT >= 23) {
+            int accent = AcidTheme.accent(mIsDarkMode);
+            sw.setThumbTintList(ColorStateList.valueOf(meta.enabled ? accent : AcidTheme.muted(mIsDarkMode)));
+        }
+        sw.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                boolean isChecked = sw.isChecked();
+                if (mManager != null) {
+                    mManager.setScriptEnabled(meta.fileName, isChecked);
+                    meta.enabled = isChecked;
+                    Toast.makeText(getContext(),
+                        (isChecked ? "已启用「" : "已停用「") + meta.name + "」",
+                        Toast.LENGTH_SHORT).show();
+                    renderScripts();
+                    if (mActionListener != null) {
+                        mActionListener.onScriptToggle(meta, isChecked);
+                    }
+                }
+            }
+        });
+        row.addView(sw);
+
+        if (!meta.enabled) {
+            row.setAlpha(0.65f);
+        }
+
         row.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -159,7 +203,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
         return row;
     }
 
-    /** Detail view: metadata, body preview, run-once, delete. */
+    /** Detail view: metadata, body preview, run-once, toggle, delete. */
     private void showScriptDetail(final UserscriptMeta meta) {
         Context ctx = getContext();
         AlertDialog.Builder b = AcidTheme.dialogBuilder(ctx, mIsDarkMode);
@@ -181,6 +225,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
 
         TextView info = new TextView(ctx);
         StringBuilder sb = new StringBuilder();
+        sb.append("状态: ").append(meta.enabled ? "已启用 (自动随网页加载运行)" : "已停用 (暂停自动运行)").append("\n");
         sb.append("生效范围: ").append(meta.describeScope()).append("\n");
         sb.append("执行时机: ").append(meta.runAt).append("\n");
         if (!TextUtils.isEmpty(meta.version)) sb.append("版本: ").append(meta.version).append("\n");
@@ -214,13 +259,29 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 if (mActionListener != null) mActionListener.onRunScript(meta);
             }
         });
-        b.setNeutralButton("删除", new DialogInterface.OnClickListener() {
+        b.setNeutralButton(meta.enabled ? "停用脚本" : "启用脚本", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                boolean nextState = !meta.enabled;
+                if (mManager != null) {
+                    mManager.setScriptEnabled(meta.fileName, nextState);
+                    meta.enabled = nextState;
+                    Toast.makeText(getContext(),
+                        (nextState ? "已启用「" : "已停用「") + meta.name + "」",
+                        Toast.LENGTH_SHORT).show();
+                    renderScripts();
+                    if (mActionListener != null) {
+                        mActionListener.onScriptToggle(meta, nextState);
+                    }
+                }
+            }
+        });
+        b.setNegativeButton("删除", new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialog, int which) {
                 confirmDelete(meta);
             }
         });
-        b.setNegativeButton("关闭", null);
         b.show();
     }
 

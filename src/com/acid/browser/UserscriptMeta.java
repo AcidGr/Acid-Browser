@@ -101,8 +101,8 @@ public class UserscriptMeta {
         String[] lines = header.split("\n");
         for (String raw : lines) {
             String line = raw.trim();
-            // Accept "// @key value" and "@key value".
-            if (line.startsWith("//")) {
+            // Accept "// @key value", "/// @key value" and "@key value".
+            while (line.startsWith("//")) {
                 line = line.substring(2).trim();
             }
             if (!line.startsWith("@")) continue;
