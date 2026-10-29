@@ -209,7 +209,11 @@ public class TabsOverviewView extends FrameLayout {
 
         int cardBg = mIsDarkMode ? AcidTheme.DARK_BAR : Color.WHITE;
         int borderCol = isActive ? AcidTheme.COLOR_TAB_ACTIVE_BORDER : (mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER);
-        card.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, borderCol, isActive ? 2 : 1, 14));
+        card.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, 0, 0, 14));
+        // Clip header / thumbnail to the rounded card, and draw the border as a foreground overlay so
+        // child views can no longer paint over it (this is why the selected tab showed no frame before).
+        card.setClipToOutline(true);
+        card.setForeground(AcidTheme.cardBorderBg(ctx, Color.TRANSPARENT, borderCol, isActive ? 3 : 1, 14));
         card.setClickable(true);
         card.setFocusable(true);
 
@@ -217,10 +221,10 @@ public class TabsOverviewView extends FrameLayout {
         LinearLayout head = new LinearLayout(ctx);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        head.setPadding(AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 7), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 7));
+        head.setPadding(AcidTheme.dp(ctx, 10), 0, AcidTheme.dp(ctx, 2), 0);
 
         GradientDrawable headGd = new GradientDrawable();
-        headGd.setColor(mIsDarkMode ? Color.parseColor("#1E293B") : Color.parseColor("#F8FAFC"));
+        headGd.setColor(mIsDarkMode ? Color.parseColor("#121212") : Color.parseColor("#F8FAFC"));
         float r = AcidTheme.dp(ctx, 14);
         headGd.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
         head.setBackground(headGd);
@@ -243,19 +247,24 @@ public class TabsOverviewView extends FrameLayout {
 
         LinearLayout closeBtn = new LinearLayout(ctx);
         closeBtn.setGravity(Gravity.CENTER);
-        closeBtn.setPadding(AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4));
-        AcidIcons.SvgIconView closeIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CLOSE, AcidTheme.muted(mIsDarkMode), 13);
+        AcidIcons.SvgIconView closeIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CLOSE, AcidTheme.muted(mIsDarkMode), 14);
         closeBtn.addView(closeIcon);
         closeBtn.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (mController != null) {
-                    mController.closeTab(tab.id);
+                if (mController == null) return;
+                boolean wasLastTab = mController.getTabs().size() <= 1;
+                mController.closeTab(tab.id);
+                if (wasLastTab) {
+                    // Last tab closed: leave the overview; the controller already created a fresh Home tab.
+                    close();
+                } else {
+                    renderTabsGrid();
                 }
-                renderTabsGrid();
             }
         });
-        head.addView(closeBtn);
+        // 40x40dp touch target (icon itself stays 14dp) to avoid mis-taps
+        head.addView(closeBtn, new LinearLayout.LayoutParams(AcidTheme.dp(ctx, 40), AcidTheme.dp(ctx, 40)));
         card.addView(head);
 
         // Body: Live Web Snapshot Thumbnail

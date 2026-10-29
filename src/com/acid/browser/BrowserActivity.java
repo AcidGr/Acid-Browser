@@ -442,6 +442,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mEtUrl.setPadding(dp(6), dp(4), dp(6), dp(4));
         mEtUrl.setImeOptions(EditorInfo.IME_ACTION_GO);
         mEtUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        // Tapping the address bar selects the whole URL so typing replaces it (Chrome/Via behaviour)
+        mEtUrl.setSelectAllOnFocus(true);
         mEtUrl.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
@@ -452,6 +454,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         mTabsOverview.close();
                     }
                     mController.loadUrl(mEtUrl.getText().toString());
+                    // Hand focus back to the page so the next tap on the bar re-triggers select-all
+                    // and onUrlChanged() can refresh the bar again.
+                    BrowserController.TabSession tab = mController.getActiveTab();
+                    if (tab != null && tab.webView != null) {
+                        tab.webView.requestFocus();
+                    } else {
+                        mEtUrl.clearFocus();
+                    }
                     return true;
                 }
                 return false;

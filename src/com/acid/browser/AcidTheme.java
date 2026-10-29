@@ -28,18 +28,18 @@ public final class AcidTheme {
     public static final int COLOR_TAB_ACTIVE_BORDER = Color.parseColor("#0284C7");
     public static final int COLOR_OVERVIEW_BG = Color.parseColor("#F1F5F9");
 
-    // Night/Dark Theme Colors
-    public static final int DARK_BG = Color.parseColor("#0F172A");
-    public static final int DARK_BAR = Color.parseColor("#1E293B");
-    public static final int DARK_BORDER = Color.parseColor("#334155");
-    public static final int DARK_SEARCH_BG = Color.parseColor("#0F172A");
-    public static final int DARK_SEARCH_BORDER = Color.parseColor("#334155");
-    public static final int DARK_TEXT = Color.parseColor("#F8FAFC");
-    public static final int DARK_MUTED = Color.parseColor("#94A3B8");
-    public static final int DARK_ICON = Color.parseColor("#E2E8F0");
-    public static final int DARK_ICON_DISABLED = Color.parseColor("#475569");
+    // Night/Dark Theme Colors (True OLED Black, zero screen emission)
+    public static final int DARK_BG = Color.parseColor("#000000");
+    public static final int DARK_BAR = Color.parseColor("#000000");
+    public static final int DARK_BORDER = Color.parseColor("#1C1C1E");
+    public static final int DARK_SEARCH_BG = Color.parseColor("#121212");
+    public static final int DARK_SEARCH_BORDER = Color.parseColor("#27272A");
+    public static final int DARK_TEXT = Color.parseColor("#EDEDED");
+    public static final int DARK_MUTED = Color.parseColor("#71717A");
+    public static final int DARK_ICON = Color.parseColor("#D4D4D8");
+    public static final int DARK_ICON_DISABLED = Color.parseColor("#3F3F46");
     public static final int DARK_ACCENT = Color.parseColor("#00FF88");
-    public static final int DARK_MENU_ITEM_BG = Color.parseColor("#0F172A");
+    public static final int DARK_MENU_ITEM_BG = Color.parseColor("#121212");
 
     // Accent & Status Colors
     public static final int COLOR_AMBER = Color.parseColor("#F59E0B");
