@@ -47,6 +47,7 @@ public class AcidAgentLoop {
         void onSessionLoaded(AcidSessionStore.AgentSession session);
         void onUiItemAdded(AcidSessionStore.UiMessageItem item);
         void onUiItemUpdated(AcidSessionStore.UiMessageItem item);
+        void onContextUsageUpdated(int totalTokens, int promptTokens, int cachedTokens);
     }
 
     private final Context mContext;
@@ -302,6 +303,7 @@ public class AcidAgentLoop {
                 session.apiMessages.add(userMsg);
                 mSessionStore.saveActiveSession();
             }
+            notifyContextUsage(session);
 
             // Unlimited ReAct autonomous loop: continues until task completed, stopped by user, or takeover requested
             for (int step = 1; ; step++) {
@@ -335,6 +337,7 @@ public class AcidAgentLoop {
                     session.apiMessages.add(assistantEntry);
                     mSessionStore.saveActiveSession();
                 }
+                notifyContextUsage(session);
 
                 if (toolCalls == null || toolCalls.length() == 0) {
                     break;
@@ -590,6 +593,12 @@ public class AcidAgentLoop {
         reqBody.put("temperature", 0.2);
         reqBody.put("stream", true);
 
+        try {
+            JSONObject streamOpts = new JSONObject();
+            streamOpts.put("include_usage", true);
+            reqBody.put("stream_options", streamOpts);
+        } catch (Exception ignored) {}
+
         String effort = mModelStore.getSelectedReasoningEffort();
         if (effort != null && !AcidModelStore.EFFORT_OFF.equals(effort) && !AcidModelStore.EFFORT_DEFAULT.equals(effort)) {
             if (AcidModelStore.EFFORT_LOW.equals(effort) ||
@@ -666,6 +675,28 @@ public class AcidAgentLoop {
                     chunk = new JSONObject(data);
                 } catch (Exception e) {
                     continue;
+                }
+
+                if (chunk.has("usage") && !chunk.isNull("usage")) {
+                    JSONObject u = chunk.optJSONObject("usage");
+                    if (u != null) {
+                        int pt = u.optInt("prompt_tokens", 0);
+                        int ct = u.optInt("completion_tokens", 0);
+                        int tt = u.optInt("total_tokens", pt + ct);
+                        int cached = 0;
+                        JSONObject ptd = u.optJSONObject("prompt_tokens_details");
+                        if (ptd != null) {
+                            cached = ptd.optInt("cached_tokens", 0);
+                        }
+                        if (cached == 0) {
+                            cached = u.optInt("prompt_cache_hit_tokens", 0);
+                        }
+                        session.lastPromptTokens = pt;
+                        session.lastCompletionTokens = ct;
+                        session.lastTotalTokens = tt;
+                        session.lastCachedTokens = cached;
+                        notifyContextUsage(session);
+                    }
                 }
 
                 JSONArray choices = chunk.optJSONArray("choices");
@@ -961,5 +992,36 @@ public class AcidAgentLoop {
                 mListener.onUiItemUpdated(item);
             }
         });
+    }
+
+    public void notifyContextUsage(final AcidSessionStore.AgentSession session) {
+        if (session == null || mListener == null) return;
+        final int tt = session.lastTotalTokens > 0 ? session.lastTotalTokens : computeEstimatedTokens(session);
+        final int pt = session.lastPromptTokens > 0 ? session.lastPromptTokens : tt;
+        final int cached = session.lastCachedTokens;
+        mMainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                mListener.onContextUsageUpdated(tt, pt, cached);
+            }
+        });
+    }
+
+    public int computeEstimatedTokens(AcidSessionStore.AgentSession session) {
+        if (session == null) return 0;
+        if (session.lastTotalTokens > 0) return session.lastTotalTokens;
+        int chars = 0;
+        synchronized (mSessionStore) {
+            for (int i = 0; i < session.apiMessages.size(); i++) {
+                JSONObject m = session.apiMessages.get(i);
+                if (m != null) {
+                    chars += m.optString("content", "").length();
+                    chars += m.optString("reasoning_content", "").length();
+                    JSONArray tc = m.optJSONArray("tool_calls");
+                    if (tc != null) chars += tc.toString().length();
+                }
+            }
+        }
+        return Math.max(1, (int) Math.round(chars / 2.0));
     }
 }

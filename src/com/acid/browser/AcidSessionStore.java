@@ -115,6 +115,10 @@ public class AcidSessionStore {
         public String title;
         public long createdAt;
         public long updatedAt;
+        public int lastPromptTokens;
+        public int lastCompletionTokens;
+        public int lastTotalTokens;
+        public int lastCachedTokens;
         public final List<UiMessageItem> uiItems = new ArrayList<UiMessageItem>();
         public final List<JSONObject> apiMessages = new ArrayList<JSONObject>();
     }
@@ -266,6 +270,10 @@ public class AcidSessionStore {
             root.put("title", s.title != null ? s.title : "新对话");
             root.put("createdAt", s.createdAt);
             root.put("updatedAt", s.updatedAt);
+            root.put("lastPromptTokens", s.lastPromptTokens);
+            root.put("lastCompletionTokens", s.lastCompletionTokens);
+            root.put("lastTotalTokens", s.lastTotalTokens);
+            root.put("lastCachedTokens", s.lastCachedTokens);
 
             JSONArray uiArr = new JSONArray();
             for (UiMessageItem item : s.uiItems) {
@@ -322,6 +330,10 @@ public class AcidSessionStore {
             s.title = root.optString("title", "新对话");
             s.createdAt = root.optLong("createdAt", f.lastModified());
             s.updatedAt = root.optLong("updatedAt", f.lastModified());
+            s.lastPromptTokens = root.optInt("lastPromptTokens", 0);
+            s.lastCompletionTokens = root.optInt("lastCompletionTokens", 0);
+            s.lastTotalTokens = root.optInt("lastTotalTokens", 0);
+            s.lastCachedTokens = root.optInt("lastCachedTokens", 0);
 
             JSONArray uiArr = root.optJSONArray("uiItems");
             if (uiArr != null) {

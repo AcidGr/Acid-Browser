@@ -188,6 +188,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mAgentFloatingView.updateUiMessageItem(item);
                 }
             }
+
+            @Override
+            public void onContextUsageUpdated(int totalTokens, int promptTokens, int cachedTokens) {
+                if (mAgentFloatingView != null) {
+                    mAgentFloatingView.updateContextUsage(totalTokens, promptTokens, cachedTokens);
+                }
+            }
         });
 
         mAgentFloatingView = new AgentFloatingView(this, mAgentLoop, new AgentFloatingView.AgentHostCallback() {
