@@ -1540,7 +1540,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mTakeoverBar.setVisibility(View.VISIBLE);
                     mTakeoverIcon.setIcon(AcidIcons.ICON_AGENT);
                     mTakeoverIcon.setColor(accent);
-                    mTvTakeoverStatus.setText("AI 自动驾驶中 (防误触已锁) | 拦跳: " + blocked);
+                    boolean isDrivingCurrent = mController.isAgentDrivingCurrentTab();
+                    if (isDrivingCurrent) {
+                        mTvTakeoverStatus.setText("AI 自动驾驶中 (当前页已锁) | 拦跳: " + blocked);
+                    } else {
+                        mTvTakeoverStatus.setText("AI 正在后台标签页执行自动化 (当前页可自由使用)");
+                    }
                     mTvTakeoverStatus.setTextColor(accent);
                     mBtnTakeoverAction.update(AcidIcons.ICON_HUMAN, "点此接管", AcidTheme.COLOR_AMBER);
                 } else if (controlMode == AgentOverlayView.MODE_TAKEOVER_REQUESTED) {
@@ -1580,6 +1585,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (mTabsOverview != null && mTabsOverview.isShowing()) {
                     mTabsOverview.renderTabsGrid();
                 }
+                onModeChanged(mController.isDesktopMode(), mController.getControlMode(), mController.isSomEnabled());
             }
         });
     }

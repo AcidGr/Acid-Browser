@@ -528,9 +528,14 @@ public class AcidSandboxTools {
                 @Override
                 public void run() {
                     if ("new".equals(sub)) {
-                        mController.createNewTab(args.optString("url", BrowserController.HOME_URL), true);
+                        BrowserController.TabSession created = mController.createNewTab(args.optString("url", BrowserController.HOME_URL), true);
+                        if (created != null) {
+                            mController.setAgentBoundTabId(created.id);
+                        }
                     } else if ("switch".equals(sub)) {
-                        mController.switchToTab(args.optInt("tab_id", 1));
+                        int targetId = args.optInt("tab_id", 1);
+                        mController.switchToTab(targetId);
+                        mController.setAgentBoundTabId(targetId);
                     } else if ("close".equals(sub)) {
                         mController.closeTab(args.optInt("tab_id", 1));
                     }
@@ -559,7 +564,7 @@ public class AcidSandboxTools {
             mMainHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    BrowserController.TabSession tab = mController.getActiveTab();
+                    BrowserController.TabSession tab = mController.getTargetTab();
                     if (tab != null) {
                         if (isBack && tab.webView.canGoBack()) {
                             tab.webView.goBack();

@@ -183,6 +183,7 @@ public class AcidAgentLoop {
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
+                mController.setAgentBoundTabId(-1);
                 if (mController.getControlMode() == AgentOverlayView.MODE_AGENT) {
                     mController.setControlMode(AgentOverlayView.MODE_HUMAN, "");
                 }
@@ -218,6 +219,12 @@ public class AcidAgentLoop {
         mPausedForTakeover = false;
         mRunning = true;
 
+        // Bind the current active tab to this session/loop turn
+        BrowserController.TabSession activeTab = mController.getActiveTab();
+        if (activeTab != null) {
+            mController.setAgentBoundTabId(activeTab.id);
+        }
+
         final AcidSessionStore.AgentSession session = mSessionStore.getActiveSession();
         mSessionStore.updateTitleIfDefault(userPrompt);
 
@@ -243,6 +250,12 @@ public class AcidAgentLoop {
 
     public void resumeFromTakeover() {
         if (!mPausedForTakeover || mRunning) return;
+        if (mController.getAgentBoundTabId() <= 0) {
+            BrowserController.TabSession activeTab = mController.getActiveTab();
+            if (activeTab != null) {
+                mController.setAgentBoundTabId(activeTab.id);
+            }
+        }
         submitUserTask("我已完成手动操作，请观察当前最新页面并继续完成任务。");
     }
 
@@ -270,13 +283,6 @@ public class AcidAgentLoop {
 
     private void runAgentLoopInternal(AcidSessionStore.AgentSession session, String userPrompt) {
         try {
-            mMainHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    mController.setControlMode(AgentOverlayView.MODE_AGENT, "");
-                }
-            });
-
             JSONObject initObs = mController.observeSync(mController.isSomEnabled(), true, false);
             String initSnapshot = initObs != null ? initObs.optString("compactText", "") : "";
 
@@ -364,6 +370,27 @@ public class AcidAgentLoop {
                     break;
                 }
 
+                // Activate anti-touch lock on-demand only when the agent calls browser manipulation tool
+                boolean hasBrowserTool = false;
+                for (int i = 0; i < toolCalls.length(); i++) {
+                    JSONObject tc = toolCalls.optJSONObject(i);
+                    if (tc != null) {
+                        JSONObject fn = tc.optJSONObject("function");
+                        if (fn != null && "browser".equals(fn.optString("name"))) {
+                            hasBrowserTool = true;
+                            break;
+                        }
+                    }
+                }
+                if (hasBrowserTool && mController.getControlMode() != AgentOverlayView.MODE_AGENT) {
+                    mMainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            mController.setControlMode(AgentOverlayView.MODE_AGENT, "");
+                        }
+                    });
+                }
+
                 boolean takeoverTriggered = false;
                 for (int i = 0; i < toolCalls.length(); i++) {
                     if (mStopRequested) break;
@@ -438,6 +465,9 @@ public class AcidAgentLoop {
             mMainHandler.post(new Runnable() {
                 @Override
                 public void run() {
+                    if (!paused) {
+                        mController.setAgentBoundTabId(-1);
+                    }
                     if (!paused && mController.getControlMode() == AgentOverlayView.MODE_AGENT) {
                         mController.setControlMode(AgentOverlayView.MODE_HUMAN, "");
                     }

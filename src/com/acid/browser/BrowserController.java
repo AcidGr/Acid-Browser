@@ -236,6 +236,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private final List<TabSession> mTabs = new ArrayList<TabSession>();
     private int mNextTabId = 1;
     private TabSession mActiveTab = null;
+    private int mAgentBoundTabId = -1;
 
     private boolean mIsDesktopMode = false;
     private boolean mSomEnabled = false;
@@ -283,6 +284,15 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
         mUserscriptManager = new UserscriptManager(context);
         mAutomationDriver = new WebAutomationDriver(context, this);
+
+        if (mOverlayView != null) {
+            mOverlayView.setTabStateProvider(new AgentOverlayView.TabStateProvider() {
+                @Override
+                public boolean isAgentDrivingCurrentTab() {
+                    return BrowserController.this.isAgentDrivingCurrentTab();
+                }
+            });
+        }
 
         createNewTab(HOME_URL, true);
     }
@@ -382,9 +392,15 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         captureActiveTabSnapshot();
 
         for (TabSession t : mTabs) {
-            t.webView.setVisibility(t.id == tabId ? android.view.View.VISIBLE : android.view.View.GONE);
+            t.webView.setVisibility(t.id == tabId ? android.view.View.VISIBLE : android.view.View.INVISIBLE);
         }
+        target.webView.bringToFront();
         mActiveTab = target;
+
+        if (mOverlayView != null) {
+            mOverlayView.bringToFront();
+            mOverlayView.postInvalidateOnAnimation();
+        }
 
         if (mListener != null) {
             mListener.onTabsChanged(mTabs.size(), mActiveTab.id);
@@ -405,6 +421,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
         }
         if (toRemove == null) return false;
+
+        if (mAgentBoundTabId == tabId) {
+            mAgentBoundTabId = -1;
+        }
 
         boolean wasActive = mActiveTab != null && mActiveTab.id == tabId;
         if (wasActive) {
@@ -453,6 +473,45 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     @Override
     public TabSession getActiveTab() {
         return mActiveTab;
+    }
+
+    public void setAgentBoundTabId(int tabId) {
+        mAgentBoundTabId = tabId;
+        if (mOverlayView != null) {
+            mOverlayView.postInvalidateOnAnimation();
+        }
+    }
+
+    public int getAgentBoundTabId() {
+        return mAgentBoundTabId;
+    }
+
+    public TabSession getTabById(int tabId) {
+        for (TabSession t : mTabs) {
+            if (t.id == tabId) return t;
+        }
+        return null;
+    }
+
+    @Override
+    public TabSession getTargetTab() {
+        if (mAgentBoundTabId > 0) {
+            TabSession bound = getTabById(mAgentBoundTabId);
+            if (bound != null && bound.webView != null) {
+                return bound;
+            }
+        }
+        return mActiveTab;
+    }
+
+    public boolean isAgentDrivingCurrentTab() {
+        if (mAgentBoundTabId <= 0) return true;
+        return mActiveTab != null && mActiveTab.id == mAgentBoundTabId;
+    }
+
+    @Override
+    public boolean isTargetTabActive() {
+        return isAgentDrivingCurrentTab();
     }
 
     // =========================================================================
