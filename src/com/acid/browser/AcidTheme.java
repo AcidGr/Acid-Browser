@@ -83,6 +83,24 @@ public final class AcidTheme {
     private static final int LIGHT_SELECTED = Color.parseColor("#E0F2FE");
     private static final int DARK_SELECTED = Color.parseColor("#0C4A6E");
 
+    // List row pressed state (finger down). Deliberately stronger than the
+    // resting card tint so a tap or a long-press is unmistakable.
+    private static final int LIGHT_ROW_PRESSED = Color.parseColor("#E2E8F0");
+    private static final int DARK_ROW_PRESSED = Color.parseColor("#334155");
+
+    // Letter-avatar palette for bookmark chips. Kept saturated enough to stay
+    // legible against white text in both themes; picked by name hash so the
+    // same bookmark always gets the same colour.
+    private static final int[] AVATAR_COLORS = new int[]{
+        Color.parseColor("#0284C7"), // sky
+        Color.parseColor("#7C3AED"), // violet
+        Color.parseColor("#059669"), // emerald
+        Color.parseColor("#D97706"), // amber
+        Color.parseColor("#DB2777"), // pink
+        Color.parseColor("#0891B2"), // cyan
+        Color.parseColor("#4F46E5")  // indigo
+    };
+
     // Floating agent HUD panel and dark code panels
     public static final int LIGHT_PANEL_BG = Color.parseColor("#F1F5F9");
     public static final int DARK_PANEL_BG = Color.parseColor("#0F172A");
@@ -148,6 +166,22 @@ public final class AcidTheme {
     public static int pressedBg(boolean dark) { return dark ? DARK_SEARCH_BORDER : LIGHT_SEARCH_BG; }
     /** Header of the tabs overview grid. */
     public static int overviewHeaderBg(boolean dark) { return dark ? DARK_SEARCH_BG : LIGHT_MENU_ITEM_BG; }
+
+    /** Row background while the finger is down (tap or long-press). */
+    public static int rowPressed(boolean dark) { return dark ? DARK_ROW_PRESSED : LIGHT_ROW_PRESSED; }
+
+    /**
+     * Deterministic avatar colour for a bookmark name. The same name always maps
+     * to the same swatch, so the list does not shimmer between rebuilds.
+     */
+    public static int avatarColor(String name) {
+        if (name == null || name.isEmpty()) return AVATAR_COLORS[0];
+        int hash = 0;
+        for (int i = 0; i < name.length(); i++) {
+            hash = 31 * hash + name.charAt(i);
+        }
+        return AVATAR_COLORS[Math.abs(hash % AVATAR_COLORS.length)];
+    }
 
     public static int dp(Context context, float v) {
         return Math.round(v * context.getResources().getDisplayMetrics().density);

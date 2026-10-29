@@ -66,6 +66,15 @@ public class AcidIcons {
     public static final int ICON_INFO = 39;
     public static final int ICON_INCOGNITO_OFF = 40;
 
+    // File-type glyphs for the download list (all stroked, 24x24 viewBox).
+    public static final int ICON_FILE_APK = 41;       // package / install box
+    public static final int ICON_FILE_ARCHIVE = 42;   // zipped archive
+    public static final int ICON_FILE_DOC = 43;       // document with text lines
+    public static final int ICON_FILE_IMAGE = 44;     // picture (mountains + sun)
+    public static final int ICON_FILE_VIDEO = 45;     // film / play frame
+    public static final int ICON_FILE_AUDIO = 46;     // music note
+    public static final int ICON_FILE_OTHER = 47;     // generic unknown file
+
     /**
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
      * in a 24x24 viewBox into an Android Graphics Path.
@@ -418,6 +427,55 @@ public class AcidIcons {
                 p.addCircle(16.8f, 16f, 3.8f, Path.Direction.CW);
                 break;
 
+            case ICON_FILE_APK:
+                // Android-style package box: lid + body + download arrow
+                p.addRoundRect(new RectF(4f, 3.2f, 20f, 8.2f), 1.6f, 1.6f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 5.5 8.2 V 19.2 C 5.5 20.1 6.2 20.8 7.1 20.8 H 16.9 C 17.8 20.8 18.5 20.1 18.5 19.2 V 8.2"));
+                p.addPath(parseSvgPath("M 12 11.2 V 17 M 9.4 14.5 L 12 17.1 L 14.6 14.5"));
+                break;
+
+            case ICON_FILE_ARCHIVE:
+                // Archive: rounded body + zipper spine + clasp
+                p.addRoundRect(new RectF(4.5f, 3.5f, 19.5f, 20.5f), 2.2f, 2.2f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 12 3.5 V 20.5"));
+                p.addPath(parseSvgPath("M 9.6 7 H 14.4 M 9.6 10.2 H 14.4 M 9.6 13.4 H 14.4"));
+                p.addRoundRect(new RectF(10.4f, 16.2f, 13.6f, 19.4f), 1f, 1f, Path.Direction.CW);
+                break;
+
+            case ICON_FILE_DOC:
+                // Document: folded corner + text lines
+                p.addPath(parseSvgPath("M 6 3 H 14 L 19 8 V 21 H 6 Z"));
+                p.addPath(parseSvgPath("M 14 3 V 8 H 19"));
+                p.addPath(parseSvgPath("M 9 12 H 16 M 9 15.2 H 16 M 9 18.4 H 13"));
+                break;
+
+            case ICON_FILE_IMAGE:
+                // Picture: frame + mountains + sun
+                p.addRoundRect(new RectF(3.5f, 4.5f, 20.5f, 19.5f), 2.4f, 2.4f, Path.Direction.CW);
+                p.addCircle(8.6f, 9.6f, 1.7f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 4.5 17 L 9.5 12.2 L 13.4 16 L 16.2 13.4 L 20 17.2"));
+                break;
+
+            case ICON_FILE_VIDEO:
+                // Film frame with play triangle
+                p.addRoundRect(new RectF(3.5f, 5f, 20.5f, 19f), 2.4f, 2.4f, Path.Direction.CW);
+                p.addPath(parseSvgPath("M 10.2 9 L 15.4 12 L 10.2 15 Z"));
+                break;
+
+            case ICON_FILE_AUDIO:
+                // Music: two-note beam
+                p.addPath(parseSvgPath("M 9.5 17.5 V 6.4 L 19 4.6 V 15.7"));
+                p.addCircle(7f, 17.8f, 2.6f, Path.Direction.CW);
+                p.addCircle(16.5f, 16f, 2.6f, Path.Direction.CW);
+                break;
+
+            case ICON_FILE_OTHER:
+                // Generic file with folded corner and a question-ish dot row
+                p.addPath(parseSvgPath("M 6 3 H 14 L 19 8 V 21 H 6 Z"));
+                p.addPath(parseSvgPath("M 14 3 V 8 H 19"));
+                p.addPath(parseSvgPath("M 9.5 13 H 15.5 M 9.5 16.2 H 15.5"));
+                break;
+
             case ICON_RETURN:
                 // SVG Return undo arrow
                 p.addPath(parseSvgPath("M 9 14 L 4 9 L 9 4"));
@@ -657,6 +715,98 @@ public class AcidIcons {
             box.setOnClickListener(listener);
         }
         return box;
+    }
+
+    /**
+     * Circular letter avatar used by the bookmark list.
+     *
+     * The glyph is the first meaningful character of the supplied name, so both
+     * CJK ("知乎热榜" -> 知) and Latin ("GitHub" -> G) names render correctly.
+     * Leading punctuation/brackets are skipped, and the first code point is read
+     * with {@link String#codePointAt} so emoji are never split into half a
+     * surrogate pair.
+     *
+     * @param name       bookmark title; falls back to the URL when blank
+     * @param fallbackUrl used only when the name yields no usable glyph
+     * @param sizeDp     avatar diameter in dp
+     * @param bgColor    circle fill (see {@link AcidTheme#avatarColor(String)})
+     * @param textColor  glyph colour
+     */
+    public static TextView createLetterAvatar(
+        Context context,
+        String name,
+        String fallbackUrl,
+        int sizeDp,
+        int bgColor,
+        int textColor
+    ) {
+        float d = context.getResources().getDisplayMetrics().density;
+        int px = Math.round(sizeDp * d);
+
+        TextView tv = new TextView(context);
+        tv.setText(pickAvatarGlyph(name, fallbackUrl));
+        tv.setTextColor(textColor);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setGravity(Gravity.CENTER);
+        tv.setSingleLine(true);
+        tv.setIncludeFontPadding(false);
+        // Shrink the glyph a little for CJK so it sits optically centred in the circle.
+        String glyph = tv.getText().toString();
+        boolean wideGlyph = glyph.length() > 0 && glyph.codePointAt(0) > 0x2E80;
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, wideGlyph ? sizeDp * 0.46f : sizeDp * 0.52f);
+
+        GradientDrawable circle = new GradientDrawable();
+        circle.setShape(GradientDrawable.OVAL);
+        circle.setColor(bgColor);
+        tv.setBackground(circle);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(px, px);
+        tv.setLayoutParams(lp);
+        return tv;
+    }
+
+    /**
+     * Extracts the single character to show inside a letter avatar.
+     * Skips leading whitespace and punctuation/brackets, then returns the first
+     * full code point. Returns an empty string when nothing usable is found.
+     */
+    public static String pickAvatarGlyph(String name, String fallbackUrl) {
+        String glyph = firstMeaningfulCodePoint(name);
+        if (glyph.isEmpty()) {
+            // Fall back to the registrable-ish part of the URL, e.g. "github.com" -> "G"
+            String host = hostOf(fallbackUrl);
+            glyph = firstMeaningfulCodePoint(host);
+        }
+        return glyph;
+    }
+
+    private static String firstMeaningfulCodePoint(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim();
+        int i = 0;
+        while (i < s.length()) {
+            int cp = s.codePointAt(i);
+            if (Character.isLetterOrDigit(cp)) {
+                return new String(Character.toChars(cp));
+            }
+            i += Character.charCount(cp);
+        }
+        return "";
+    }
+
+    private static String hostOf(String url) {
+        if (url == null || url.isEmpty()) return "";
+        try {
+            String u = url;
+            int scheme = u.indexOf("://");
+            if (scheme >= 0) u = u.substring(scheme + 3);
+            int slash = u.indexOf('/');
+            if (slash >= 0) u = u.substring(0, slash);
+            if (u.startsWith("www.")) u = u.substring(4);
+            return u;
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /**

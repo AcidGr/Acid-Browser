@@ -6,6 +6,8 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
@@ -93,16 +95,33 @@ public class BrowserListsSheet extends AcidBottomSheetView {
         show();
     }
 
+    /**
+     * Resting + pressed backgrounds for a list row.
+     *
+     * A StateListDrawable is used instead of a RippleDrawable so the whole row
+     * tints uniformly: the finger-down colour persists for as long as the finger
+     * stays down, which covers both a quick tap and a long-press.
+     */
+    private void applyRowBackground(View row, boolean dark) {
+        Context ctx = row.getContext();
+        int radius = 8;
+        GradientDrawable normal = AcidTheme.pillBg(ctx, AcidTheme.menuItemBg(dark), 0, radius);
+        GradientDrawable pressed = AcidTheme.pillBg(ctx, AcidTheme.rowPressed(dark), 0, radius);
+
+        StateListDrawable sld = new StateListDrawable();
+        sld.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        sld.addState(new int[]{}, normal);
+        row.setBackground(sld);
+    }
+
     private void renderBookmarkItems() {
         LinearLayout container = getContentContainer();
         container.removeAllViews();
         final List<BrowserDataStore.EntryItem> list = mDataStore.loadBookmarks();
 
         Context ctx = getContext();
-        int itemBg = AcidTheme.menuItemBg(mIsDarkMode);
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
-        int accentCol = AcidTheme.accent(mIsDarkMode);
 
         if (list.isEmpty()) {
             TextView empty = new TextView(ctx);
@@ -122,23 +141,27 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             LinearLayout row = new LinearLayout(ctx);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            int padH = AcidTheme.dp(ctx, 8);
+            int padH = AcidTheme.dp(ctx, 10);
             int padV = AcidTheme.dp(ctx, 10);
             row.setPadding(padH, padV, padH, padV);
-            row.setBackground(AcidTheme.pillBg(ctx, itemBg, 0, 8));
+            row.setClickable(true);
+            row.setFocusable(true);
+            applyRowBackground(row, mIsDarkMode);
             LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             );
             rLp.bottomMargin = AcidTheme.dp(ctx, 6);
 
-            AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_BOOKMARK, accentCol, 17);
-            row.addView(icon);
+            // Letter avatar: first meaningful character of the name, deterministic colour.
+            TextView avatar = AcidIcons.createLetterAvatar(
+                ctx, item.title, item.url, 34, AcidTheme.avatarColor(item.title), Color.WHITE
+            );
+            row.addView(avatar);
 
             LinearLayout textColBox = new LinearLayout(ctx);
             textColBox.setOrientation(LinearLayout.VERTICAL);
             LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            tLp.leftMargin = AcidTheme.dp(ctx, 8);
-            tLp.rightMargin = AcidTheme.dp(ctx, 8);
+            tLp.leftMargin = AcidTheme.dp(ctx, 10);
 
             TextView title = new TextView(ctx);
             title.setText(item.title);
@@ -158,21 +181,6 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             textColBox.addView(url);
             row.addView(textColBox, tLp);
 
-            // Delete item button
-            LinearLayout delBox = new LinearLayout(ctx);
-            delBox.setGravity(Gravity.CENTER);
-            delBox.setPadding(AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4));
-            AcidIcons.SvgIconView delIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CLOSE, mutedCol, 13);
-            delBox.addView(delIcon);
-            delBox.setOnClickListener(new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    mDataStore.removeBookmark(index);
-                    renderBookmarkItems();
-                }
-            });
-            row.addView(delBox);
-
             row.setOnClickListener(new OnClickListener() {
                 @Override
                 public void onClick(View v) {
@@ -183,8 +191,156 @@ public class BrowserListsSheet extends AcidBottomSheetView {
                 }
             });
 
+            // All mutation entry points live behind a long-press; the row itself
+            // carries no visible button so the list stays visually quiet.
+            row.setOnLongClickListener(new OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    showBookmarkActions(index, item);
+                    return true;
+                }
+            });
+
             container.addView(row, rLp);
         }
+    }
+
+    /**
+     * Long-press menu for a bookmark: open in a new tab, open in the background,
+     * edit its title/url, or delete it. Delete is last and tinted red.
+     */
+    private void showBookmarkActions(final int index, final BrowserDataStore.EntryItem item) {
+        final String[] options = new String[]{
+            "新标签页打开",
+            "后台打开",
+            "编辑书签",
+            "删除书签"
+        };
+        AlertDialog.Builder builder = AcidTheme.dialogBuilder(getContext(), mIsDarkMode);
+        builder.setTitle(item.title);
+        builder.setItems(options, new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                switch (which) {
+                    case 0:
+                        dismiss();
+                        if (mController != null) mController.createNewTab(item.url, true);
+                        break;
+                    case 1:
+                        dismiss();
+                        if (mController != null) mController.createNewTab(item.url, false);
+                        Toast.makeText(getContext(), "已在后台打开新标签", Toast.LENGTH_SHORT).show();
+                        break;
+                    case 2:
+                        showEditBookmarkDialog(index, item);
+                        break;
+                    case 3:
+                        showDeleteBookmarkConfirm(index, item);
+                        break;
+                }
+            }
+        });
+        builder.show();
+    }
+
+    /** Edit dialog for an existing bookmark: display name + url. */
+    private void showEditBookmarkDialog(final int index, final BrowserDataStore.EntryItem item) {
+        Context ctx = getContext();
+        AlertDialog.Builder builder = AcidTheme.dialogBuilder(ctx, mIsDarkMode);
+        builder.setTitle("编辑书签");
+
+        LinearLayout box = new LinearLayout(ctx);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int padH = AcidTheme.dp(ctx, 20);
+        int padV = AcidTheme.dp(ctx, 12);
+        box.setPadding(padH, padV, padH, padV);
+
+        int textCol = AcidTheme.text(mIsDarkMode);
+        int mutedCol = AcidTheme.muted(mIsDarkMode);
+        int inputBg = AcidTheme.searchBg(mIsDarkMode);
+        int inputBorder = AcidTheme.searchBorder(mIsDarkMode);
+
+        TextView lblTitle = new TextView(ctx);
+        lblTitle.setText("显示名称");
+        lblTitle.setTextColor(mutedCol);
+        lblTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        box.addView(lblTitle);
+
+        final EditText etTitle = new EditText(ctx);
+        etTitle.setSingleLine(true);
+        etTitle.setText(item.title);
+        etTitle.setHint("留空则使用网址");
+        etTitle.setTextColor(textCol);
+        etTitle.setHintTextColor(mutedCol);
+        etTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        etTitle.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7));
+        etTitle.setBackground(AcidTheme.pillBg(ctx, inputBg, inputBorder, 8));
+        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        etLp.topMargin = AcidTheme.dp(ctx, 4);
+        etLp.bottomMargin = AcidTheme.dp(ctx, 10);
+        box.addView(etTitle, etLp);
+
+        TextView lblUrl = new TextView(ctx);
+        lblUrl.setText("网址");
+        lblUrl.setTextColor(mutedCol);
+        lblUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        box.addView(lblUrl);
+
+        final EditText etUrl = new EditText(ctx);
+        etUrl.setSingleLine(true);
+        etUrl.setText(item.url);
+        etUrl.setHint("https://example.com");
+        etUrl.setTextColor(textCol);
+        etUrl.setHintTextColor(mutedCol);
+        etUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        etUrl.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+            | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        etUrl.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7));
+        etUrl.setBackground(AcidTheme.pillBg(ctx, inputBg, inputBorder, 8));
+        LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        uLp.topMargin = AcidTheme.dp(ctx, 4);
+        box.addView(etUrl, uLp);
+
+        builder.setView(box);
+        builder.setPositiveButton("保存", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                String newTitle = etTitle.getText().toString().trim();
+                String newUrl = etUrl.getText().toString().trim();
+                if (TextUtils.isEmpty(newUrl)) {
+                    Toast.makeText(getContext(), "网址不能为空", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (mDataStore.updateBookmark(index, newTitle, newUrl)) {
+                    renderBookmarkItems();
+                    Toast.makeText(getContext(), "书签已更新", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(getContext(), "更新失败，书签可能已被删除", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        builder.setNegativeButton("取消", null);
+        builder.show();
+    }
+
+    private void showDeleteBookmarkConfirm(final int index, final BrowserDataStore.EntryItem item) {
+        AlertDialog.Builder builder = AcidTheme.dialogBuilder(getContext(), mIsDarkMode);
+        builder.setTitle("删除书签");
+        builder.setMessage("确定删除「" + item.title + "」吗？");
+        builder.setPositiveButton("删除", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                mDataStore.removeBookmark(index);
+                renderBookmarkItems();
+                Toast.makeText(getContext(), "书签已删除", Toast.LENGTH_SHORT).show();
+            }
+        });
+        builder.setNegativeButton("取消", null);
+        builder.show();
     }
 
     // =========================================================================
@@ -347,10 +503,12 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             BrowserController.DownloadItem.CAT_ARCHIVE,
             BrowserController.DownloadItem.CAT_DOC,
             BrowserController.DownloadItem.CAT_IMAGE,
-            BrowserController.DownloadItem.CAT_MEDIA
+            BrowserController.DownloadItem.CAT_VIDEO,
+            BrowserController.DownloadItem.CAT_AUDIO,
+            BrowserController.DownloadItem.CAT_OTHER
         };
         final String[] catLabels = new String[]{
-            "全部", "安装包", "压缩包", "文档", "图片", "音视频"
+            "全部", "安装包", "压缩包", "文档", "图片", "视频", "音频", "其它"
         };
 
         mCategoryPillViews.clear();
@@ -469,7 +627,9 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             BrowserController.DownloadItem.CAT_ARCHIVE,
             BrowserController.DownloadItem.CAT_DOC,
             BrowserController.DownloadItem.CAT_IMAGE,
-            BrowserController.DownloadItem.CAT_MEDIA
+            BrowserController.DownloadItem.CAT_VIDEO,
+            BrowserController.DownloadItem.CAT_AUDIO,
+            BrowserController.DownloadItem.CAT_OTHER
         };
 
         for (int i = 0; i < mCategoryPillViews.size() && i < catIds.length; i++) {
@@ -490,10 +650,8 @@ public class BrowserListsSheet extends AcidBottomSheetView {
         itemsContainer.removeAllViews();
 
         Context ctx = getContext();
-        int itemBg = AcidTheme.menuItemBg(mIsDarkMode);
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
-        int accentCol = AcidTheme.accent(mIsDarkMode);
 
         List<BrowserController.DownloadItem> allList = mController != null ? mController.getDownloads() : null;
         List<BrowserController.DownloadItem> list = new ArrayList<BrowserController.DownloadItem>();
@@ -530,7 +688,7 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             int padH = AcidTheme.dp(ctx, 10);
             int padV = AcidTheme.dp(ctx, 10);
             row.setPadding(padH, padV, padH, padV);
-            row.setBackground(AcidTheme.pillBg(ctx, itemBg, 0, 8));
+            applyRowBackground(row, mIsDarkMode);
             row.setClickable(true);
             row.setFocusable(true);
             LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
@@ -543,23 +701,18 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             headerRow.setOrientation(LinearLayout.HORIZONTAL);
             headerRow.setGravity(Gravity.CENTER_VERTICAL);
 
-            int statusCol = accentCol;
-            if (it.status == DownloadManager.STATUS_SUCCESSFUL) {
-                statusCol = AcidTheme.COLOR_GREEN;
-            } else if (it.status == DownloadManager.STATUS_FAILED) {
-                statusCol = AcidTheme.COLOR_RED;
-            } else if (it.status == DownloadManager.STATUS_RUNNING) {
-                statusCol = AcidTheme.COLOR_BLUE;
-            } else if (it.status == DownloadManager.STATUS_PENDING) {
-                statusCol = AcidTheme.COLOR_AMBER;
-            }
+            // One tint for every file type; only a failed download recolours the glyph,
+            // so the list never turns into a rainbow.
+            int iconTint = (it.status == DownloadManager.STATUS_FAILED)
+                ? AcidTheme.COLOR_RED
+                : AcidTheme.muted(mIsDarkMode);
 
-            int iconType = AcidIcons.ICON_DOWNLOAD;
-            if (it.getCategory() == BrowserController.DownloadItem.CAT_DOC) {
-                iconType = AcidIcons.ICON_FILE;
-            }
-
-            AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(ctx, iconType, statusCol, 18);
+            // File-type glyph, one per category. The icon tint stays uniform across
+            // categories so the list reads as one system; status colour is carried by
+            // the subtitle text instead.
+            AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(
+                ctx, it.getCategoryIcon(), iconTint, 19
+            );
             headerRow.addView(icon);
 
             LinearLayout textColBox = new LinearLayout(ctx);
@@ -577,14 +730,7 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             textColBox.addView(title);
 
             TextView info = new TextView(ctx);
-            String catTag = "";
-            switch (it.getCategory()) {
-                case BrowserController.DownloadItem.CAT_APK: catTag = "安装包 · "; break;
-                case BrowserController.DownloadItem.CAT_ARCHIVE: catTag = "压缩包 · "; break;
-                case BrowserController.DownloadItem.CAT_DOC: catTag = "文档 · "; break;
-                case BrowserController.DownloadItem.CAT_IMAGE: catTag = "图片 · "; break;
-                case BrowserController.DownloadItem.CAT_MEDIA: catTag = "音视频 · "; break;
-            }
+            String catTag = it.getCategoryLabel() + " · ";
 
             if (it.status == DownloadManager.STATUS_RUNNING) {
                 int p = it.getProgressPercent();
