@@ -463,8 +463,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         // Reload
         LinearLayout reloadBox = new LinearLayout(this);
         reloadBox.setGravity(Gravity.CENTER);
-        reloadBox.setPadding(dp(4), dp(4), dp(4), dp(4));
-        mBtnReload = new AcidIcons.SvgIconView(this, AcidIcons.ICON_RELOAD, AcidTheme.LIGHT_MUTED, 15);
+        mBtnReload = new AcidIcons.SvgIconView(this, AcidIcons.ICON_RELOAD, AcidTheme.LIGHT_MUTED, 18);
+        mBtnReload.setStrokeWidthDp(1.5f); // 2/24 of the 18dp slot
         reloadBox.addView(mBtnReload);
         reloadBox.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -479,7 +479,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
             }
         });
-        mSearchContainer.addView(reloadBox);
+        mSearchContainer.addView(reloadBox, new LinearLayout.LayoutParams(dp(40), dp(36)));
 
         LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         searchLp.setMargins(dp(6), 0, dp(6), 0);
