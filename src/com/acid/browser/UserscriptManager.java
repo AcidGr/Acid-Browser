@@ -34,8 +34,11 @@ public class UserscriptManager {
 
     private static final String TAG = "AcidUserscripts";
 
-    /** Hard ceiling so a runaway agent cannot fill the disk with generated scripts. */
-    private static final int MAX_SCRIPT_BYTES = 64 * 1024;
+    /**
+     * Hard ceiling of 20 MB so complex web-app userscripts (like Immersive Translate ~5.6MB)
+     * install smoothly, while guarding against Android Dalvik/ART OutOfMemory crashes.
+     */
+    private static final int MAX_SCRIPT_BYTES = 20 * 1024 * 1024; // 20 MB
 
     private final Context mContext;
     private final File mWorkspaceDir;
@@ -83,6 +86,18 @@ public class UserscriptManager {
                 Log.w(TAG, "Bundled userscript asset missing; skipping default install");
             } else if (!writeFileText(defaultScript, src)) {
                 Log.w(TAG, "Could not install default userscript to " + defaultScript.getAbsolutePath());
+            }
+        }
+
+        File skillsDir = new File(mWorkspaceDir, "skills");
+        if (!skillsDir.exists()) {
+            skillsDir.mkdirs();
+        }
+        File defaultSkill = new File(skillsDir, "userscript_dev.md");
+        if (!defaultSkill.exists()) {
+            String skillSrc = readAssetText("skills/userscript_dev.md");
+            if (!skillSrc.isEmpty()) {
+                writeFileText(defaultSkill, skillSrc);
             }
         }
     }
@@ -259,7 +274,7 @@ public class UserscriptManager {
             return "脚本内容为空";
         }
         if (content.length() > MAX_SCRIPT_BYTES) {
-            return "脚本超过 " + (MAX_SCRIPT_BYTES / 1024) + " KB 上限";
+            return "脚本超过 " + (MAX_SCRIPT_BYTES / (1024 * 1024)) + " MB 上限";
         }
 
         UserscriptMeta meta = UserscriptMeta.parse(fileName, content);
@@ -374,14 +389,19 @@ public class UserscriptManager {
         FileInputStream fis = null;
         try {
             if (!f.exists()) return "";
-            fis = new FileInputStream(f);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int n;
-            while ((n = fis.read(buf)) != -1) {
-                baos.write(buf, 0, n);
+            long len = f.length();
+            if (len > MAX_SCRIPT_BYTES) {
+                Log.w(TAG, "File exceeds MAX_SCRIPT_BYTES (" + len + " > " + MAX_SCRIPT_BYTES + "): " + f.getAbsolutePath());
+                return "";
             }
-            return baos.toString("UTF-8");
+            fis = new FileInputStream(f);
+            byte[] data = new byte[(int) len];
+            int offset = 0;
+            int n;
+            while (offset < len && (n = fis.read(data, offset, (int) len - offset)) != -1) {
+                offset += n;
+            }
+            return new String(data, 0, offset, StandardCharsets.UTF_8);
         } catch (Exception e) {
             Log.w(TAG, "Failed to read " + (f != null ? f.getAbsolutePath() : "?"), e);
             return "";
