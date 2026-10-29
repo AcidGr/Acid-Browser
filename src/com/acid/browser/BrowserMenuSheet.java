@@ -8,7 +8,9 @@ import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -98,7 +100,8 @@ public class BrowserMenuSheet extends FrameLayout {
     }
 
     /**
-     * Paging HorizontalScrollView that snaps to page boundaries on release.
+     * Paging HorizontalScrollView that snaps smoothly and symmetrically to page boundaries.
+     * Supports both fling flick gestures and distance-based threshold dragging.
      */
     public static class PagingHorizontalScrollView extends HorizontalScrollView {
         public interface OnPageChangeListener {
@@ -109,14 +112,26 @@ public class BrowserMenuSheet extends FrameLayout {
         private int mCurrentPage = 0;
         private OnPageChangeListener mPageListener;
 
+        private VelocityTracker mVelocityTracker;
+        private float mDownX;
+        private int mMinimumFlingVelocity;
+        private int mMaximumFlingVelocity;
+
         public PagingHorizontalScrollView(Context context) {
             super(context);
             setHorizontalScrollBarEnabled(false);
             setOverScrollMode(OVER_SCROLL_NEVER);
+            ViewConfiguration vc = ViewConfiguration.get(context);
+            mMinimumFlingVelocity = vc.getScaledMinimumFlingVelocity();
+            mMaximumFlingVelocity = vc.getScaledMaximumFlingVelocity();
         }
 
         public void setPageWidth(int w) {
             mPageWidth = w;
+        }
+
+        public int getCurrentPage() {
+            return mCurrentPage;
         }
 
         public void setOnPageChangeListener(OnPageChangeListener listener) {
@@ -125,26 +140,125 @@ public class BrowserMenuSheet extends FrameLayout {
 
         public void goToPage(int page) {
             mCurrentPage = page;
-            if (mPageWidth > 0) {
-                smoothScrollTo(page * mPageWidth, 0);
+            int pw = (mPageWidth > 0) ? mPageWidth : getWidth();
+            if (pw > 0) {
+                smoothScrollTo(page * pw, 0);
             }
             if (mPageListener != null) {
                 mPageListener.onPageChanged(mCurrentPage);
             }
         }
 
+        private void initVelocityTrackerIfNotExists() {
+            if (mVelocityTracker == null) {
+                mVelocityTracker = VelocityTracker.obtain();
+            }
+        }
+
+        private void recycleVelocityTracker() {
+            if (mVelocityTracker != null) {
+                mVelocityTracker.recycle();
+                mVelocityTracker = null;
+            }
+        }
+
+        @Override
+        public void fling(int velocityX) {
+            // Disable free unconstrained flings to prevent landing halfway between pages
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent ev) {
+            initVelocityTrackerIfNotExists();
+            mVelocityTracker.addMovement(ev);
+
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    mDownX = ev.getX();
+                    break;
+                case MotionEvent.ACTION_CANCEL:
+                case MotionEvent.ACTION_UP:
+                    recycleVelocityTracker();
+                    break;
+            }
+            return super.onInterceptTouchEvent(ev);
+        }
+
         @Override
         public boolean onTouchEvent(MotionEvent ev) {
-            boolean handled = super.onTouchEvent(ev);
-            if (ev.getAction() == MotionEvent.ACTION_UP || ev.getAction() == MotionEvent.ACTION_CANCEL) {
-                if (mPageWidth > 0) {
-                    int scrollX = getScrollX();
-                    int targetPage = (scrollX > mPageWidth / 3) ? 1 : 0;
-                    goToPage(targetPage);
+            initVelocityTrackerIfNotExists();
+            mVelocityTracker.addMovement(ev);
+
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    mDownX = ev.getX();
+                    break;
+                case MotionEvent.ACTION_UP:
+                    snapToTargetPage(ev.getX() - mDownX);
+                    recycleVelocityTracker();
                     return true;
+                case MotionEvent.ACTION_CANCEL:
+                    goToPage(mCurrentPage);
+                    recycleVelocityTracker();
+                    return true;
+            }
+            return super.onTouchEvent(ev);
+        }
+
+        private void snapToTargetPage(float deltaX) {
+            int pw = (mPageWidth > 0) ? mPageWidth : getWidth();
+            if (pw <= 0) return;
+
+            // Total pages: dynamically query child container or default to 2
+            int totalPages = 2;
+            View child = getChildAt(0);
+            if (child instanceof ViewGroup) {
+                int count = ((ViewGroup) child).getChildCount();
+                if (count > 0) totalPages = count;
+            }
+
+            int current = mCurrentPage;
+            int scrollX = getScrollX();
+            int targetPage = current;
+
+            float xVelocity = 0;
+            if (mVelocityTracker != null) {
+                mVelocityTracker.computeCurrentVelocity(1000, mMaximumFlingVelocity);
+                xVelocity = mVelocityTracker.getXVelocity();
+            }
+
+            // Balanced thresholds:
+            // 1. Fling: responsive flick threshold
+            float flingThreshold = Math.max(mMinimumFlingVelocity * 1.2f, 400f);
+            // 2. Drag: 20% of page width is sufficient to turn page
+            float dragThreshold = pw * 0.20f;
+
+            if (xVelocity < -flingThreshold) {
+                // Flick left -> next page
+                targetPage = current + 1;
+            } else if (xVelocity > flingThreshold) {
+                // Flick right -> previous page
+                targetPage = current - 1;
+            } else {
+                // Drag distance and position based snap
+                float pageOffset = (float) scrollX / (float) pw;
+                float deltaFromCurrent = pageOffset - (float) current;
+
+                if (deltaFromCurrent > 0.20f || deltaX < -dragThreshold) {
+                    // Clearly dragged towards next page
+                    targetPage = current + 1;
+                } else if (deltaFromCurrent < -0.20f || deltaX > dragThreshold) {
+                    // Clearly dragged towards previous page
+                    targetPage = current - 1;
+                } else {
+                    // Small perturbation: snap to nearest page (50% midpoint)
+                    targetPage = Math.round(pageOffset);
                 }
             }
-            return handled;
+
+            // Clamp within valid range
+            targetPage = Math.max(0, Math.min(targetPage, totalPages - 1));
+            goToPage(targetPage);
         }
     }
 

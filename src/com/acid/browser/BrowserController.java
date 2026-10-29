@@ -14,7 +14,11 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Message;
 import android.util.Log;
+import android.view.HapticFeedbackConstants;
+import android.view.MotionEvent;
+import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
@@ -348,19 +352,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public boolean closeTab(int tabId) {
-        if (mTabs.size() <= 1) {
-            // Last tab: reset to Home instead of destroying browser
-            if (mActiveTab != null) {
-                mActiveTab.title = "Acid 靶场首页";
-                mActiveTab.url = HOME_URL;
-                mActiveTab.webView.loadUrl(HOME_URL);
-                if (mListener != null) {
-                    mListener.onUrlChanged(mActiveTab.url, mActiveTab.title);
-                }
-            }
-            return false;
-        }
-
         TabSession toRemove = null;
         int removeIndex = -1;
         for (int i = 0; i < mTabs.size(); i++) {
@@ -372,18 +363,29 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
         if (toRemove == null) return false;
 
+        boolean wasActive = mActiveTab != null && mActiveTab.id == tabId;
+        if (wasActive) {
+            // The WebView is about to be destroyed: never snapshot / switch away from it.
+            mActiveTab = null;
+        }
+
         mWebViewContainer.removeView(toRemove.webView);
         toRemove.webView.stopLoading();
         toRemove.webView.destroy();
         mTabs.remove(removeIndex);
 
-        if (mActiveTab != null && mActiveTab.id == tabId) {
+        if (mTabs.isEmpty()) {
+            // Fallback: the browser must always own one tab. Closing the last tab destroys it completely
+            // (history included) and a brand-new Home tab takes over, so Back can never return to the old page.
+            createNewTab(HOME_URL, true);
+            return true;
+        }
+
+        if (wasActive) {
             int newActiveIndex = Math.min(removeIndex, mTabs.size() - 1);
             switchToTab(mTabs.get(newActiveIndex).id);
-        } else {
-            if (mListener != null) {
-                mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
-            }
+        } else if (mListener != null) {
+            mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
         }
         return true;
     }
@@ -437,7 +439,77 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
 
         applyIdentityToSettings(wv, mIsDesktopMode);
+        applyDarkModeToSettings(wv, mDarkMode);
         wv.addJavascriptInterface(mAutomationDriver.getNativeHostBridge(), "__acidNativeHost");
+
+        // Track touch coordinates for floating element context menu (PopupWindow)
+        final float[] lastTouch = new float[2];
+        wv.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                if (event.getAction() == MotionEvent.ACTION_DOWN || event.getAction() == MotionEvent.ACTION_MOVE) {
+                    lastTouch[0] = event.getRawX();
+                    lastTouch[1] = event.getRawY();
+                }
+                return false;
+            }
+        });
+
+        // Long-click context menu near touch point without emojis (links, images)
+        wv.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(final View v) {
+                final WebView.HitTestResult result = wv.getHitTestResult();
+                if (result == null) return false;
+                int type = result.getType();
+                if (type == WebView.HitTestResult.UNKNOWN_TYPE || type == WebView.HitTestResult.EDIT_TEXT_TYPE) {
+                    return false;
+                }
+
+                final int touchX = Math.round(lastTouch[0]);
+                final int touchY = Math.round(lastTouch[1]);
+                final String extra = result.getExtra();
+
+                if (type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                    Message msg = mMainHandler.obtainMessage();
+                    msg.setTarget(new Handler(Looper.getMainLooper()) {
+                        @Override
+                        public void handleMessage(Message m) {
+                            String linkUrl = null;
+                            String imageUrl = null;
+                            if (m.getData() != null) {
+                                linkUrl = m.getData().getString("url");
+                                imageUrl = m.getData().getString("src");
+                            }
+                            if (imageUrl == null || imageUrl.isEmpty()) {
+                                imageUrl = extra;
+                            }
+                            ElementContextMenu.show(mContext, BrowserController.this, v, touchX, touchY, linkUrl, imageUrl, mDarkMode);
+                        }
+                    });
+                    wv.requestFocusNodeHref(msg);
+                    v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                    return true;
+                }
+
+                String linkUrl = null;
+                String imageUrl = null;
+
+                if (type == WebView.HitTestResult.SRC_ANCHOR_TYPE) {
+                    linkUrl = extra;
+                } else if (type == WebView.HitTestResult.IMAGE_TYPE) {
+                    imageUrl = extra;
+                } else if (type == WebView.HitTestResult.PHONE_TYPE || type == WebView.HitTestResult.EMAIL_TYPE) {
+                    linkUrl = extra;
+                } else {
+                    return false;
+                }
+
+                ElementContextMenu.show(mContext, BrowserController.this, v, touchX, touchY, linkUrl, imageUrl, mDarkMode);
+                v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                return true;
+            }
+        });
 
         wv.setWebViewClient(new WebViewClient() {
             @Override
@@ -574,16 +646,52 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         s.setLoadWithOverviewMode(desktopMode);
     }
 
+    private void applyDarkModeToSettings(WebView wv, boolean dark) {
+        wv.setBackgroundColor(AcidTheme.bg(dark));
+        WebSettings s = wv.getSettings();
+        if (Build.VERSION.SDK_INT >= 29) {
+            // Android 10+ 原生 Force Dark (通过反射调用，兼容 SDK 23 基础编译)
+            try {
+                java.lang.reflect.Method setForceDark = s.getClass().getMethod("setForceDark", int.class);
+                // 2 = WebSettings.FORCE_DARK_ON, 0 = WebSettings.FORCE_DARK_OFF
+                setForceDark.invoke(s, dark ? 2 : 0);
+            } catch (Exception ignored) {}
+
+            try {
+                java.lang.reflect.Method setForceDarkStrategy = s.getClass().getMethod("setForceDarkStrategy", int.class);
+                // 1 = DARK_STRATEGY_USER_AGENT_DARKENING_ONLY (智能变暗，不影响图片和原色)
+                setForceDarkStrategy.invoke(s, 1);
+            } catch (Exception ignored) {}
+        }
+    }
+
     private void injectDarkModeCss(WebView wv) {
-        String darkCss = "html { filter: invert(90%) hue-rotate(180deg) !important; background: #0f172a !important; }" +
-            "img, video, iframe, canvas, svg { filter: invert(100%) hue-rotate(180deg) !important; }";
+        if (wv == null) return;
+        boolean dark = mDarkMode;
         String js = "javascript:(function(){" +
-            "var el=document.getElementById('__acid_dark_mode');" +
-            "if(!el){" +
-            "el=document.createElement('style');" +
-            "el.id='__acid_dark_mode';" +
-            "el.innerText='" + darkCss + "';" +
-            "(document.head||document.documentElement).appendChild(el);" +
+            "var dark=" + (dark ? "true" : "false") + ";" +
+            "if(document.documentElement){" +
+            "  document.documentElement.style.colorScheme=dark?'dark':'';" +
+            "}" +
+            "var meta=document.querySelector('meta[name=\"color-scheme\"]');" +
+            "if(dark){" +
+            "  if(!meta){" +
+            "    meta=document.createElement('meta');" +
+            "    meta.name='color-scheme';" +
+            "    (document.head||document.documentElement).appendChild(meta);" +
+            "  }" +
+            "  meta.content='dark light';" +
+            "  var el=document.getElementById('__acid_dark_mode');" +
+            "  if(!el){" +
+            "    el=document.createElement('style');" +
+            "    el.id='__acid_dark_mode';" +
+            "    el.textContent='@media(prefers-color-scheme:light){:root{color-scheme:dark!important;}}html,body{background-color:#000000!important;}';" +
+            "    (document.head||document.documentElement).appendChild(el);" +
+            "  }" +
+            "}else{" +
+            "  if(meta)meta.content='light';" +
+            "  var el=document.getElementById('__acid_dark_mode');" +
+            "  if(el)el.remove();" +
             "}" +
             "})()";
         wv.evaluateJavascript(js, null);
@@ -686,15 +794,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void setDarkMode(boolean dark) {
         mDarkMode = dark;
         for (TabSession t : mTabs) {
-            t.webView.setBackgroundColor(AcidTheme.bg(dark));
-            if (dark) {
-                injectDarkModeCss(t.webView);
-            } else {
-                t.webView.evaluateJavascript(
-                    "javascript:(function(){var el=document.getElementById('__acid_dark_mode');if(el)el.remove();})()",
-                    null
-                );
-            }
+            applyDarkModeToSettings(t.webView, dark);
+            injectDarkModeCss(t.webView);
         }
     }
 

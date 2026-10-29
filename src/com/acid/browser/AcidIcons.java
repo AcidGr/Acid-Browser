@@ -352,8 +352,15 @@ public class AcidIcons {
                 break;
 
             case ICON_MOON:
-                // SVG Moon outline
-                p.addPath(parseSvgPath("M 20.4 13.5 C 19.8 17.8 16.2 21 11.8 21 C 6.9 21 3 17.1 3 12.2 C 3 7.8 6.2 4.2 10.5 3.6 C 9.5 5.2 9 7 9 9 C 9 14 13 18 18 18 C 18.8 18 19.6 17.9 20.4 17.6 Z"));
+                // Clean smooth crescent moon outline with sharp convergent tips (no closure artifacts)
+                p.addPath(parseSvgPath(
+                    "M 21.0 12.8 " +
+                    "C 21.0 17.5 17.5 21.0 12.0 21.0 " +
+                    "C 6.5 21.0 3.0 16.5 3.0 12.0 " +
+                    "C 3.0 7.5 6.8 3.5 11.2 3.0 " +
+                    "C 9.5 6.8 9.8 11.2 12.6 14.6 " +
+                    "C 14.8 17.0 18.6 16.2 21.0 12.8 Z"
+                ));
                 break;
 
             case ICON_SUN:
@@ -400,11 +407,15 @@ public class AcidIcons {
                 break;
 
             case ICON_INCOGNITO:
-                // SVG Spy glasses & hat
-                p.addPath(parseSvgPath("M 2 10 H 22 M 7 10 L 9.2 3.5 H 14.8 L 17 10"));
-                p.addCircle(7.5f, 15.5f, 3.5f, Path.Direction.CW);
-                p.addCircle(16.5f, 15.5f, 3.5f, Path.Direction.CW);
-                p.addPath(parseSvgPath("M 11 15.5 H 13"));
+            case ICON_INCOGNITO_OFF:
+                // Fully scaled Fedora hat & sunglasses without redundant internal cuts (consistent visual weight)
+                p.addPath(parseSvgPath(
+                    "M 2 10.5 C 5.5 9.2 18.5 9.2 22 10.5 " +
+                    "M 6.8 9.8 L 8.6 3.5 C 9 3 10.5 3.5 12 3.5 C 13.5 3.5 15 3 15.4 3.5 L 17.2 9.8 " +
+                    "M 11 15.5 C 11.5 14.8 12.5 14.8 13 15.5"
+                ));
+                p.addCircle(7.2f, 16f, 3.8f, Path.Direction.CW);
+                p.addCircle(16.8f, 16f, 3.8f, Path.Direction.CW);
                 break;
 
             case ICON_RETURN:
@@ -470,19 +481,11 @@ public class AcidIcons {
                 break;
 
             case ICON_INFO:
-                // SVG Info Circle + 'i'
+                // Clean Info Circle with generous spacing between dot and stem (no clumping)
                 p.addCircle(12f, 12f, 9f, Path.Direction.CW);
-                p.addCircle(12f, 8f, 1f, Path.Direction.CW);
-                p.addPath(parseSvgPath("M 12 11 V 16 M 11 11 H 12 M 11 16 H 13"));
+                p.addPath(parseSvgPath("M 12 7.5 H 12.01 M 12 11.8 V 16.5"));
                 break;
 
-            case ICON_INCOGNITO_OFF:
-                // SVG Incognito with slash
-                p.addPath(parseSvgPath("M 2 10 H 22 M 7 10 L 9.2 3.5 H 14.8 L 17 10"));
-                p.addCircle(7.5f, 15.5f, 3.5f, Path.Direction.CW);
-                p.addCircle(16.5f, 15.5f, 3.5f, Path.Direction.CW);
-                p.addPath(parseSvgPath("M 11 15.5 H 13 M 3 3 L 21 21"));
-                break;
 
             default:
                 p.addCircle(12f, 12f, 8f, Path.Direction.CW);
