@@ -116,14 +116,6 @@ public class AcidAgentLoop {
         return mModelStore.getStatusDisplayText();
     }
 
-    public void saveConfig(String baseUrl, String apiKey, String modelName) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_AGENT, Context.MODE_PRIVATE).edit();
-        ed.putString(KEY_BASE_URL, baseUrl != null && !baseUrl.trim().isEmpty() ? baseUrl.trim() : DEFAULT_BASE_URL);
-        ed.putString(KEY_API_KEY, apiKey != null ? apiKey.trim() : "");
-        ed.putString(KEY_MODEL, modelName != null && !modelName.trim().isEmpty() ? modelName.trim() : DEFAULT_MODEL);
-        ed.apply();
-    }
-
     public boolean isRunning() {
         return mRunning;
     }

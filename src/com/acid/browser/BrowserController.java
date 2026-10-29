@@ -221,22 +221,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             return status == DownloadManager.STATUS_RUNNING ? 5 : 0;
         }
 
-        public String getStatusLabel() {
-            switch (status) {
-                case DownloadManager.STATUS_SUCCESSFUL:
-                    return "已完成";
-                case DownloadManager.STATUS_RUNNING:
-                    return "下载中";
-                case DownloadManager.STATUS_PENDING:
-                    return "排队中";
-                case DownloadManager.STATUS_PAUSED:
-                    return "已暂停";
-                case DownloadManager.STATUS_FAILED:
-                    return "下载失败";
-                default:
-                    return "已保存";
-            }
-        }
     }
 
     private final Context mContext;
@@ -260,6 +244,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private String mLastBlockedDeepLink = "";
     private final List<DownloadItem> mDownloads = new ArrayList<DownloadItem>();
     private BrowserDataStore mDataStore = null;
+    /** Guards against stacking overlapping DownloadManager passes. */
+    private volatile boolean mSyncInFlight = false;
 
     public void setDataStore(BrowserDataStore dataStore) {
         mDataStore = dataStore;
@@ -302,10 +288,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public UserscriptManager getUserscriptManager() {
         return mUserscriptManager;
-    }
-
-    public WebAutomationDriver getAutomationDriver() {
-        return mAutomationDriver;
     }
 
     public File getWorkspaceDir() {
@@ -948,8 +930,12 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return "*/*";
     }
 
+    /**
+     * Cheap snapshot of the download list. This never talks to DownloadManager, so it
+     * is safe to call on the UI thread as often as needed; use
+     * {@link #syncDownloadStatusAsync(DownloadSyncCallback)} to refresh the numbers.
+     */
     public List<DownloadItem> getDownloads() {
-        syncDownloadStatus();
         synchronized (mDownloads) {
             return new ArrayList<DownloadItem>(mDownloads);
         }
@@ -1009,10 +995,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
             synchronized (mDownloads) {
                 mDownloads.add(0, item);
-            }
-
-            if (mDataStore != null) {
-                mDataStore.saveDownloads(mDownloads);
+                if (mDataStore != null) {
+                    mDataStore.saveDownloads(mDownloads);
+                }
             }
 
             emitLog("[DOWNLOAD] Enqueued: " + fileName + " (id=" + downloadId + ") -> /Download/");
@@ -1024,7 +1009,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void onDownloadCompleted(long downloadId) {
-        syncDownloadStatus();
+        syncDownloadStatusAsync(null);
         synchronized (mDownloads) {
             for (DownloadItem it : mDownloads) {
                 if (it.downloadId == downloadId) {
@@ -1035,14 +1020,72 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
-    public void syncDownloadStatus() {
+    /** Result callback for {@link #syncDownloadStatusAsync(DownloadSyncCallback)}. */
+    public interface DownloadSyncCallback {
+        /**
+         * @param anyActive true when at least one task is still running or queued,
+         *                  so callers can decide whether to poll again.
+         */
+        void onDownloadSyncDone(boolean anyActive);
+    }
+
+    /**
+     * Refreshes download progress off the UI thread.
+     *
+     * <p>Each item needs its own DownloadManager query, which is a binder round-trip into
+     * DownloadProvider. Doing that on the main thread for every row was the cause of the
+     * janky download list, so the whole pass runs on a worker and posts the result back.
+     * Overlapping calls are collapsed: if a pass is already in flight the new request is
+     * dropped, because the in-flight one will observe the same state.
+     */
+    public void syncDownloadStatusAsync(final DownloadSyncCallback callback) {
+        if (mSyncInFlight) return;
+        mSyncInFlight = true;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                boolean anyActive = false;
+                try {
+                    anyActive = syncDownloadStatusOffMainThread();
+                } catch (Exception e) {
+                    Log.w(TAG, "Background download status sync failed", e);
+                } finally {
+                    mSyncInFlight = false;
+                }
+
+                final boolean result = anyActive;
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (callback != null) {
+                            callback.onDownloadSyncDone(result);
+                        }
+                    }
+                });
+            }
+        }, "AcidDownloadSync").start();
+    }
+
+    /**
+     * Blocking refresh of every download row. Must not be called from the UI thread.
+     *
+     * @return true when at least one row is still running or pending.
+     */
+    private boolean syncDownloadStatusOffMainThread() {
         DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-        if (dm == null) return;
+        if (dm == null) return false;
 
         boolean changed = false;
+        boolean anyActive = false;
+
         synchronized (mDownloads) {
             for (DownloadItem it : mDownloads) {
-                if (it.downloadId <= 0) continue;
+                if (it.downloadId <= 0) {
+                    // A record with no system id can never advance; treat it as finished
+                    // so the poller stops instead of spinning forever.
+                    continue;
+                }
                 DownloadManager.Query q = new DownloadManager.Query();
                 q.setFilterById(it.downloadId);
                 Cursor c = null;
@@ -1076,7 +1119,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         }
                     }
                 } catch (Exception e) {
-                    Log.w(TAG, "Failed to persist download state", e);
+                    Log.w(TAG, "Failed to read download status for id " + it.downloadId, e);
                 } finally {
                     if (c != null) {
                         try {
@@ -1086,11 +1129,21 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         }
                     }
                 }
+
+                if (it.status == DownloadManager.STATUS_RUNNING
+                    || it.status == DownloadManager.STATUS_PENDING) {
+                    anyActive = true;
+                }
+            }
+
+            // Persist inside the lock so the worker never serialises a list that a UI
+            // thread mutation is concurrently editing.
+            if (changed && mDataStore != null) {
+                mDataStore.saveDownloads(mDownloads);
             }
         }
-        if (changed && mDataStore != null) {
-            mDataStore.saveDownloads(mDownloads);
-        }
+
+        return anyActive;
     }
 
     public void openDownloadedFile(DownloadItem it) {
@@ -1190,10 +1243,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
-    public boolean removeDownload(long downloadId) {
-        return deleteDownload(downloadId, false);
-    }
-
     public boolean deleteDownload(long downloadId, boolean deletePhysicalFile) {
         boolean removed = false;
         DownloadItem target = null;
@@ -1224,8 +1273,12 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
         }
 
-        if (removed && mDataStore != null) {
-            mDataStore.saveDownloads(mDownloads);
+        if (removed) {
+            synchronized (mDownloads) {
+                if (mDataStore != null) {
+                    mDataStore.saveDownloads(mDownloads);
+                }
+            }
         }
         return removed;
     }
@@ -1236,36 +1289,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
         if (mDataStore != null) {
             mDataStore.clearDownloads();
-        }
-    }
-
-    public String getCookieForUrl(String url) {
-        try {
-            return CookieManager.getInstance().getCookie(url);
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    public boolean setCookieForUrl(String url, String cookieString) {
-        try {
-            CookieManager.getInstance().setCookie(url, cookieString);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    public void clearAllCookies() {
-        if (Build.VERSION.SDK_INT >= 21) {
-            CookieManager.getInstance().removeAllCookies(null);
-            CookieManager.getInstance().flush();
-        }
-    }
-
-    public void flushCookies() {
-        if (Build.VERSION.SDK_INT >= 21) {
-            CookieManager.getInstance().flush();
         }
     }
 

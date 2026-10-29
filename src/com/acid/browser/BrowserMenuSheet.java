@@ -1,7 +1,6 @@
 package com.acid.browser;
 
 import android.content.Context;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
@@ -25,7 +24,7 @@ import android.widget.TextView;
  *  - Active: Accent Green (#00BA76/#00FF88) + Active Icon
  *  - Inactive: Muted Slate Gray + Inactive/Off Icon
  */
-public class BrowserMenuSheet extends FrameLayout {
+public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
 
     public interface MenuActionListener {
         void onToggleDarkMode();
@@ -128,10 +127,6 @@ public class BrowserMenuSheet extends FrameLayout {
 
         public void setPageWidth(int w) {
             mPageWidth = w;
-        }
-
-        public int getCurrentPage() {
-            return mCurrentPage;
         }
 
         public void setOnPageChangeListener(OnPageChangeListener listener) {
@@ -661,13 +656,23 @@ public class BrowserMenuSheet extends FrameLayout {
         return getVisibility() == View.VISIBLE;
     }
 
+    @Override
     public void show() {
         switchPage(0);
+        bringToFront();
         setVisibility(View.VISIBLE);
     }
 
+    @Override
     public void dismiss() {
         setVisibility(View.GONE);
+    }
+
+    @Override
+    public boolean handleBackPressed() {
+        if (!isShowing()) return false;
+        dismiss();
+        return true;
     }
 
     public void toggle() {

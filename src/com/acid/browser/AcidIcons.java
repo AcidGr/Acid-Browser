@@ -842,10 +842,6 @@ public class AcidIcons {
             }
         }
 
-        public int getCount() {
-            return mCount;
-        }
-
         public void setColor(int color) {
             if (mColor != color) {
                 mColor = color;

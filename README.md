@@ -1,13 +1,26 @@
-# Acid-broswer (Phase 2 Clean White Edition)
+# Acid-broswer
 
-**Acid-broswer** 是一款专为 Android 打造的超轻量、零敏感权限、原生支持 Agent Loop 的现代 AI 浏览器内核（纯白极简 UI，经典底栏 5 键导航，全矢量 SVG 图标设计，零 Emoji）。
+**Acid-broswer** 是一款为 Android 打造的超轻量、原生支持 Agent Loop 的浏览器内核：纯原生 `WebView` + 注入式 `agent_bridge.js` 运行时 + `AcidIcons` 纯矢量图标引擎，**零第三方依赖**（不使用 AndroidX，不使用任何外部库）。
 
-- **现代白底主题**：默认纯净白色界面，质感通透；支持一键无缝夜间模式切换。
-- **经典底栏 5 键**：从左到右依次为 `后退`、`前进`、`菜单 (居中)`、`标签页 (带实时数字方框)`、`主页`，与主流正常浏览器使用习惯完全一致。
-- **功能菜单面板**：底部弹窗式抽屉，集成 `夜间模式`、`书签收藏`、`历史浏览`、`下载管理`、`电脑/手机模式切换`、`Agent 调试台`。
-- **超轻量体积**：全包仅 `~130 KB`（零第三方臃肿依赖，纯原生 Android `WebView` + 注入式 `agent_bridge.js` 运行时 + `AcidIcons` 纯矢量抗锯齿引擎）。
-- **零敏感权限**：仅需普通 `INTERNET` 权限（**无需 Root、无需 Shizuku、无需系统无障碍服务、无需悬浮窗权限**，任何安卓机安装即用）。
-- **控制网关**：内置 `127.0.0.1:3090` 本地 HTTP 控制网关，支持大模型或本地 Agent 闭环遥控。
+- **双主题**：默认纯净白色界面，一键切换真 OLED 纯黑夜间模式。所有颜色集中在 `AcidTheme`，单一真相源。
+- **底栏 5 键**：从左到右依次为 `后退`、`前进`、`主页 (居中)`、`标签页 (带实时数字角标)`、`功能菜单`。
+- **功能菜单（10 项，两页横滑）**：`夜间模式`、`无痕模式`、`书签收藏`、`历史浏览`、`电脑模式`、`下载管理`、`Acid Agent`、`模型配置`、`关于`、`MCP 服务`。
+- **超轻量体积**：全包 **249 KB**（254,713 字节），dex 仅 1,797 个方法。
+- **本地控制网关**：内置 `127.0.0.1:3090` MCP 服务，支持大模型或本地 Agent 闭环遥控。
+
+## 权限说明
+
+应用申请以下 5 项权限，均为功能必需：
+
+| 权限 | 用途 |
+|---|---|
+| `INTERNET` | 浏览网页、Agent 模型调用、检查更新 |
+| `ACCESS_NETWORK_STATE` | 判断网络可用性 |
+| `READ_EXTERNAL_STORAGE` | 读取 `Download` 目录中已下载的文件 |
+| `WRITE_EXTERNAL_STORAGE` | 将下载文件保存到 `Download` 目录 |
+| `REQUEST_INSTALL_PACKAGES` | 从下载列表直接安装 APK |
+
+> **无需 Root、无需 Shizuku、无需无障碍服务、无需悬浮窗权限。**
 
 ---
 
@@ -15,59 +28,77 @@
 
 ```text
 Acid-broswer/
-├── AndroidManifest.xml                  # 仅需 INTERNET 权限，支持 http/https 链接打开
-├── build.sh                             # 一键极速编译、4字节对齐与签名脚本
-├── docs/
-│   └── agent-tool-issues-report-20261028.md  # Agent 工具链实测问题报告与优化建议 (13项问题诊断)
+├── AndroidManifest.xml                  # 权限与 Activity 声明
+├── build.sh                             # 一键编译：aapt → javac → dx → zipalign → apksigner（约 4 秒）
 ├── assets/
-│   ├── acid_logo.svg                    # 品牌定制 SVG 矢量图标源文件
-│   ├── agent_bridge.js                  # 注入式页面感知与动作执行引擎 (DOM 蒸馏 / SoM / React-safe Fill)
-│   ├── home.html                        # 内置纯 SVG 矢量风格启动页暨 Agent 动作靶场 (Testbench)
+│   ├── acid_logo.png                    # 启动页品牌图标
+│   ├── agent_bridge.js                  # 注入式页面感知与动作执行引擎（DOM 蒸馏 / SoM / React-safe Fill）
+│   ├── home.html                        # 内置启动页暨 Agent 动作靶场
 │   └── userscripts/
-│       └── anti_app_hijack.user.js      # 默认内置插件：拦截“打开App看全文”遮罩与解除复制限制
+│       └── anti_app_hijack.user.js      # 默认内置插件：拦截"打开App看全文"遮罩
+├── docs/
+│   └── agent-tool-issues-report-20261028.md
 ├── res/
-│   ├── drawable/ic_launcher.png         # 由 SVG 矢量路径生成的酸绿/青色赛博六边形图标
-│   └── values/strings.xml               # 应用名称定义
-└── src/com/acid/browser/
-    ├── AcidIcons.java                   # 纯 SVG Path (24x24 viewBox) 解析与抗锯齿矢量图标引擎 (15款定制图标)
-    ├── BrowserActivity.java             # 主界面：全 SVG 矢量顶栏、双标识切换、SoM 开关、多标签、人机接管栏与调试台
-    ├── BrowserController.java           # 核心控制器：多 Tab 会话、UA/Viewport 伪装、DeepLink 拦截、MotionEvent 合成
-    ├── AgentOverlayView.java            # 顶层 HUD 画布：AI 驾驶呼吸灯边框、防误触锁、硬件点击水波纹脉冲动画
-    └── HttpControlServer.java           # 127.0.0.1:3090 本地 REST 控制网关
+│   ├── drawable/ic_launcher.png
+│   └── values/strings.xml
+└── src/com/acid/browser/                # 26 个 Java 文件，约 14,900 行
 ```
+
+### 源码分层
+
+| 层 | 文件 |
+|---|---|
+| **入口与编排** | `BrowserActivity` — 生命周期、顶栏/底栏、overlay 注册表 |
+| **覆盖层基类** | `AcidOverlay`（统一 show/dismiss/applyTheme/handleBackPressed）、`AcidBottomSheetView`（Sheet 脚手架） |
+| **控制器** | `BrowserController` — Tab 会话、WebView 配置、UA 伪装、深链拦截、下载管理 |
+| **UI 组件** | `BrowserMenuSheet`、`BrowserListsSheet`、`TabsOverviewView`、`AgentFloatingView`、`AgentSessionsSheet`、`AgentModelSelectorSheet`、`ModelProviderConfigSheet`、`ElementContextMenu` |
+| **主题与图形** | `AcidTheme`（42 色常量 + 语义访问器）、`AcidIcons`（47 款 SVG 矢量图标）、`AcidMarkdownView`、`AgentOverlayView` |
+| **Agent 链路** | `AcidAgentLoop`、`AcidSandboxTools`、`WebAutomationDriver`、`JsEvalShaper`、`HttpControlServer` |
+| **持久化** | `BrowserDataStore`（书签/历史/下载）、`AcidSessionStore`（会话）、`AcidModelStore`（模型配置）、`UserscriptManager` |
+| **其它** | `AcidFileProvider` |
 
 ---
 
-## 二、 本地 HTTP 网关接口速查 (`127.0.0.1:3090`)
+## 二、 本地 MCP 网关 (`127.0.0.1:3090`)
+
+纯 Model Context Protocol 实现，提供 `browser` 工具（13 个 action）与 `workspace` 工具。
 
 ```bash
-# 1. 查看浏览器状态
-curl -s http://127.0.0.1:3090/api/status
+# 列出可用工具
+curl -s -X POST http://127.0.0.1:3090/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-# 2. 观测当前页面语义树与 [e1..eN] 句柄 (开启 SoM 框)
-curl -s "http://127.0.0.1:3090/api/observe?som=true"
+# 跳转并等待页面稳定
+curl -s -X POST http://127.0.0.1:3090/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"browser","arguments":{"action":"navigate","url":"https://news.ycombinator.com/"}}}'
 
-# 3. 跳转网址并等待页面稳定
-curl -s -X POST http://127.0.0.1:3090/api/navigate \
-  -d '{"url":"https://news.ycombinator.com/"}'
+# 观测当前页面语义树与 [e1..eN] 句柄
+curl -s -X POST http://127.0.0.1:3090/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"browser","arguments":{"action":"observe","som":true}}}'
 
-# 4. 免软键盘填充输入框 (React/Vue 安全)
-curl -s -X POST http://127.0.0.1:3090/api/fill \
-  -d '{"ref":"e7","text":"Acid Browser Agent","clear":true,"submit":false}'
-
-# 5. 按句柄触发硬件级真实点击 (带脉冲水波纹动画)
-curl -s -X POST http://127.0.0.1:3090/api/click \
-  -d '{"ref":"e10","native":true}'
-
-# 6. 切换电脑端/移动端标识 或 请求人类接管
-curl -s -X POST http://127.0.0.1:3090/api/mode \
-  -d '{"browserMode":"desktop","controlMode":"takeover","som":true,"reason":"请完成滑块验证"}'
+# 免软键盘填充（React/Vue 安全）
+curl -s -X POST http://127.0.0.1:3090/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"browser","arguments":{"action":"fill","ref":"e7","text":"Acid","submit":true}}}'
 ```
+
+服务可通过 功能菜单 → `MCP 服务` 开关。SSE 端点：`GET /sse`、`POST /message?sessionId=X`。
 
 ---
 
-## 三、 项目文档与诊断评估
+## 三、 构建
 
-- **[Acid Browser Agent 工具链问题与优化建议报告 (2026-10-28)](docs/agent-tool-issues-report-20261028.md)**：
-  基于多站点真实复杂业务流（抖音登录与私信 / 抖音作品查询 / 百度贴吧通知 / 深圳天气 / Gmail 发信）的深度实测，全面梳理的 13 项工具问题、P0~P2 优先级矩阵、分工哲学反思与 API 演进草案。
+```bash
+./build.sh          # 输出 build/Acid-broswer.apk
+```
 
+依赖：`aapt`、`javac` (JDK 8+)、`dx`、`zipalign`、`apksigner`、`android.jar`（API 23）。
+
+---
+
+## 四、 项目文档
+
+- **[Agent 工具链问题与优化建议报告 (2026-10-28)](docs/agent-tool-issues-report-20261028.md)** — 基于多站点真实业务流实测的 13 项工具问题与优先级矩阵。

@@ -153,7 +153,6 @@ public final class AcidTheme {
     public static int codeBlockBorder(boolean dark) { return dark ? DARK_CODE_BLOCK_BORDER : LIGHT_CODE_BLOCK_BORDER; }
     public static int inlineCodeBg(boolean dark) { return dark ? DARK_INLINE_CODE_BG : LIGHT_INLINE_CODE_BG; }
     public static int inlineCodeFg(boolean dark) { return dark ? DARK_INLINE_CODE_FG : LIGHT_INLINE_CODE_FG; }
-    public static int codeText(boolean dark) { return dark ? DARK_CODE_TEXT : LIGHT_CODE_TEXT; }
     public static int markdownText(boolean dark) { return dark ? LIGHT_SUBTLE : LIGHT_TEXT; }
     public static int markdownMuted(boolean dark) { return dark ? DARK_TEXT_SECONDARY : LIGHT_MUTED; }
     /** Popup / context-menu surface. */

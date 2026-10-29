@@ -31,7 +31,7 @@ import java.util.Map;
  * DSH-Style Floating Agent Conversation Window with live thinking blocks,
  * tool call cards, markdown responses, session management, and vertical drag repositioning.
  */
-public class AgentFloatingView extends FrameLayout {
+public class AgentFloatingView extends FrameLayout implements AcidOverlay {
 
     private static final String TAG = "AgentFloatingView";
 
@@ -94,6 +94,7 @@ public class AgentFloatingView extends FrameLayout {
         mHeightProvider = provider;
     }
 
+    @Override
     public boolean handleBackPressed() {
         if (isShowing()) {
             close();
@@ -106,6 +107,7 @@ public class AgentFloatingView extends FrameLayout {
         return getVisibility() == View.VISIBLE;
     }
 
+    @Override
     public void show() {
         mHasUnreadAgentMessage = false;
         if (mHostCallback != null) {
@@ -116,6 +118,7 @@ public class AgentFloatingView extends FrameLayout {
             );
         }
         setVisibility(View.VISIBLE);
+        bringToFront();
         updateFloatingWindowPosition(false);
         post(new Runnable() {
             @Override
@@ -127,6 +130,11 @@ public class AgentFloatingView extends FrameLayout {
     }
 
     public void close() {
+        dismiss();
+    }
+
+    @Override
+    public void dismiss() {
         hideKeyboard();
         setVisibility(View.GONE);
     }
