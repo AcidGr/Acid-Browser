@@ -2,7 +2,7 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.content.res.AssetManager;
-import android.util.Base64;
+import android.util.Log;
 import android.webkit.WebView;
 
 import org.json.JSONArray;
@@ -17,8 +17,13 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Manages embedded agent_bridge.js runtime and userscripts filesystem/injection.
+ *
+ * Write policy: every write reports success honestly. A failed write returns false and
+ * logs, instead of being swallowed and reported as success to the caller.
  */
 public class UserscriptManager {
+
+    private static final String TAG = "AcidUserscripts";
 
     private final Context mContext;
     private final File mWorkspaceDir;
@@ -47,16 +52,19 @@ public class UserscriptManager {
     }
 
     private void loadBridgeAndDefaultUserscripts() {
-        try {
-            mBridgeJs = readAssetText("agent_bridge.js");
-        } catch (Exception ignored) {}
+        mBridgeJs = readAssetText("agent_bridge.js");
+        if (mBridgeJs.isEmpty()) {
+            Log.e(TAG, "agent_bridge.js asset is missing or empty; page automation will be unavailable");
+        }
 
         File defaultScript = new File(mUserscriptsDir, "anti_app_hijack.user.js");
         if (!defaultScript.exists()) {
-            try {
-                String src = readAssetText("userscripts/anti_app_hijack.user.js");
-                writeFileText(defaultScript, src);
-            } catch (Exception ignored) {}
+            String src = readAssetText("userscripts/anti_app_hijack.user.js");
+            if (src.isEmpty()) {
+                Log.w(TAG, "Bundled userscript asset missing; skipping default install");
+            } else if (!writeFileText(defaultScript, src)) {
+                Log.w(TAG, "Could not install default userscript to " + defaultScript.getAbsolutePath());
+            }
         }
     }
 
@@ -95,7 +103,9 @@ public class UserscriptManager {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to inject bridge/userscripts into the current page", e);
+        }
     }
 
     public JSONArray listUserscriptsJson() {
@@ -104,12 +114,15 @@ public class UserscriptManager {
         if (files != null) {
             for (File f : files) {
                 if (f.isFile() && f.getName().endsWith(".js")) {
+                    JSONObject item = new JSONObject();
                     try {
-                        JSONObject item = new JSONObject();
                         item.put("name", f.getName());
                         item.put("sizeBytes", f.length());
-                        arr.put(item);
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) {
+                        Log.w(TAG, "Failed to encode userscript metadata for " + f.getName(), e);
+                        continue;
+                    }
+                    arr.put(item);
                 }
             }
         }
@@ -121,8 +134,7 @@ public class UserscriptManager {
         String safeName = name.replaceAll("[^a-zA-Z0-9._-]", "_");
         if (!safeName.endsWith(".js")) safeName += ".user.js";
         File f = new File(mUserscriptsDir, safeName);
-        writeFileText(f, code != null ? code : "");
-        return true;
+        return writeFileText(f, code != null ? code : "");
     }
 
     public boolean deleteUserscript(String name) {
@@ -168,12 +180,34 @@ public class UserscriptManager {
         }
     }
 
-    public void writeFileText(File f, String content) {
+    /**
+     * Writes UTF-8 text and reports whether it actually landed on disk.
+     * Returns false (with a log line) instead of silently discarding the failure.
+     */
+    public boolean writeFileText(File f, String content) {
+        if (f == null) return false;
+        FileOutputStream fos = null;
         try {
-            FileOutputStream fos = new FileOutputStream(f);
+            File parent = f.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                Log.e(TAG, "Cannot create parent directory: " + parent.getAbsolutePath());
+                return false;
+            }
+            fos = new FileOutputStream(f);
             fos.write(content.getBytes(StandardCharsets.UTF_8));
             fos.flush();
-            fos.close();
-        } catch (Exception ignored) {}
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to write " + f.getAbsolutePath(), e);
+            return false;
+        } finally {
+            if (fos != null) {
+                try {
+                    fos.close();
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to close " + f.getAbsolutePath(), e);
+                }
+            }
+        }
     }
 }

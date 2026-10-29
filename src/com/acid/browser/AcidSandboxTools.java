@@ -2,6 +2,7 @@ package com.acid.browser;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -26,6 +27,8 @@ import java.util.concurrent.TimeUnit;
  *  5. bash    (execute shell commands with working directory in sandbox)
  */
 public class AcidSandboxTools {
+
+    private static final String TAG = "AcidSandboxTools";
 
     private final BrowserController mController;
     private final File mWorkspaceDir;
@@ -148,7 +151,9 @@ public class AcidSandboxTools {
                 bashProps,
                 new String[]{"command"}
             ));
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to build the tool schema; the agent may see fewer tools", e);
+        }
         return tools;
     }
 
@@ -170,7 +175,9 @@ public class AcidSandboxTools {
                 mcpTool.put("description", fn.optString("description"));
                 mcpTool.put("inputSchema", fn.optJSONObject("parameters"));
                 mcpTools.put(mcpTool);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to encode MCP tool descriptor", e);
+            }
         }
         return mcpTools;
     }
@@ -641,7 +648,9 @@ public class AcidSandboxTools {
                                 baos.write(buf, 0, n);
                             }
                         }
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) {
+                        Log.w(TAG, "Failed while reading process output", e);
+                    }
                 }
             });
             readerThread.start();
@@ -662,7 +671,11 @@ public class AcidSandboxTools {
             return "Error executing bash command: " + e.getMessage() + "\n[exit code: -1]";
         } finally {
             if (proc != null) {
-                try { proc.destroy(); } catch (Exception ignored) {}
+                try {
+                    proc.destroy();
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to destroy the bash process", e);
+                }
             }
         }
     }

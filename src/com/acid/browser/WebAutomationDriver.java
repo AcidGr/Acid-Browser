@@ -93,7 +93,9 @@ public class WebAutomationDriver {
             try {
                 Object val = new JSONTokener(trimmed).nextValue();
                 return val != null ? val.toString() : "";
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "evaluateJavascript result is not a JSON string literal; using raw text", e);
+            }
         }
         return trimmed;
     }
@@ -123,7 +125,10 @@ public class WebAutomationDriver {
 
         try {
             latch.await(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();   // preserve the interrupt for the caller
+            Log.w(TAG, "Interrupted while waiting for a JS evaluation result", e);
+        }
         return ref.get();
     }
 
@@ -248,7 +253,9 @@ public class WebAutomationDriver {
             o.put("error_code", code);
             o.put("error", message);
             if (timeoutMs > 0) o.put("timeout_ms", timeoutMs);
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to encode eval error payload (" + code + ")", e);
+        }
         return o.toString();
     }
 
@@ -317,7 +324,9 @@ public class WebAutomationDriver {
             err.put("error", diagnoseSyntaxError(userCode));
             err.put("tried_modes", triedModes.toString());
             err.put("hint", "Code was not executed. Pass an expression (e.g. document.title), statements whose last line is the value, or a function body with an explicit return.");
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to encode syntax-error payload", e);
+        }
         return err.toString();
     }
 
@@ -377,7 +386,9 @@ public class WebAutomationDriver {
                             partial.put("progress", tab.webView.getProgress());
                             partial.put("isLoading", tab.isLoading);
                         }
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) {
+                        Log.w(TAG, "Failed to collect partial page metadata while building fallback observation", e);
+                    }
                     latch.countDown();
                 }
             });
@@ -393,7 +404,9 @@ public class WebAutomationDriver {
                 "Interactive Elements (0):\n" +
                 "(暂无可用交互句柄，页面仍在渲染中，建议使用 browser(action='wait') 确认稳定)";
             err.put("compactText", fallbackCompact);
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to build fallback observation (" + errorCode + ")", e);
+        }
         return err;
     }
 
@@ -420,7 +433,9 @@ public class WebAutomationDriver {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Bridge re-injection failed; automation may degrade for this page", e);
+        }
     }
 
     private JSONObject buildDegradedObservation() {
@@ -466,7 +481,9 @@ public class WebAutomationDriver {
         if (raw != null && raw.startsWith("{")) {
             try {
                 return new JSONObject(raw);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Degraded observation payload is not valid JSON; discarding", e);
+            }
         }
         return null;
     }
@@ -551,12 +568,19 @@ public class WebAutomationDriver {
         } else if ("ms".equals(cond)) {
             long sleepTime = quietMs > 0 ? quietMs : 1000;
             if (quietMs <= 0 && tgt != null) {
-                try { sleepTime = Long.parseLong(tgt.trim()); } catch (NumberFormatException ignored) {}
+                try {
+                    sleepTime = Long.parseLong(tgt.trim());
+                } catch (NumberFormatException e) {
+                    Log.w(TAG, "wait(ms) target is not a number: " + tgt + "; using " + sleepTime + "ms", e);
+                }
             }
             sleepTime = Math.max(0, Math.min(30000, sleepTime));
             try {
                 Thread.sleep(sleepTime);
-            } catch (InterruptedException ignored) {}
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                Log.w(TAG, "Interrupted during wait(ms)", e);
+            }
             satisfied = true;
             reportedQuiet = 0;
             reportedTimeout = sleepTime;
@@ -575,7 +599,11 @@ public class WebAutomationDriver {
                 String raw = evaluateJsSync(checkExpr, 1500);
                 JSONObject res = null;
                 if (raw != null && raw.startsWith("{")) {
-                    try { res = new JSONObject(raw); } catch (Exception ignored) {}
+                    try {
+                        res = new JSONObject(raw);
+                    } catch (Exception e) {
+                        Log.w(TAG, "Wait condition probe returned invalid JSON; retrying", e);
+                    }
                 }
                 if (res != null) {
                     lastCheck = res;
@@ -603,7 +631,9 @@ public class WebAutomationDriver {
                 if (SystemClock.uptimeMillis() >= deadline) break;
                 try {
                     Thread.sleep(40);
-                } catch (InterruptedException ignored) {
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    Log.w(TAG, "Wait-condition poll loop interrupted; returning current result", e);
                     break;
                 }
                 if (SystemClock.uptimeMillis() >= deadline) break;
@@ -655,7 +685,9 @@ public class WebAutomationDriver {
             out.put("title", snapshot.optString("title", snapshot.optJSONObject("partial") != null
                 ? snapshot.optJSONObject("partial").optString("title", "") : ""));
             out.put("snapshot", snapshot);
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to assemble wait receipt", e);
+        }
         return out;
     }
 
@@ -690,14 +722,20 @@ public class WebAutomationDriver {
                 }
                 Thread.sleep(250);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Navigate settle-wait interrupted; continuing with current page state", e);
+        }
         mHost.emitLog("[NAV] Navigated -> " + url);
         return observeSync(mHost.isSomEnabled(), true, false);
     }
 
     public JSONObject clickRefSync(final String targetRef, final boolean useNativeMotionEvent) {
         JSONObject opts = new JSONObject();
-        try { opts.put("ref", targetRef); } catch (Exception ignored) {}
+        try {
+            opts.put("ref", targetRef);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to encode click ref: " + targetRef, e);
+        }
         return clickTargetSync(opts, useNativeMotionEvent);
     }
 
@@ -787,7 +825,9 @@ public class WebAutomationDriver {
                             focusChanged = fbEffect.optBoolean("focus_changed", focusChanged);
                         }
                         strategy = "DOM_SYNTHETIC_FALLBACK";
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) {
+                        Log.w(TAG, "JS-synthetic click fallback returned invalid JSON", e);
+                    }
                 }
 
                 mHost.emitLog("[CLICK] [" + targetRef + "] \"" + label + "\" @(" +
@@ -835,11 +875,14 @@ public class WebAutomationDriver {
                 return new JSONObject(jsRaw);
             }
         } catch (Exception e) {
+            Log.e(TAG, "clickTargetSync failed for " + (targetOpts != null ? targetOpts.toString() : "{}"), e);
             JSONObject err = new JSONObject();
             try {
                 err.put("ok", false);
                 err.put("error", e.getMessage());
-            } catch (Exception ignored) {}
+            } catch (Exception ee) {
+                Log.w(TAG, "Failed to encode click error payload", ee);
+            }
             return err;
         }
     }
@@ -863,7 +906,9 @@ public class WebAutomationDriver {
         try {
             latch.await(2000, TimeUnit.MILLISECONDS);
             Thread.sleep(200);
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Coordinate click wait interrupted", e);
+        }
         mHost.emitLog("[CLICK] Coordinate (" + Math.round(viewX) + ", " + Math.round(viewY) + ")");
         JSONObject res = new JSONObject();
         try {
@@ -871,7 +916,9 @@ public class WebAutomationDriver {
             res.put("strategy", "ANDROID_RAW_COORDINATE");
             res.put("viewX", Math.round(viewX));
             res.put("viewY", Math.round(viewY));
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to encode coordinate click receipt", e);
+        }
         return res;
     }
 
@@ -905,15 +952,22 @@ public class WebAutomationDriver {
             mHost.emitLog("[FILL] [" + ref + "] -> \"" + text + "\"" + (submit ? " (submitted)" : ""));
             return new JSONObject(raw);
         } catch (Exception e) {
+            Log.e(TAG, "fillSync failed", e);
             JSONObject err = new JSONObject();
-            try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ignored) {}
+            try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ee) {
+                Log.w(TAG, "Failed to encode fill error payload", ee);
+            }
             return err;
         }
     }
 
     public JSONObject fillSync(String ref, String text, boolean clear, boolean submit) {
         JSONObject opts = new JSONObject();
-        try { opts.put("ref", ref); } catch (Exception ignored) {}
+        try {
+            opts.put("ref", ref);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to encode fill ref: " + ref, e);
+        }
         return fillSync(opts, text, clear, submit);
     }
 
@@ -925,8 +979,11 @@ public class WebAutomationDriver {
             mHost.emitLog("[FORM] Batch-filled (" + fields.length() + " fields)");
             return new JSONObject(raw);
         } catch (Exception e) {
+            Log.e(TAG, "fillFormSync failed for " + fields.length() + " field(s)", e);
             JSONObject err = new JSONObject();
-            try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ignored) {}
+            try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ee) {
+                Log.w(TAG, "Failed to encode fillForm error payload", ee);
+            }
             return err;
         }
     }
@@ -939,8 +996,11 @@ public class WebAutomationDriver {
             mHost.emitLog("[SELECT] [" + ref + "] -> \"" + valueOrLabel + "\"");
             return new JSONObject(raw);
         } catch (Exception e) {
+            Log.e(TAG, "selectOptionSync failed for [" + ref + "]", e);
             JSONObject err = new JSONObject();
-            try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ignored) {}
+            try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ee) {
+                Log.w(TAG, "Failed to encode select error payload", ee);
+            }
             return err;
         }
     }
@@ -954,8 +1014,11 @@ public class WebAutomationDriver {
             mHost.emitLog("[SCROLL] " + direction + " (" + amount + ")");
             return new JSONObject(raw);
         } catch (Exception e) {
+            Log.e(TAG, "scrollSync failed (" + direction + ")", e);
             JSONObject err = new JSONObject();
-            try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ignored) {}
+            try { err.put("ok", false); err.put("error", e.getMessage()); } catch (Exception ee) {
+                Log.w(TAG, "Failed to encode scroll error payload", ee);
+            }
             return err;
         }
     }
@@ -987,7 +1050,10 @@ public class WebAutomationDriver {
         });
         try {
             latch.await(3000, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.w(TAG, "Interrupted while waiting for a screenshot", e);
+        }
         return b64Ref.get();
     }
 }

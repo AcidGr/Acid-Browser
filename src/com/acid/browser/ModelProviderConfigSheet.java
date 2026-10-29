@@ -9,6 +9,7 @@ import android.text.InputType;
 import android.text.TextUtils;
 import android.text.method.HideReturnsTransformationMethod;
 import android.text.method.PasswordTransformationMethod;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -30,6 +31,8 @@ import java.util.List;
  * 3. Provider Editor (Base URL, API Key with toggle, Model discovery via GET /models, Manual model addition)
  */
 public class ModelProviderConfigSheet extends AcidBottomSheetView {
+
+    private static final String TAG = "ModelProviderConfigSheet";
 
     public interface OnConfigChangeListener {
         void onProviderConfigChanged();
@@ -1039,6 +1042,8 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             if (imm != null && findFocus() != null) {
                 imm.hideSoftInputFromWindow(findFocus().getWindowToken(), 0);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to hide the soft keyboard", e);
+        }
     }
 }

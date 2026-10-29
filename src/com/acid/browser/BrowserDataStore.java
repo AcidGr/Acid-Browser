@@ -3,6 +3,7 @@ package com.acid.browser;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.text.TextUtils;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -12,8 +13,14 @@ import java.util.List;
 
 /**
  * Data repository for browser bookmarks, browsing history, and global user preferences.
+ *
+ * Parsing policy: one corrupt record must never invalidate the whole collection. Every
+ * element is decoded inside its own try/catch and skipped (with a log line) when it is
+ * unreadable, so a single bad entry cannot silently wipe or freeze user data.
  */
 public class BrowserDataStore {
+
+    private static final String TAG = "AcidDataStore";
 
     public static final String PREF_NAME = "acid_browser_data";
     public static final String PREF_BOOKMARKS = "bookmarks";
@@ -48,19 +55,47 @@ public class BrowserDataStore {
         ed.apply();
     }
 
+    /**
+     * Decodes one bookmark/history element. Returns null (and logs) when the element is
+     * unusable, so the caller can skip it without aborting the whole batch.
+     */
+    private static EntryItem decodeEntry(JSONObject o, int index, String kind) {
+        if (o == null) {
+            Log.w(TAG, kind + "[" + index + "] is not a JSON object; skipped");
+            return null;
+        }
+        String url = o.optString("url", "");
+        if (TextUtils.isEmpty(url)) {
+            Log.w(TAG, kind + "[" + index + "] has no usable url; skipped");
+            return null;
+        }
+        return new EntryItem(o.optString("title", url), url);
+    }
+
     public List<EntryItem> loadBookmarks() {
         SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
-        String raw = prefs.getString(PREF_BOOKMARKS, "[]");
+        String raw = prefs.getString(PREF_BOOKMARKS, null);
         List<EntryItem> list = new ArrayList<EntryItem>();
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.getJSONObject(i);
-                list.add(new EntryItem(o.getString("title"), o.getString("url")));
+        // "readable" means the stored blob was absent (first run) or decoded successfully.
+        // It is false only for a corrupt blob, which must never be overwritten.
+        boolean readable = (raw == null);
+        if (raw != null) {
+            try {
+                JSONArray arr = new JSONArray(raw);
+                readable = true;
+                for (int i = 0; i < arr.length(); i++) {
+                    EntryItem item = decodeEntry(arr.optJSONObject(i), i, "bookmark");
+                    if (item != null) list.add(item);
+                }
+            } catch (Exception e) {
+                // Do NOT fall through to the seeding branch: overwriting an unreadable blob
+                // would permanently destroy bookmarks that a later build could still recover.
+                Log.w(TAG, "Bookmark store is unreadable; leaving stored data untouched", e);
+                return list;
             }
-        } catch (Exception ignored) {}
+        }
 
-        if (list.isEmpty()) {
+        if (list.isEmpty() && readable) {
             list.add(new EntryItem("Acid 靶场首页", BrowserController.HOME_URL));
             list.add(new EntryItem("Hacker News", "https://news.ycombinator.com"));
             list.add(new EntryItem("GitHub", "https://github.com"));
@@ -72,13 +107,21 @@ public class BrowserDataStore {
 
     public void saveBookmarks(List<EntryItem> list) {
         JSONArray arr = new JSONArray();
-        for (EntryItem item : list) {
-            JSONObject o = new JSONObject();
-            try {
-                o.put("title", item.title);
-                o.put("url", item.url);
+        if (list != null) {
+            for (EntryItem item : list) {
+                if (item == null) continue;
+                JSONObject o = new JSONObject();
+                try {
+                    o.put("title", item.title);
+                    o.put("url", item.url);
+                } catch (Exception e) {
+                    // org.json declares a checked exception on put(); it is not thrown in
+                    // practice, but log instead of swallowing so a real failure is visible.
+                    Log.w(TAG, "Failed to encode bookmark: " + item.url, e);
+                    continue;
+                }
                 arr.put(o);
-            } catch (Exception ignored) {}
+            }
         }
         mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .edit()
@@ -103,15 +146,18 @@ public class BrowserDataStore {
 
     public List<EntryItem> loadHistory() {
         SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
-        String raw = prefs.getString(PREF_HISTORY, "[]");
+        String raw = prefs.getString(PREF_HISTORY, null);
         List<EntryItem> list = new ArrayList<EntryItem>();
+        if (raw == null) return list;
         try {
             JSONArray arr = new JSONArray(raw);
             for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.getJSONObject(i);
-                list.add(new EntryItem(o.getString("title"), o.getString("url")));
+                EntryItem item = decodeEntry(arr.optJSONObject(i), i, "history");
+                if (item != null) list.add(item);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "History store is unreadable; returning what could be recovered", e);
+        }
         return list;
     }
 
@@ -127,32 +173,53 @@ public class BrowserDataStore {
         if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)) return;
         SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         String raw = prefs.getString(PREF_HISTORY, "[]");
+        JSONArray next = new JSONArray();
         try {
-            JSONArray arr = new JSONArray(raw);
-            JSONArray next = new JSONArray();
             JSONObject cur = new JSONObject();
             cur.put("title", TextUtils.isEmpty(title) ? url : title);
             cur.put("url", url);
             cur.put("time", System.currentTimeMillis());
             next.put(cur);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to encode history entry: " + url, e);
+            return;
+        }
+
+        // Carry over previous entries, skipping (not aborting on) individually corrupt ones.
+        // A single bad record used to abort the whole loop and leave the write below
+        // unreachable, permanently freezing history collection.
+        try {
+            JSONArray arr = new JSONArray(raw);
             for (int i = 0; i < arr.length() && next.length() < 100; i++) {
-                JSONObject o = arr.getJSONObject(i);
-                if (!o.optString("url").equals(url)) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) {
+                    Log.w(TAG, "history[" + i + "] is not a JSON object; dropped on rewrite");
+                    continue;
+                }
+                if (!url.equals(o.optString("url", ""))) {
                     next.put(o);
                 }
             }
-            prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Previous history is unreadable; starting a fresh list", e);
+        }
+
+        prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
     }
 
     public List<BrowserController.DownloadItem> loadDownloads() {
         SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
-        String raw = prefs.getString(PREF_DOWNLOADS, "[]");
+        String raw = prefs.getString(PREF_DOWNLOADS, null);
         List<BrowserController.DownloadItem> list = new ArrayList<BrowserController.DownloadItem>();
+        if (raw == null) return list;
         try {
             JSONArray arr = new JSONArray(raw);
             for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.getJSONObject(i);
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) {
+                    Log.w(TAG, "download[" + i + "] is not a JSON object; skipped");
+                    continue;
+                }
                 list.add(new BrowserController.DownloadItem(
                     o.optLong("downloadId", 0),
                     o.optString("fileName", "file"),
@@ -164,7 +231,9 @@ public class BrowserDataStore {
                     o.optLong("timestamp", System.currentTimeMillis())
                 ));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Download store is unreadable; returning what could be recovered", e);
+        }
         return list;
     }
 
@@ -172,6 +241,7 @@ public class BrowserDataStore {
         JSONArray arr = new JSONArray();
         if (list != null) {
             for (BrowserController.DownloadItem item : list) {
+                if (item == null) continue;
                 JSONObject o = new JSONObject();
                 try {
                     o.put("downloadId", item.downloadId);
@@ -182,8 +252,11 @@ public class BrowserDataStore {
                     o.put("downloadedBytes", item.downloadedBytes);
                     o.put("status", item.status);
                     o.put("timestamp", item.timestamp);
-                    arr.put(o);
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to encode download record: " + item.fileName, e);
+                    continue;
+                }
+                arr.put(o);
             }
         }
         mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)

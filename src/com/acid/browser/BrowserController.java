@@ -323,7 +323,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 wv.draw(canvas);
                 mActiveTab.snapshot = thumb;
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to capture tab thumbnail", e);
+        }
     }
 
     public boolean switchToTab(int tabId) {
@@ -655,13 +657,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 java.lang.reflect.Method setForceDark = s.getClass().getMethod("setForceDark", int.class);
                 // 2 = WebSettings.FORCE_DARK_ON, 0 = WebSettings.FORCE_DARK_OFF
                 setForceDark.invoke(s, dark ? 2 : 0);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                // Expected on ROMs that strip the hidden API; fall back to injected CSS.
+                Log.w(TAG, "WebSettings.setForceDark unavailable; relying on injected dark CSS", e);
+            }
 
             try {
                 java.lang.reflect.Method setForceDarkStrategy = s.getClass().getMethod("setForceDarkStrategy", int.class);
                 // 1 = DARK_STRATEGY_USER_AGENT_DARKENING_ONLY (智能变暗，不影响图片和原色)
                 setForceDarkStrategy.invoke(s, 1);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "WebSettings.setForceDarkStrategy unavailable", e);
+            }
         }
     }
 
@@ -840,7 +847,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                             candidate = path.substring(slash + 1);
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to derive a file name from the URL", e);
+                }
             }
 
             if (candidate != null) {
@@ -1008,9 +1017,16 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                             }
                         }
                     }
-                } catch (Exception ignored) {
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to persist download state", e);
                 } finally {
-                    if (c != null) c.close();
+                    if (c != null) {
+                        try {
+                            c.close();
+                        } catch (Exception e) {
+                            Log.w(TAG, "Failed to close download-status cursor", e);
+                        }
+                    }
                 }
             }
         }
@@ -1145,7 +1161,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (dm != null && downloadId > 0) {
                     dm.remove(downloadId);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to delete downloaded file for id " + downloadId, e);
+            }
         }
 
         if (removed && mDataStore != null) {

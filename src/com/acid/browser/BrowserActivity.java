@@ -18,6 +18,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -40,6 +41,8 @@ import android.widget.Toast;
  * - Full modularization: Views and Dialogs encapsulated in independent components
  */
 public class BrowserActivity extends Activity implements BrowserController.BrowserStateListener {
+
+    private static final String TAG = "BrowserActivity";
 
     private BrowserDataStore mDataStore;
     private BrowserController mController;
@@ -912,11 +915,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         versionRow.setGravity(Gravity.CENTER_VERTICAL);
         versionRow.setPadding(0, dp(4), 0, 0);
 
-        String curVer = "v0.2.7";
+        String curVer = "v?";
         try {
             android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
             curVer = "v" + pi.versionName;
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Could not read the installed package version", e);
+        }
 
         TextView tvVersion = new TextView(this);
         tvVersion.setText("版本: " + curVer);
@@ -1055,7 +1060,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         in.close();
                         jsonStr = new String(bos.toByteArray(), "UTF-8");
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    Log.w(TAG, "Update probe failed: " + UPDATE_PROBE_URL, e);
+                }
 
                 final String resultJson = jsonStr;
 
@@ -1081,12 +1088,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                             String changelog = obj.optString("changelog", "");
 
                             int currentCode = 0;
-                            String currentName = "0.2.7";
+                            String currentName = "?";
                             try {
                                 android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
                                 currentCode = pi.versionCode;
                                 currentName = pi.versionName;
-                            } catch (Exception ignored) {}
+                            } catch (Exception e) {
+                                Log.w(TAG, "Could not read the installed package version while comparing updates", e);
+                            }
 
                             if (remoteCode > currentCode) {
                                 showUpdateDialog(remoteName, remoteCode, apkSize, changelog, downloadUrl);
@@ -1378,7 +1387,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             if (imm != null && getCurrentFocus() != null) {
                 imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to hide the soft keyboard", e);
+        }
     }
 
     // =========================================================================
@@ -1544,7 +1555,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mDownloadReceiver != null) {
             try {
                 unregisterReceiver(mDownloadReceiver);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                // Expected when the receiver was never registered (e.g. early crash during setup).
+                Log.w(TAG, "Download receiver was not registered at teardown", e);
+            }
         }
         if (mAgentLoop != null) {
             mAgentLoop.stopLoop();

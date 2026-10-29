@@ -2,6 +2,7 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -27,6 +28,8 @@ import java.util.Locale;
  *  - `apiMessages`: Pruned OpenAI-compatible conversation history for seamless multi-turn continuation
  */
 public class AcidSessionStore {
+
+    private static final String TAG = "AcidSessionStore";
 
     private static final String PREF_SESSION = "acid_session_prefs";
     private static final String KEY_ACTIVE_ID = "active_session_id";
@@ -62,7 +65,11 @@ public class AcidSessionStore {
                 o.put("isRunning", isRunning);
                 o.put("isError", isError);
                 o.put("timestamp", timestamp);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                // org.json declares a checked exception on put(); not thrown in practice,
+                // but log rather than silently producing a truncated bubble.
+                Log.w(TAG, "Failed to encode UI item of type " + type, e);
+            }
             return o;
         }
 
@@ -230,7 +237,9 @@ public class AcidSessionStore {
                         JSONArray uiArr = o.optJSONArray("uiItems");
                         int count = uiArr != null ? uiArr.length() : 0;
                         list.add(new SessionMeta(id, title, updated, count));
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) {
+                        Log.w(TAG, "Skipping unreadable session file: " + f.getName(), e);
+                    }
                 }
             }
         }
@@ -292,10 +301,24 @@ public class AcidSessionStore {
             root.put("apiMessages", apiArr);
 
             File f = new File(mSessionsDir, s.id + ".json");
-            FileOutputStream fos = new FileOutputStream(f);
-            fos.write(root.toString().getBytes(StandardCharsets.UTF_8));
-            fos.close();
-        } catch (Exception ignored) {}
+            FileOutputStream fos = null;
+            try {
+                fos = new FileOutputStream(f);
+                fos.write(root.toString().getBytes(StandardCharsets.UTF_8));
+                fos.flush();
+            } finally {
+                if (fos != null) {
+                    try {
+                        fos.close();
+                    } catch (Exception e) {
+                        Log.w(TAG, "Failed to close session file " + f.getName(), e);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Losing a session silently is unrecoverable for the user, so always log it.
+            Log.e(TAG, "Failed to persist session " + (s != null ? s.id : "?"), e);
+        }
     }
 
     private AgentSession readSessionFromDisk(String id) {
