@@ -1529,6 +1529,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
+                if (mController == null) return;
                 int accent = AcidTheme.accent(mIsDarkMode);
                 updateTopAgentButton(
                     mAgentLoop != null && mAgentLoop.isRunning(),
@@ -1585,7 +1586,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (mTabsOverview != null && mTabsOverview.isShowing()) {
                     mTabsOverview.renderTabsGrid();
                 }
-                onModeChanged(mController.isDesktopMode(), mController.getControlMode(), mController.isSomEnabled());
+                if (mController != null) {
+                    onModeChanged(mController.isDesktopMode(), mController.getControlMode(), mController.isSomEnabled());
+                }
             }
         });
     }
