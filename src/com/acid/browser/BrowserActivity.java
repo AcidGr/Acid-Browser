@@ -1618,14 +1618,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
                     conn.setConnectTimeout(8000);
                     conn.setReadTimeout(12000);
-                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.3.7");
+                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.3.8");
                     if (conn.getResponseCode() == 200) {
                         java.io.InputStream in = conn.getInputStream();
                         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                         byte[] buf = new byte[2048];
                         int len;
                         while ((len = in.read(buf)) != -1) {
-                            if (bos.size() > 64 * 1024) break;
+                            if (bos.size() > 20 * 1024 * 1024) break;
                             bos.write(buf, 0, len);
                         }
                         in.close();
