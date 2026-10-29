@@ -130,92 +130,61 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
             LinearLayout.LayoutParams leLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             effortHead.addView(lblEffort, leLp);
 
-            if (activeModel.supportsReasoning) {
-                TextView curEffortBadge = new TextView(ctx);
-                curEffortBadge.setText("当前: " + AcidModelStore.getEffortDisplayName(activeEffort));
-                curEffortBadge.setTextColor(blue);
-                curEffortBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-                curEffortBadge.setTypeface(Typeface.DEFAULT_BOLD);
-                effortHead.addView(curEffortBadge);
-                topCard.addView(effortHead);
+            TextView curEffortBadge = new TextView(ctx);
+            curEffortBadge.setText("当前: " + AcidModelStore.getEffortDisplayName(activeEffort));
+            curEffortBadge.setTextColor(blue);
+            curEffortBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            curEffortBadge.setTypeface(Typeface.DEFAULT_BOLD);
+            effortHead.addView(curEffortBadge);
+            topCard.addView(effortHead);
 
-                // 2 rows of 3 effort pills
-                String[] effortIds = AcidModelStore.EFFORT_IDS;
-                for (int r = 0; r < 2; r++) {
-                    LinearLayout eRow = new LinearLayout(ctx);
-                    eRow.setOrientation(LinearLayout.HORIZONTAL);
-                    LinearLayout.LayoutParams erLp = new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                    );
-                    erLp.topMargin = AcidTheme.dp(ctx, 6);
-                    eRow.setLayoutParams(erLp);
+            // 2 rows of 3 effort pills
+            String[] effortIds = AcidModelStore.EFFORT_IDS;
+            for (int r = 0; r < 2; r++) {
+                LinearLayout eRow = new LinearLayout(ctx);
+                eRow.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams erLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                erLp.topMargin = AcidTheme.dp(ctx, 6);
+                eRow.setLayoutParams(erLp);
 
-                    for (int c = 0; c < 3; c++) {
-                        int idx = r * 3 + c;
-                        if (idx >= effortIds.length) break;
-                        final String efId = effortIds[idx];
-                        boolean isSelectedEffort = efId.equals(activeEffort);
+                for (int c = 0; c < 3; c++) {
+                    int idx = r * 3 + c;
+                    if (idx >= effortIds.length) break;
+                    final String efId = effortIds[idx];
+                    boolean isSelectedEffort = efId.equals(activeEffort);
 
-                        TextView pill = new TextView(ctx);
-                        pill.setText(AcidModelStore.getEffortDisplayName(efId));
-                        pill.setGravity(Gravity.CENTER);
-                        pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-                        pill.setTypeface(isSelectedEffort ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-                        int pPad = AcidTheme.dp(ctx, 6);
-                        pill.setPadding(pPad, pPad, pPad, pPad);
-                        if (isSelectedEffort) {
-                            pill.setTextColor(Color.WHITE);
-                            pill.setBackground(AcidTheme.pillBg(ctx, blue, blue, 8));
-                        } else {
-                            pill.setTextColor(textCol);
-                            pill.setBackground(AcidTheme.pillBg(ctx, mIsDarkMode ? AcidTheme.DARK_BG : Color.WHITE, borderCol, 8));
-                        }
-                        pill.setOnClickListener(new OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                mModelStore.setReasoningEffort(efId);
-                                if (mListener != null) {
-                                    mListener.onModelConfigChanged();
-                                }
-                                renderContent();
+                    TextView pill = new TextView(ctx);
+                    pill.setText(AcidModelStore.getEffortDisplayName(efId));
+                    pill.setGravity(Gravity.CENTER);
+                    pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+                    pill.setTypeface(isSelectedEffort ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                    int pPad = AcidTheme.dp(ctx, 6);
+                    pill.setPadding(pPad, pPad, pPad, pPad);
+                    if (isSelectedEffort) {
+                        pill.setTextColor(Color.WHITE);
+                        pill.setBackground(AcidTheme.pillBg(ctx, blue, blue, 8));
+                    } else {
+                        pill.setTextColor(textCol);
+                        pill.setBackground(AcidTheme.pillBg(ctx, mIsDarkMode ? AcidTheme.DARK_BG : Color.WHITE, borderCol, 8));
+                    }
+                    pill.setOnClickListener(new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            mModelStore.setReasoningEffort(efId);
+                            if (mListener != null) {
+                                mListener.onModelConfigChanged();
                             }
-                        });
-
-                        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-                        if (c > 0) pLp.leftMargin = AcidTheme.dp(ctx, 6);
-                        eRow.addView(pill, pLp);
-                    }
-                    topCard.addView(eRow);
-                }
-            } else {
-                TextView btnEnableThink = new TextView(ctx);
-                btnEnableThink.setText("开启思考深度调节");
-                btnEnableThink.setTextColor(blue);
-                btnEnableThink.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-                int padTb = AcidTheme.dp(ctx, 3);
-                int padLr = AcidTheme.dp(ctx, 8);
-                btnEnableThink.setPadding(padLr, padTb, padLr, padTb);
-                btnEnableThink.setBackground(AcidTheme.pillBg(ctx, Color.argb(24, 2, 132, 199), blue, 6));
-                btnEnableThink.setOnClickListener(new OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        activeModel.supportsReasoning = true;
-                        mModelStore.saveToPrefs();
-                        if (mListener != null) {
-                            mListener.onModelConfigChanged();
+                            renderContent();
                         }
-                        renderContent();
-                    }
-                });
-                effortHead.addView(btnEnableThink);
-                topCard.addView(effortHead);
+                    });
 
-                TextView tvNoReason = new TextView(ctx);
-                tvNoReason.setText("当前模型未开启思考深度选项（标准对话模式）。如该模型支持推理思考，可点击右侧按钮开启。");
-                tvNoReason.setTextColor(mutedCol);
-                tvNoReason.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-                tvNoReason.setPadding(0, AcidTheme.dp(ctx, 4), 0, 0);
-                topCard.addView(tvNoReason);
+                    LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                    if (c > 0) pLp.leftMargin = AcidTheme.dp(ctx, 6);
+                    eRow.addView(pill, pLp);
+                }
+                topCard.addView(eRow);
             }
         }
         container.addView(topCard);
@@ -357,9 +326,8 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
                 textColView.addView(tvTitle);
 
                 TextView tvSub = new TextView(ctx);
-                String subInfo = "ID: " + m.id + (m.supportsReasoning ? "  ·  支持思考深度" : "  ·  标准对话");
-                tvSub.setText(subInfo);
-                tvSub.setTextColor(m.supportsReasoning ? blue : mutedCol);
+                tvSub.setText("ID: " + m.id);
+                tvSub.setTextColor(mutedCol);
                 tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
                 tvSub.setSingleLine(true);
                 tvSub.setEllipsize(TextUtils.TruncateAt.END);

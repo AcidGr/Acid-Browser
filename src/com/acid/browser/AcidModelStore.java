@@ -41,7 +41,7 @@ public class AcidModelStore {
     private static final String KEY_SELECTED_MODEL = "selected_model_id";
     private static final String KEY_SELECTED_EFFORT = "selected_reasoning_effort";
     private static final String KEY_CATALOG_VERSION = "catalog_version";
-    private static final int CURRENT_CATALOG_VERSION = 3;
+    private static final int CURRENT_CATALOG_VERSION = 4;
 
     // Legacy preference keys from AcidAgentLoop v1 for seamless migration
     private static final String LEGACY_PREF_AGENT = "acid_agent_config";
@@ -87,14 +87,18 @@ public class AcidModelStore {
         public String name;
         public boolean supportsReasoning;
 
+        public ModelEntry(String id, String name) {
+            this(id, name, true);
+        }
+
         public ModelEntry(String id, String name, boolean supportsReasoning) {
             this.id = id != null ? id.trim() : "";
             this.name = (name != null && !name.trim().isEmpty()) ? name.trim() : this.id;
-            this.supportsReasoning = supportsReasoning;
+            this.supportsReasoning = true; // All modern models natively support reasoning units
         }
 
         public ModelEntry copy() {
-            return new ModelEntry(id, name, supportsReasoning);
+            return new ModelEntry(id, name, true);
         }
 
         public JSONObject toJson() {
@@ -102,7 +106,7 @@ public class AcidModelStore {
             try {
                 o.put("id", id);
                 o.put("name", name);
-                o.put("supportsReasoning", supportsReasoning);
+                o.put("supportsReasoning", true);
             } catch (Exception e) {
                 Log.w(TAG, "Failed to encode model entry " + id, e);
             }
@@ -112,8 +116,7 @@ public class AcidModelStore {
         public static ModelEntry fromJson(JSONObject o) {
             String id = o.optString("id", "").trim();
             String name = o.optString("name", id).trim();
-            boolean reasoning = o.optBoolean("supportsReasoning", guessSupportsReasoning(id));
-            return new ModelEntry(id, name, reasoning);
+            return new ModelEntry(id, name, true);
         }
     }
 
@@ -136,9 +139,13 @@ public class AcidModelStore {
             this.description = description;
         }
 
-        public CatalogProviderPreset addModel(String id, String name, boolean supportsReasoning) {
-            defaultModels.add(new ModelEntry(id, name, supportsReasoning));
+        public CatalogProviderPreset addModel(String id, String name) {
+            defaultModels.add(new ModelEntry(id, name, true));
             return this;
+        }
+
+        public CatalogProviderPreset addModel(String id, String name, boolean supportsReasoning) {
+            return addModel(id, name);
         }
 
         public ModelEntry findModel(String modelId) {
@@ -247,115 +254,59 @@ public class AcidModelStore {
     public static List<CatalogProviderPreset> getBuiltinCatalogPresets() {
         List<CatalogProviderPreset> list = new ArrayList<CatalogProviderPreset>();
 
+        // 1. DeepSeek
         list.add(new CatalogProviderPreset(
-            "deepseek", "DeepSeek", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY",
-            "DeepSeek 官方 API，包含 V4/V4.1 系列与 R1 深度思考模型"
+            "deepseek", "DeepSeek", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", ""
         )
-            .addModel("deepseek-flash", "DeepSeek-V4.1-Flash", true)
-            .addModel("deepseek-v4-pro", "DeepSeek-V4-Pro", true)
-            .addModel("deepseek-chat", "DeepSeek-V3 (Chat)", false)
-            .addModel("deepseek-reasoner", "DeepSeek-R1 (Reasoner)", true));
+            .addModel("deepseek-flash", "DeepSeek V4.1 Flash")
+            .addModel("deepseek-v4-pro", "DeepSeek V4 Pro"));
 
+        // 2. Kimi
         list.add(new CatalogProviderPreset(
-            "openai", "OpenAI", "https://api.openai.com/v1", "OPENAI_API_KEY",
-            "OpenAI 官方接口，支持 GPT-5.4、GPT-5.2 及 o3/o4 推理系列"
+            "moonshotai-cn", "Kimi", "https://api.moonshot.cn/v1", "MOONSHOT_API_KEY", ""
         )
-            .addModel("gpt-5.4", "GPT-5.4", true)
-            .addModel("gpt-5.4-mini", "GPT-5.4 mini", true)
-            .addModel("gpt-5.2", "GPT-5.2", true)
-            .addModel("o4-mini", "OpenAI o4-mini", true)
-            .addModel("o3", "OpenAI o3", true)
-            .addModel("gpt-4.1", "GPT-4.1", false)
-            .addModel("gpt-4o", "GPT-4o", false));
+            .addModel("kimi-k3", "Kimi K3")
+            .addModel("kimi-k2.7-code", "Kimi K2.7 Code")
+            .addModel("kimi-k2.7-code-highspeed", "Kimi K2.7 Code HighSpeed")
+            .addModel("kimi-k2.6", "Kimi K2.6"));
 
+        // 3. 阿里云百炼
         list.add(new CatalogProviderPreset(
-            "anthropic", "Anthropic (Claude)", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY",
-            "Anthropic 官方或兼容网关，支持 Claude 4.5 / 5 Sonnet 与扩展思考"
+            "qwen-cn", "阿里云百炼", "https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", ""
         )
-            .addModel("claude-sonnet-4-5", "Claude Sonnet 4.5", true)
-            .addModel("claude-haiku-4-5", "Claude Haiku 4.5", true)
-            .addModel("claude-opus-4-5", "Claude Opus 4.5", true)
-            .addModel("claude-sonnet-4-6", "Claude Sonnet 4.6", true)
-            .addModel("claude-sonnet-5", "Claude Sonnet 5", true)
-            .addModel("claude-3-7-sonnet-latest", "Claude 3.7 Sonnet", true));
+            .addModel("qwen3.8-max", "Qwen 3.8 Max")
+            .addModel("qwen3.8-flash", "Qwen 3.8 Flash")
+            .addModel("qwen3.7-max", "Qwen 3.7 Max")
+            .addModel("qwen3.7-plus", "Qwen 3.7 Plus")
+            .addModel("qwen3.6-plus", "Qwen 3.6 Plus"));
 
+        // 4. 小米
         list.add(new CatalogProviderPreset(
-            "google", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY",
-            "Google AI Studio 兼容端点，支持 Gemini 3.8 / 3.5 Flash 与 Gemini 4 系列"
+            "xiaomi", "小米", "https://api.xiaomimimo.com/v1", "XIAOMI_API_KEY", ""
         )
-            .addModel("gemini-3.8-flash", "Gemini 3.8 Flash", true)
-            .addModel("gemini-3.5-flash", "Gemini 3.5 Flash", true)
-            .addModel("gemini-4-argon", "Gemini 4 Argon", true)
-            .addModel("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", true)
-            .addModel("gemini-2.5-pro", "Gemini 2.5 Pro", true)
-            .addModel("gemini-2.5-flash", "Gemini 2.5 Flash", true));
+            .addModel("mimo-v2.6-pro-ultraspeed", "MiMo-V2.6-Pro-UltraSpeed")
+            .addModel("mimo-v2.6-pro", "MiMo-V2.6-Pro")
+            .addModel("mimo-v2.6-flash", "MiMo-V2.6-Flash"));
 
+        // 5. MiniMax
         list.add(new CatalogProviderPreset(
-            "moonshotai-cn", "Kimi (月之暗面)", "https://api.moonshot.cn/v1", "MOONSHOT_API_KEY",
-            "Moonshot AI 官方接口，支持 Kimi K3 / K2.7 Code 深度思考与长上下文"
+            "minimax-cn", "MiniMax", "https://api.minimaxi.com/v1", "MINIMAX_API_KEY", ""
         )
-            .addModel("kimi-k3", "Kimi K3", true)
-            .addModel("kimi-k2.7-code", "Kimi K2.7 Code", true)
-            .addModel("kimi-k2.7-code-highspeed", "Kimi K2.7 Code HighSpeed", true)
-            .addModel("kimi-k2.6", "Kimi K2.6", true));
+            .addModel("MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash")
+            .addModel("MiniMax-M3", "MiniMax-M3")
+            .addModel("MiniMax-M2.7-highspeed", "MiniMax-M2.7-highspeed")
+            .addModel("MiniMax-M2.7", "MiniMax-M2.7"));
 
+        // 6. 硅基流动
         list.add(new CatalogProviderPreset(
-            "zai-coding-cn", "智谱 GLM (BigModel)", "https://open.bigmodel.cn/api/paas/v4", "ZAI_CODING_CN_API_KEY",
-            "智谱清言开放平台，支持 GLM-5.3、GLM-5.3 Flash 深度推理与视觉模型"
+            "siliconflow", "硅基流动", "https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY", ""
         )
-            .addModel("glm-5.3", "GLM-5.3", true)
-            .addModel("glm-5.3-flash", "GLM-5.3-Flash", true)
-            .addModel("glm-5.3-highspeed", "GLM-5.3 Highspeed", true)
-            .addModel("glm-4.6v", "GLM-4.6V (Vision)", true));
-
-        list.add(new CatalogProviderPreset(
-            "qwen-cn", "阿里云百炼 (Qwen)", "https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY",
-            "阿里云通义千问兼容接口，支持 Qwen 3.8 Max/Flash、Qwen 3.7 Plus 与 QwQ"
-        )
-            .addModel("qwen3.8-max", "Qwen 3.8 Max", true)
-            .addModel("qwen3.8-flash", "Qwen 3.8 Flash", true)
-            .addModel("qwen3.7-plus", "Qwen 3.7 Plus", true)
-            .addModel("qwen3.7-max", "Qwen 3.7 Max", true)
-            .addModel("qwen-max", "Qwen-Max", false)
-            .addModel("qwq-plus", "QwQ-Plus (深度思考)", true));
-
-        list.add(new CatalogProviderPreset(
-            "xai", "xAI (Grok)", "https://api.x.ai/v1", "XAI_API_KEY",
-            "xAI 官方接口，支持 Grok 4.7、Grok 4.6 与 Grok 4.5 系列"
-        )
-            .addModel("grok-4.7", "Grok 4.7", true)
-            .addModel("grok-4.6", "Grok 4.6", true)
-            .addModel("grok-4.5", "Grok 4.5", true)
-            .addModel("grok-4.3", "Grok 4.3", true)
-            .addModel("grok-3", "Grok 3", false));
-
-        list.add(new CatalogProviderPreset(
-            "siliconflow", "硅基流动 (SiliconFlow)", "https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY",
-            "国内高速聚合推理平台，内置满血 DeepSeek-V4.1 / V4-Pro 与 Qwen 系列"
-        )
-            .addModel("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash", true)
-            .addModel("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4-Pro", true)
-            .addModel("Qwen/Qwen3.8-Max", "Qwen3.8-Max", true)
-            .addModel("deepseek-ai/DeepSeek-V3", "DeepSeek-V3", false)
-            .addModel("deepseek-ai/DeepSeek-R1", "DeepSeek-R1", true));
-
-        list.add(new CatalogProviderPreset(
-            "openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY",
-            "全球多模型聚合路由，统一接入 Claude 4.5 / GPT-5.4 / Gemini 3.8 / DeepSeek V4.1"
-        )
-            .addModel("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", true)
-            .addModel("anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5", true)
-            .addModel("google/gemini-3.8-flash", "Gemini 3.8 Flash", true)
-            .addModel("openai/gpt-5.4", "GPT-5.4", true)
-            .addModel("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro", true)
-            .addModel("x-ai/grok-4.7", "Grok 4.7", true));
-
-        list.add(new CatalogProviderPreset(
-            "xiaomi", "小米大模型 (MiMo)", "https://api.mimo.xiaomi.com/v1", "XIAOMI_API_KEY",
-            "小米 MiMo 大模型平台，支持 MiMo-V2.6 Flash 与 Pro 推理系列"
-        )
-            .addModel("mimo-v2.6-flash", "MiMo-V2.6-Flash", true)
-            .addModel("mimo-v2.6-pro", "MiMo-V2.6-Pro", true));
+            .addModel("deepseek-ai/DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Flash")
+            .addModel("deepseek-ai/DeepSeek-V4-Pro", "DeepSeek-V4-Pro")
+            .addModel("Qwen/Qwen3.8-Max", "Qwen3.8-Max")
+            .addModel("Qwen/Qwen3.8-Flash", "Qwen3.8-Flash")
+            .addModel("THUDM/glm-5.3", "GLM-5.3")
+            .addModel("MiniMax/MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash"));
 
         return list;
     }
@@ -369,35 +320,7 @@ public class AcidModelStore {
     }
 
     public static boolean guessSupportsReasoning(String modelId) {
-        if (modelId == null) return false;
-        String lower = modelId.toLowerCase(Locale.US);
-        return lower.contains("reasoner") ||
-            lower.contains("r1") ||
-            lower.contains("qwq") ||
-            lower.contains("thinking") ||
-            lower.contains("o1") ||
-            lower.contains("o3") ||
-            lower.contains("o4") ||
-            lower.contains("z1") ||
-            lower.contains("glm-5") ||
-            lower.contains("kimi-k") ||
-            lower.contains("deepseek-flash") ||
-            lower.contains("deepseek-v4") ||
-            lower.contains("gemini-2.5") ||
-            lower.contains("gemini-3") ||
-            lower.contains("gemini-4") ||
-            lower.contains("claude-sonnet-4") ||
-            lower.contains("claude-sonnet-5") ||
-            lower.contains("claude-haiku-4") ||
-            lower.contains("claude-haiku-5") ||
-            lower.contains("claude-opus-4") ||
-            lower.contains("claude-opus-5") ||
-            lower.contains("claude-fable") ||
-            lower.contains("claude-3-7") ||
-            lower.contains("gpt-5") ||
-            lower.contains("gpt-6") ||
-            lower.contains("grok-4") ||
-            lower.contains("mimo-v2.6");
+        return true;
     }
 
     // =========================================================================
@@ -458,21 +381,14 @@ public class AcidModelStore {
             if (!p.isCustom) {
                 CatalogProviderPreset preset = findBuiltinPreset(p.id);
                 if (preset != null) {
-                    List<ModelEntry> customModels = new ArrayList<ModelEntry>();
-                    for (ModelEntry m : p.models) {
-                        if (preset.findModel(m.id) == null) {
-                            customModels.add(m);
-                        }
-                    }
                     p.models.clear();
                     for (ModelEntry m : preset.defaultModels) {
                         p.models.add(m.copy());
                     }
-                    p.models.addAll(customModels);
                 }
             }
         }
-        if ("deepseek-chat".equals(mSelectedModelId) || TextUtils.isEmpty(mSelectedModelId)) {
+        if ("deepseek-chat".equals(mSelectedModelId) || "deepseek-reasoner".equals(mSelectedModelId) || TextUtils.isEmpty(mSelectedModelId)) {
             mSelectedModelId = "deepseek-flash";
         }
         sp.edit()
@@ -694,7 +610,7 @@ public class AcidModelStore {
             return "未装载模型 · 请在功能-模型配置中添加";
         }
         String base = p.displayName + " / " + m.name;
-        if (m.supportsReasoning) {
+        if (!EFFORT_DEFAULT.equals(mSelectedEffort)) {
             return base + " · " + getEffortShortLabel(mSelectedEffort);
         }
         return base;

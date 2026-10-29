@@ -352,8 +352,9 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         segLp.bottomMargin = AcidTheme.dp(ctx, 8);
         segBar.setLayoutParams(segLp);
 
+        List<AcidModelStore.CatalogProviderPreset> presets = AcidModelStore.getBuiltinCatalogPresets();
         TextView tabCatalog = new TextView(ctx);
-        tabCatalog.setText("默认供应商目录 (10)");
+        tabCatalog.setText("默认供应商目录 (" + presets.size() + ")");
         tabCatalog.setGravity(Gravity.CENTER);
         tabCatalog.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         tabCatalog.setTypeface(!customMode ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
@@ -389,8 +390,8 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
 
         TextView hint = new TextView(ctx);
         hint.setText(!customMode
-            ? "从内置目录中选择 DeepSeek、OpenAI、Kimi、智谱 GLM、通义千问等主流提供商，填入 API 密钥即可装载使用。"
-            : "连接中转站、自部署服务 (Ollama / vLLM) 或其他兼容 OpenAI 协议的接口，需填写供应商名称、API 地址和模型。");
+            ? "选择主流厂商，填入 API 密钥即可直接装载使用。"
+            : "连接中转站、自部署服务 (Ollama / vLLM) 或其他兼容 OpenAI 协议的接口。");
         hint.setTextColor(mutedCol);
         hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
         hint.setPadding(AcidTheme.dp(ctx, 2), 0, AcidTheme.dp(ctx, 2), AcidTheme.dp(ctx, 10));
@@ -414,7 +415,6 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         int cardBg = AcidTheme.cardSurface(mIsDarkMode);
         int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         int textCol = AcidTheme.text(mIsDarkMode);
-        int mutedCol = AcidTheme.muted(mIsDarkMode);
         int accent = AcidTheme.accent(mIsDarkMode);
         int blue = AcidTheme.COLOR_BLUE;
 
@@ -424,10 +424,11 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             boolean isLoaded = (existing != null);
 
             LinearLayout card = new LinearLayout(ctx);
-            card.setOrientation(LinearLayout.VERTICAL);
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
             card.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, isLoaded ? accent : borderCol, 1, 10));
-            int padH = AcidTheme.dp(ctx, 12);
-            int padV = AcidTheme.dp(ctx, 10);
+            int padH = AcidTheme.dp(ctx, 14);
+            int padV = AcidTheme.dp(ctx, 12);
             card.setPadding(padH, padV, padH, padV);
             LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -435,51 +436,28 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             cLp.bottomMargin = AcidTheme.dp(ctx, 8);
             card.setLayoutParams(cLp);
 
-            LinearLayout rowTop = new LinearLayout(ctx);
-            rowTop.setOrientation(LinearLayout.HORIZONTAL);
-            rowTop.setGravity(Gravity.CENTER_VERTICAL);
-
             TextView tvTitle = new TextView(ctx);
             tvTitle.setText(preset.displayName);
             tvTitle.setTextColor(textCol);
-            tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+            tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
             tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
             LinearLayout.LayoutParams ttLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            rowTop.addView(tvTitle, ttLp);
+            card.addView(tvTitle, ttLp);
 
             TextView tvAction = new TextView(ctx);
             tvAction.setText(isLoaded ? "已装载 · 点击编辑" : "+ 选择并配置");
             tvAction.setTextColor(isLoaded ? accent : blue);
-            tvAction.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            tvAction.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
             tvAction.setTypeface(Typeface.DEFAULT_BOLD);
-            int padAcH = AcidTheme.dp(ctx, 8);
-            int padAcV = AcidTheme.dp(ctx, 3);
+            int padAcH = AcidTheme.dp(ctx, 10);
+            int padAcV = AcidTheme.dp(ctx, 5);
             tvAction.setPadding(padAcH, padAcV, padAcH, padAcV);
             tvAction.setBackground(AcidTheme.pillBg(
                 ctx,
                 isLoaded ? Color.argb(26, 0, 186, 118) : Color.argb(26, 2, 132, 199),
                 0, 6
             ));
-            rowTop.addView(tvAction);
-            card.addView(rowTop);
-
-            TextView tvDesc = new TextView(ctx);
-            tvDesc.setText(preset.description);
-            tvDesc.setTextColor(mutedCol);
-            tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-            tvDesc.setPadding(0, AcidTheme.dp(ctx, 3), 0, AcidTheme.dp(ctx, 2));
-            card.addView(tvDesc);
-
-            StringBuilder mListStr = new StringBuilder("预设模型: ");
-            for (int j = 0; j < preset.defaultModels.size(); j++) {
-                if (j > 0) mListStr.append(", ");
-                mListStr.append(preset.defaultModels.get(j).name);
-            }
-            TextView tvModels = new TextView(ctx);
-            tvModels.setText(mListStr.toString());
-            tvModels.setTextColor(blue);
-            tvModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.8f);
-            card.addView(tvModels);
+            card.addView(tvAction);
 
             card.setOnClickListener(new OnClickListener() {
                 @Override
@@ -901,8 +879,8 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             tBox.addView(tvName);
 
             TextView tvId = new TextView(ctx);
-            tvId.setText("ID: " + m.id + (m.supportsReasoning ? "  ·  支持思考深度调节" : ""));
-            tvId.setTextColor(m.supportsReasoning ? blue : mutedCol);
+            tvId.setText("ID: " + m.id);
+            tvId.setTextColor(mutedCol);
             tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
             tBox.addView(tvId);
             row.addView(tBox, tLp);
@@ -956,15 +934,9 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
 
         final EditText etName = new EditText(ctx);
         etName.setSingleLine(true);
-        etName.setHint("例如: DeepSeek R1 思考模型");
+        etName.setHint("例如: DeepSeek V4.1 Flash");
         etName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
         box.addView(etName);
-
-        final android.widget.CheckBox cbReasoning = new android.widget.CheckBox(ctx);
-        cbReasoning.setText("支持调节思考深度 (Reasoning Effort)");
-        cbReasoning.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        cbReasoning.setChecked(true);
-        box.addView(cbReasoning);
 
         AcidTheme.dialogBuilder(ctx, mIsDarkMode)
             .setTitle("手动添加模型")
@@ -983,7 +955,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                         Toast.makeText(getContext(), "该模型 ID 已存在", Toast.LENGTH_SHORT).show();
                         return;
                     }
-                    draft.models.add(new AcidModelStore.ModelEntry(id, name, cbReasoning.isChecked()));
+                    draft.models.add(new AcidModelStore.ModelEntry(id, name, true));
                     renderDraftModelsList(modelsListBox, draft);
                 }
             })
@@ -1001,7 +973,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         final boolean[] checked = new boolean[discovered.size()];
         for (int i = 0; i < discovered.size(); i++) {
             AcidModelStore.ModelEntry m = discovered.get(i);
-            labels[i] = m.id + (m.supportsReasoning ? " [支持思考]" : "");
+            labels[i] = m.name != null && !m.name.equals(m.id) ? (m.name + " (" + m.id + ")") : m.id;
             checked[i] = (draft.findModel(m.id) != null);
         }
 
