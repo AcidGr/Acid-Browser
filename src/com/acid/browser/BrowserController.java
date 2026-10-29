@@ -237,6 +237,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private int mNextTabId = 1;
     private TabSession mActiveTab = null;
     private int mAgentBoundTabId = -1;
+    private boolean mOverviewShowing = false;
 
     private boolean mIsDesktopMode = false;
     private boolean mSomEnabled = false;
@@ -290,6 +291,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 @Override
                 public boolean isAgentDrivingCurrentTab() {
                     return BrowserController.this.isAgentDrivingCurrentTab();
+                }
+
+                @Override
+                public boolean isOverviewShowing() {
+                    return BrowserController.this.isOverviewShowing();
                 }
             });
         }
@@ -398,7 +404,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mActiveTab = target;
 
         if (mOverlayView != null) {
-            mOverlayView.bringToFront();
+            if (!mOverviewShowing) {
+                mOverlayView.bringToFront();
+            }
             mOverlayView.postInvalidateOnAnimation();
         }
 
@@ -504,7 +512,25 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mActiveTab;
     }
 
+    public void setOverviewShowing(boolean showing) {
+        mOverviewShowing = showing;
+        if (mOverlayView != null) {
+            mOverlayView.postInvalidateOnAnimation();
+        }
+    }
+
+    public boolean isOverviewShowing() {
+        return mOverviewShowing;
+    }
+
+    public boolean isTabDrivenByAgent(int tabId) {
+        int mode = getControlMode();
+        return (mAgentBoundTabId > 0 && mAgentBoundTabId == tabId)
+            && (mode == AgentOverlayView.MODE_AGENT || mode == AgentOverlayView.MODE_TAKEOVER_REQUESTED);
+    }
+
     public boolean isAgentDrivingCurrentTab() {
+        if (mOverviewShowing) return false;
         if (mAgentBoundTabId <= 0) return true;
         return mActiveTab != null && mActiveTab.id == mAgentBoundTabId;
     }

@@ -28,15 +28,26 @@ public class AgentOverlayView extends View {
 
     public interface TabStateProvider {
         boolean isAgentDrivingCurrentTab();
+        boolean isOverviewShowing();
     }
 
     private int mControlMode = MODE_HUMAN;
     private TabStateProvider mTabStateProvider = null;
+    private boolean mDismissedTip = false;
+
     private final Paint mBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint mPulsePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint mLabelBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint mLabelTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF mBorderRect = new RectF();
+
+    private final Paint mDimFilterPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint mTipCardBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint mTipCardBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint mTipTitlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint mTipBodyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint mTipFootPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF mTipCardRect = new RectF();
 
     private long mLastToastTime = 0;
 
@@ -61,6 +72,24 @@ public class AgentOverlayView extends View {
         mLabelTextPaint.setColor(AcidTheme.DARK_ACCENT);
         mLabelTextPaint.setTextSize(dp(11));
         mLabelTextPaint.setFakeBoldText(true);
+
+        mDimFilterPaint.setColor(Color.argb(165, 15, 23, 42)); // ~65% dark slate dim filter
+        mTipCardBgPaint.setColor(Color.argb(245, 24, 24, 27)); // rounded dark card
+        mTipCardBorderPaint.setStyle(Paint.Style.STROKE);
+        mTipCardBorderPaint.setColor(Color.argb(180, 16, 185, 129)); // emerald green border
+
+        mTipTitlePaint.setColor(AcidTheme.DARK_ACCENT); // #10B981
+        mTipTitlePaint.setTextSize(dp(15f));
+        mTipTitlePaint.setFakeBoldText(true);
+        mTipTitlePaint.setTextAlign(Paint.Align.CENTER);
+
+        mTipBodyPaint.setColor(Color.parseColor("#F1F5F9")); // clean light text
+        mTipBodyPaint.setTextSize(dp(12.5f));
+        mTipBodyPaint.setTextAlign(Paint.Align.CENTER);
+
+        mTipFootPaint.setColor(AcidTheme.COLOR_AMBER); // amber hint
+        mTipFootPaint.setTextSize(dp(11f));
+        mTipFootPaint.setTextAlign(Paint.Align.CENTER);
     }
 
     private float dp(float v) {
@@ -70,6 +99,9 @@ public class AgentOverlayView extends View {
     public void setControlMode(int mode) {
         if (mControlMode != mode) {
             mControlMode = mode;
+            if (mode == MODE_AGENT) {
+                mDismissedTip = false; // Reset to show tip on new agent engagement
+            }
             postInvalidateOnAnimation();
         }
     }
@@ -100,12 +132,26 @@ public class AgentOverlayView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (mTabStateProvider != null && mTabStateProvider.isOverviewShowing()) {
+            return false; // Tab overview is showing, pass all touches through!
+        }
+
         // When AI is actively driving, block accidental human touches on the bound WebView only.
         // If the user has switched to a different tab, let the user interact with that tab freely!
         if (mControlMode == MODE_AGENT) {
             if (mTabStateProvider != null && !mTabStateProvider.isAgentDrivingCurrentTab()) {
                 return false; // User is browsing a different tab; pass touch through to that active tab
             }
+
+            // If the dim filter & prompt card are currently visible, single tap dismisses it!
+            if (!mDismissedTip) {
+                if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                    mDismissedTip = true;
+                    postInvalidateOnAnimation();
+                }
+                return true; // Consume this tap so it does not click into the web page
+            }
+
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 long now = SystemClock.uptimeMillis();
                 if (now - mLastToastTime > 2200) {
@@ -132,8 +178,47 @@ public class AgentOverlayView extends View {
         int h = getHeight();
 
         boolean isCurrentTabDriven = (mTabStateProvider == null || mTabStateProvider.isAgentDrivingCurrentTab());
+        boolean isOverviewShowing = (mTabStateProvider != null && mTabStateProvider.isOverviewShowing());
 
-        // 1. Draw breathing border in AGENT (only if driving currently visible tab) or TAKEOVER_REQUESTED mode
+        if (isOverviewShowing) {
+            return; // Never draw HUD overlay over tabs overview!
+        }
+
+        // 1. Draw dim filter & centered guidance prompt card when tip is not dismissed
+        if (mControlMode == MODE_AGENT && isCurrentTabDriven && !mDismissedTip) {
+            // A. Dark translucent filter
+            canvas.drawRect(0, 0, w, h, mDimFilterPaint);
+
+            // B. Centered prompt card
+            float cardW = Math.min(w - dp(40), dp(320));
+            float cardH = dp(160);
+            float cardLeft = (w - cardW) / 2f;
+            float cardTop = (h - cardH) / 2f;
+            mTipCardRect.set(cardLeft, cardTop, cardLeft + cardW, cardTop + cardH);
+
+            // Card background & rounded border
+            canvas.drawRoundRect(mTipCardRect, dp(14), dp(14), mTipCardBgPaint);
+            mTipCardBorderPaint.setStrokeWidth(dp(1.5f));
+            canvas.drawRoundRect(mTipCardRect, dp(14), dp(14), mTipCardBorderPaint);
+
+            float centerX = w / 2f;
+            float startY = cardTop + dp(32);
+
+            // Title
+            canvas.drawText("Agent正在操作此页面", centerX, startY, mTipTitlePaint);
+
+            // Description lines
+            startY += dp(26);
+            canvas.drawText("请保持浏览器在前台或小窗。", centerX, startY, mTipBodyPaint);
+            startY += dp(22);
+            canvas.drawText("切换标签页不影响Agent继续运行。", centerX, startY, mTipBodyPaint);
+
+            // Dismiss footnote
+            startY += dp(32);
+            canvas.drawText("● 点击关闭遮罩提示 ●", centerX, startY, mTipFootPaint);
+        }
+
+        // 2. Draw breathing border in AGENT (only if driving currently visible tab) or TAKEOVER_REQUESTED mode
         if ((mControlMode == MODE_AGENT && isCurrentTabDriven) || mControlMode == MODE_TAKEOVER_REQUESTED) {
             needsMoreFrames = true;
             double phase = (now % 1800) / 1800.0 * Math.PI * 2.0;
