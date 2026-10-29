@@ -590,9 +590,8 @@ public class AcidAgentLoop {
         reqBody.put("temperature", 0.2);
         reqBody.put("stream", true);
 
-        AcidModelStore.ModelEntry activeModel = mModelStore.getActiveModel();
         String effort = mModelStore.getSelectedReasoningEffort();
-        if (activeModel != null && activeModel.supportsReasoning && effort != null) {
+        if (effort != null && !AcidModelStore.EFFORT_OFF.equals(effort) && !AcidModelStore.EFFORT_DEFAULT.equals(effort)) {
             if (AcidModelStore.EFFORT_LOW.equals(effort) ||
                 AcidModelStore.EFFORT_MEDIUM.equals(effort) ||
                 AcidModelStore.EFFORT_HIGH.equals(effort)) {
