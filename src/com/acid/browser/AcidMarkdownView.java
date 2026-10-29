@@ -1,8 +1,11 @@
 package com.acid.browser;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.BackgroundColorSpan;
@@ -11,11 +14,18 @@ import android.text.style.RelativeSizeSpan;
 import android.text.style.StyleSpan;
 import android.text.style.TypefaceSpan;
 import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.TableLayout;
+import android.widget.TableRow;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -81,6 +91,15 @@ public class AcidMarkdownView extends LinearLayout {
                 } else if (trimmed.startsWith("> ")) {
                     flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
                     addQuoteView(ctx, container, trimmed.substring(2), mutedColor, inlineCodeBg, inlineCodeFg, d);
+                } else if (isTableRow(trimmed) && i + 1 < rawLines.length && isTableDelimiterRow(rawLines[i + 1])) {
+                    flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
+                    List<String> tableLines = new ArrayList<>();
+                    tableLines.add(line);
+                    tableLines.add(rawLines[++i]);
+                    while (i + 1 < rawLines.length && isTableRow(rawLines[i + 1])) {
+                        tableLines.add(rawLines[++i]);
+                    }
+                    addTableView(ctx, container, tableLines, darkTheme, textColor, inlineCodeBg, inlineCodeFg, d);
                 } else {
                     if (paraBuf.length() > 0) paraBuf.append("\n");
                     paraBuf.append(line);
@@ -207,6 +226,220 @@ public class AcidMarkdownView extends LinearLayout {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         );
         cardLp.topMargin = Math.round(2 * d);
+        cardLp.bottomMargin = Math.round(8 * d);
+        container.addView(card, cardLp);
+    }
+
+    private static boolean isTableRow(String line) {
+        if (line == null) return false;
+        String trimmed = line.trim();
+        if (trimmed.isEmpty()) return false;
+        if (trimmed.startsWith("```") || trimmed.startsWith("> ") || trimmed.startsWith("#")) return false;
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) return false;
+        return trimmed.contains("|");
+    }
+
+    private static boolean isTableDelimiterRow(String line) {
+        if (line == null) return false;
+        String trimmed = line.trim();
+        if (trimmed.isEmpty() || !trimmed.contains("-") || !trimmed.contains("|")) return false;
+        if (trimmed.startsWith("|")) trimmed = trimmed.substring(1);
+        if (trimmed.endsWith("|")) trimmed = trimmed.substring(0, trimmed.length() - 1);
+        String[] parts = trimmed.split("\\|", -1);
+        if (parts.length == 0) return false;
+        for (String part : parts) {
+            String p = part.trim();
+            if (!p.matches("^:?-+:?$")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String[] splitTableRow(String line) {
+        String s = line.trim();
+        if (s.startsWith("|")) s = s.substring(1);
+        if (s.endsWith("|")) s = s.substring(0, s.length() - 1);
+        String placeholder = "\u0000PIPE\u0000";
+        s = s.replace("\\|", placeholder);
+        String[] rawParts = s.split("\\|", -1);
+        String[] parts = new String[rawParts.length];
+        for (int i = 0; i < rawParts.length; i++) {
+            parts[i] = rawParts[i].replace(placeholder, "|").trim();
+        }
+        return parts;
+    }
+
+    private static void addTableView(
+        Context ctx,
+        LinearLayout container,
+        List<String> tableLines,
+        boolean darkTheme,
+        int textColor,
+        int inlineCodeBg,
+        int inlineCodeFg,
+        float d
+    ) {
+        if (tableLines == null || tableLines.size() < 2) return;
+
+        String headerLine = tableLines.get(0);
+        String delimLine = tableLines.get(1);
+
+        String[] headerParts = splitTableRow(headerLine);
+        String[] delimParts = splitTableRow(delimLine);
+
+        int colCount = Math.max(headerParts.length, delimParts.length);
+        for (int r = 2; r < tableLines.size(); r++) {
+            String[] rowParts = splitTableRow(tableLines.get(r));
+            if (rowParts.length > colCount) colCount = rowParts.length;
+        }
+        if (colCount == 0) return;
+
+        int[] alignments = new int[colCount];
+        for (int c = 0; c < colCount; c++) {
+            if (c < delimParts.length) {
+                String dPart = delimParts[c].trim();
+                boolean left = dPart.startsWith(":");
+                boolean right = dPart.endsWith(":");
+                if (left && right) {
+                    alignments[c] = Gravity.CENTER;
+                } else if (right) {
+                    alignments[c] = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
+                } else {
+                    alignments[c] = Gravity.LEFT | Gravity.CENTER_VERTICAL;
+                }
+            } else {
+                alignments[c] = Gravity.LEFT | Gravity.CENTER_VERTICAL;
+            }
+        }
+
+        int tableBg = darkTheme ? 0xFF0F172A : 0xFFFFFFFF;
+        int borderColor = darkTheme ? 0xFF334155 : 0xFFE2E8F0;
+        int headerBg = darkTheme ? 0xFF1E293B : 0xFFF8FAFC;
+        int headerDivider = darkTheme ? 0xFF334155 : 0xFFCBD5E1;
+        int rowDividerColor = darkTheme ? 0x22334155 : 0x14000000;
+        int altRowBg = darkTheme ? 0x0AFFFFFF : 0x03000000;
+
+        LinearLayout card = new LinearLayout(ctx);
+        card.setOrientation(VERTICAL);
+        GradientDrawable cardGd = new GradientDrawable();
+        cardGd.setColor(tableBg);
+        cardGd.setCornerRadius(8 * d);
+        cardGd.setStroke(Math.max(1, Math.round(1 * d)), borderColor);
+        card.setBackground(cardGd);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            card.setClipToOutline(true);
+        }
+
+        HorizontalScrollView hsv = new HorizontalScrollView(ctx);
+        hsv.setFillViewport(true);
+        hsv.setHorizontalScrollBarEnabled(true);
+        hsv.setScrollbarFadingEnabled(true);
+
+        TableLayout table = new TableLayout(ctx);
+        table.setStretchAllColumns(true);
+
+        int padH = Math.round(12 * d);
+        int padVHead = Math.round(8 * d);
+        int padVCell = Math.round(7 * d);
+        int minCellWidth = Math.round(60 * d);
+        int maxCellWidth = Math.round(280 * d);
+
+        // Header row
+        TableRow headerRow = new TableRow(ctx);
+        headerRow.setBackgroundColor(headerBg);
+        for (int c = 0; c < colCount; c++) {
+            String cellText = c < headerParts.length ? headerParts[c] : "";
+            TextView tv = new TextView(ctx);
+            tv.setPadding(padH, padVHead, padH, padVHead);
+            tv.setTextColor(textColor);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+            tv.setTypeface(Typeface.DEFAULT_BOLD);
+            tv.setGravity(alignments[c]);
+            tv.setMinWidth(minCellWidth);
+            tv.setMaxWidth(maxCellWidth);
+            tv.setText(parseInlineMarkdown(cellText, inlineCodeBg, inlineCodeFg));
+            headerRow.addView(tv);
+        }
+        table.addView(headerRow);
+
+        View headDiv = new View(ctx);
+        headDiv.setBackgroundColor(headerDivider);
+        table.addView(headDiv, new TableLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(1 * d))
+        ));
+
+        // Data rows
+        for (int r = 2; r < tableLines.size(); r++) {
+            String rowLine = tableLines.get(r);
+            if (isTableDelimiterRow(rowLine)) {
+                View subDiv = new View(ctx);
+                subDiv.setBackgroundColor(headerDivider);
+                table.addView(subDiv, new TableLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(1 * d))
+                ));
+                continue;
+            }
+
+            String[] rowParts = splitTableRow(rowLine);
+            TableRow row = new TableRow(ctx);
+            if ((r % 2) == 1) {
+                row.setBackgroundColor(altRowBg);
+            }
+
+            for (int c = 0; c < colCount; c++) {
+                String cellText = c < rowParts.length ? rowParts[c] : "";
+                TextView tv = new TextView(ctx);
+                tv.setPadding(padH, padVCell, padH, padVCell);
+                tv.setTextColor(textColor);
+                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.0f);
+                tv.setLineSpacing(Math.round(2 * d), 1.0f);
+                tv.setGravity(alignments[c]);
+                tv.setMinWidth(minCellWidth);
+                tv.setMaxWidth(maxCellWidth);
+                tv.setText(parseInlineMarkdown(cellText, inlineCodeBg, inlineCodeFg));
+                row.addView(tv);
+            }
+            table.addView(row);
+
+            if (r < tableLines.size() - 1) {
+                View rowDiv = new View(ctx);
+                rowDiv.setBackgroundColor(rowDividerColor);
+                table.addView(rowDiv, new TableLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(0.8f * d))
+                ));
+            }
+        }
+
+        hsv.addView(table, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        card.addView(hsv, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        final Context finalCtx = ctx;
+        final List<String> finalTableLines = tableLines;
+        card.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                ClipboardManager cm = (ClipboardManager) finalCtx.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    StringBuilder sb = new StringBuilder();
+                    for (String tLine : finalTableLines) {
+                        sb.append(tLine).append("\n");
+                    }
+                    cm.setPrimaryClip(ClipData.newPlainText("table", sb.toString().trim()));
+                    Toast.makeText(finalCtx, "已复制表格 Markdown 到剪贴板", Toast.LENGTH_SHORT).show();
+                }
+                return true;
+            }
+        });
+
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        cardLp.topMargin = Math.round(4 * d);
         cardLp.bottomMargin = Math.round(8 * d);
         container.addView(card, cardLp);
     }
