@@ -370,6 +370,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onImportRequested() {
                 showImportScriptDialog();
             }
+
+            @Override
+            public void onScriptToggle(UserscriptMeta meta, boolean enabled) {
+                updateMenuSheetCards();
+            }
         });
         mRootContainer.addView(mUserscriptSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
