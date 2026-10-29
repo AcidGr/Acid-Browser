@@ -250,9 +250,11 @@ public class AcidIcons {
                 break;
 
             case ICON_RELOAD:
-                // Classic crisp clockwise reload arrow (Chrome / Safari style)
-                p.addArc(new RectF(4.5f, 4.5f, 19.5f, 19.5f), -60f, 300f);
-                p.addPath(parseSvgPath("M 12.5 3.2 L 18 5.6 L 15.6 11"));
+                // Via-style reload: circle r=9 centred at (12,12), clockwise 277deg from 38deg to 315deg
+                // (gap opens to the lower-right). The arc continues along its end tangent (45deg) to the
+                // arrow vertex, and the right-angle head's arms (up / left) mirror each other about that tangent.
+                p.addArc(new RectF(3f, 3f, 21f, 21f), 38f, 277f);
+                p.addPath(parseSvgPath("M 18.36 5.64 L 21 8.28 M 21 4.28 V 8.28 H 17"));
                 break;
 
             case ICON_MOBILE:
