@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -25,6 +26,8 @@ import java.util.List;
  * - Supports DeepSeek R1 / Reasoner `reasoning_content` and inline `<think>` blocks.
  */
 public class AcidAgentLoop {
+
+    private static final String TAG = "AcidAgentLoop";
 
     private static final String PREF_AGENT = "acid_agent_config";
     private static final String KEY_BASE_URL = "base_url";
@@ -181,7 +184,9 @@ public class AcidAgentLoop {
         if (mWorkerThread != null) {
             try {
                 mWorkerThread.interrupt();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to interrupt the agent worker thread", e);
+            }
         }
         mMainHandler.post(new Runnable() {
             @Override
@@ -528,7 +533,9 @@ public class AcidAgentLoop {
                     if (p1 >= 0 && p2 > p1) {
                         elementCount = Integer.parseInt(line.substring(p1 + 1, p2).trim());
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not parse expired element count from history line", e);
+                }
                 sb.append("Interactive Elements: [").append(elementCount > 0 ? elementCount : "historical")
                   .append(" elements expired from earlier step; refer to latest observation]\n");
                 continue;

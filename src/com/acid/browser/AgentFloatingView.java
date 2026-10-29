@@ -6,6 +6,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.text.TextUtils;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -31,6 +32,8 @@ import java.util.Map;
  * tool call cards, markdown responses, session management, and vertical drag repositioning.
  */
 public class AgentFloatingView extends FrameLayout {
+
+    private static final String TAG = "AgentFloatingView";
 
     public interface AgentHostCallback {
         void onUnreadStateChanged(boolean hasUnread, boolean running, boolean pausedForTakeover);
@@ -1077,6 +1080,8 @@ public class AgentFloatingView extends FrameLayout {
             if (imm != null && findFocus() != null) {
                 imm.hideSoftInputFromWindow(findFocus().getWindowToken(), 0);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to hide the soft keyboard", e);
+        }
     }
 }

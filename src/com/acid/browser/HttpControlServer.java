@@ -137,10 +137,16 @@ public class HttpControlServer {
                 mServerSocket.close();
                 mServerSocket = null;
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to close the MCP server socket", e);
+        }
         // Close all active SSE sessions
         for (SseSession s : mSseSessions.values()) {
-            try { s.socket.close(); } catch (Exception ignored) {}
+            try {
+                s.socket.close();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to close SSE session socket " + s.id, e);
+            }
         }
         mSseSessions.clear();
         mController.emitLog("[MCP] Acid MCP Server stopped (port " + mPort + " released)");
@@ -201,7 +207,9 @@ public class HttpControlServer {
                         try {
                             query.put(java.net.URLDecoder.decode(part.substring(0, eq), "UTF-8"),
                                       java.net.URLDecoder.decode(part.substring(eq + 1), "UTF-8"));
-                        } catch (Exception ignored) {}
+                        } catch (Exception e) {
+                            Log.w(TAG, "Skipping malformed query parameter: " + part, e);
+                        }
                     }
                 }
             }
@@ -217,7 +225,11 @@ public class HttpControlServer {
             byte[] bodyBytes = new byte[0];
             if (headers.containsKey("content-length")) {
                 int len = 0;
-                try { len = Integer.parseInt(headers.get("content-length")); } catch (Exception ignored) {}
+                try {
+                    len = Integer.parseInt(headers.get("content-length"));
+                } catch (Exception e) {
+                    Log.w(TAG, "Ignoring non-numeric Content-Length: " + headers.get("content-length"), e);
+                }
                 if (len > 0) {
                     bodyBytes = new byte[len];
                     int readTotal = 0;
@@ -265,7 +277,12 @@ public class HttpControlServer {
             socket.close();
 
         } catch (Exception e) {
-            try { socket.close(); } catch (Exception ignored) {}
+            Log.w(TAG, "Failed to handle MCP client request", e);
+            try {
+                socket.close();
+            } catch (Exception ee) {
+                Log.w(TAG, "Failed to close client socket after an error", ee);
+            }
         }
     }
 
@@ -345,10 +362,13 @@ public class HttpControlServer {
                 boolean ok = session.sendEvent("ping", "{}");
                 if (!ok) break;
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            Log.w(TAG, "SSE stream ended for session " + sessionId, e);
         } finally {
             mSseSessions.remove(sessionId);
-            try { socket.close(); } catch (Exception ignored) {}
+            try { socket.close(); } catch (Exception e) {
+                Log.w(TAG, "Failed to close SSE socket for session " + sessionId, e);
+            }
             mController.emitLog("[MCP] SSE Client disconnected (session: " + sessionId + ")");
         }
     }
@@ -494,12 +514,15 @@ public class HttpControlServer {
             return resp;
 
         } catch (Exception e) {
+            Log.e(TAG, "JSON-RPC handler failed", e);
             try {
                 JSONObject err = new JSONObject();
                 err.put("code", -32603);
                 err.put("message", "Internal JSON-RPC Error: " + e.getMessage());
                 resp.put("error", err);
-            } catch (Exception ignored) {}
+            } catch (Exception ee) {
+                Log.w(TAG, "Failed to encode JSON-RPC internal error response", ee);
+            }
             return resp;
         }
     }

@@ -3,6 +3,7 @@ package com.acid.browser;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.text.TextUtils;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -31,6 +32,8 @@ import java.util.Locale;
  *    - Configures optional Reasoning Effort (思考深度: Default / Off / Low / Medium / High / Max)
  */
 public class AcidModelStore {
+
+    private static final String TAG = "AcidModelStore";
 
     private static final String PREF_MODELS = "acid_models_store_v2";
     private static final String KEY_PROVIDERS_JSON = "configured_providers_json";
@@ -100,7 +103,9 @@ public class AcidModelStore {
                 o.put("id", id);
                 o.put("name", name);
                 o.put("supportsReasoning", supportsReasoning);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to encode model entry " + id, e);
+            }
             return o;
         }
 
@@ -190,7 +195,9 @@ public class AcidModelStore {
                     arr.put(m.toJson());
                 }
                 o.put("models", arr);
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to encode provider " + id, e);
+            }
             return o;
         }
 
@@ -223,6 +230,11 @@ public class AcidModelStore {
     private String mSelectedProviderId = "deepseek";
     private String mSelectedModelId = "deepseek-flash";
     private String mSelectedEffort = EFFORT_DEFAULT;
+    /**
+     * Set when the persisted provider blob could not be decoded. Writes are refused while
+     * this is true so a parse failure cannot overwrite recoverable API keys with defaults.
+     */
+    private boolean mStorageCorrupted = false;
 
     public AcidModelStore(Context context) {
         mContext = context;
@@ -402,14 +414,24 @@ public class AcidModelStore {
                 JSONArray arr = new JSONArray(raw);
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject o = arr.optJSONObject(i);
-                    if (o != null) {
-                        ConfiguredProvider cp = ConfiguredProvider.fromJson(o);
-                        if (!cp.id.isEmpty()) {
-                            mProviders.add(cp);
-                        }
+                    if (o == null) {
+                        Log.w(TAG, "provider[" + i + "] is not a JSON object; skipped");
+                        continue;
                     }
+                    ConfiguredProvider cp = ConfiguredProvider.fromJson(o);
+                    if (cp.id.isEmpty()) {
+                        Log.w(TAG, "provider[" + i + "] has no id; skipped");
+                        continue;
+                    }
+                    mProviders.add(cp);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                // A corrupt provider blob must not be mistaken for "no providers configured":
+                // the seeding branch below would overwrite the user's API keys.
+                Log.e(TAG, "Provider config is unreadable; keeping stored data untouched", e);
+                mStorageCorrupted = true;
+                return;
+            }
         }
 
         int savedVer = sp.getInt(KEY_CATALOG_VERSION, 0);
@@ -530,6 +552,12 @@ public class AcidModelStore {
     }
 
     public synchronized void saveToPrefs() {
+        if (mStorageCorrupted) {
+            // Refuse to write: the in-memory list is empty because parsing failed, not because
+            // the user has no providers. Persisting it would destroy the recoverable original.
+            Log.e(TAG, "Refusing to save provider config while stored data is unreadable");
+            return;
+        }
         JSONArray arr = new JSONArray();
         for (ConfiguredProvider p : mProviders) {
             arr.put(p.toJson());
