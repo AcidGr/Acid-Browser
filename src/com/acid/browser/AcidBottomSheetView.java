@@ -1,7 +1,6 @@
 package com.acid.browser;
 
 import android.content.Context;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -16,7 +15,7 @@ import android.widget.TextView;
  * Reusable BottomSheet Modal Overlay for Acid Browser.
  * Provides scrim, top drag handle, header with title & action button, and scrollable content area.
  */
-public class AcidBottomSheetView extends FrameLayout {
+public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
 
     public interface OnDismissListener {
         void onDismiss();
@@ -119,14 +118,6 @@ public class AcidBottomSheetView extends FrameLayout {
         applyTheme(false);
     }
 
-    public void setCustomContentHeightDp(int heightDp) {
-        ViewGroup.LayoutParams lp = mScrollView.getLayoutParams();
-        if (lp != null) {
-            lp.height = AcidTheme.dp(getContext(), heightDp);
-            mScrollView.setLayoutParams(lp);
-        }
-    }
-
     public void setWrapContentHeight() {
         ViewGroup.LayoutParams lp = mScrollView.getLayoutParams();
         if (lp != null) {
@@ -157,18 +148,19 @@ public class AcidBottomSheetView extends FrameLayout {
         return mScrollView;
     }
 
-    public void setOnDismissListener(OnDismissListener listener) {
-        mDismissListener = listener;
-    }
-
     public boolean isShowing() {
         return getVisibility() == View.VISIBLE;
     }
 
+    @Override
     public void show() {
+        // Raise above siblings so a sheet opened from another sheet is actually visible
+        // and tappable (the download confirmation over the download list relies on this).
+        bringToFront();
         setVisibility(View.VISIBLE);
     }
 
+    @Override
     public void dismiss() {
         if (getVisibility() == View.VISIBLE) {
             setVisibility(View.GONE);
@@ -178,6 +170,14 @@ public class AcidBottomSheetView extends FrameLayout {
         }
     }
 
+    @Override
+    public boolean handleBackPressed() {
+        if (!isShowing()) return false;
+        dismiss();
+        return true;
+    }
+
+    @Override
     public void applyTheme(boolean isDark) {
         mIsDarkMode = isDark;
         int bar = AcidTheme.bar(isDark);

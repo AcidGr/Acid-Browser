@@ -21,7 +21,7 @@ import java.util.List;
 /**
  * 2-Column Grid Tab Overview overlay with snapshot thumbnails, active tab indicator, and quick actions.
  */
-public class TabsOverviewView extends FrameLayout {
+public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
     public interface OnTabsOverviewListener {
         void onOverviewClosed();
@@ -134,10 +134,6 @@ public class TabsOverviewView extends FrameLayout {
         addView(contentCol, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
-    public void setListener(OnTabsOverviewListener listener) {
-        mListener = listener;
-    }
-
     public boolean isShowing() {
         return getVisibility() == View.VISIBLE;
     }
@@ -150,19 +146,33 @@ public class TabsOverviewView extends FrameLayout {
         }
     }
 
+    @Override
     public void show() {
         if (mController != null) {
             mController.captureActiveTabSnapshot();
         }
         renderTabsGrid();
+        bringToFront();
         setVisibility(View.VISIBLE);
     }
 
     public void close() {
+        dismiss();
+    }
+
+    @Override
+    public void dismiss() {
         setVisibility(View.GONE);
         if (mListener != null) {
             mListener.onOverviewClosed();
         }
+    }
+
+    @Override
+    public boolean handleBackPressed() {
+        if (!isShowing()) return false;
+        dismiss();
+        return true;
     }
 
     public void renderTabsGrid() {

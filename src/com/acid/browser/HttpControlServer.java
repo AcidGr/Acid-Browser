@@ -97,10 +97,6 @@ public class HttpControlServer {
         return mRunning;
     }
 
-    public int getPort() {
-        return mPort;
-    }
-
     public synchronized void start() {
         if (mRunning) return;
         mRunning = true;

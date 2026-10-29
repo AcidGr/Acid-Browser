@@ -209,19 +209,6 @@ public class AcidSessionStore {
         return deleted;
     }
 
-    public synchronized void clearAllSessions() {
-        File[] files = mSessionsDir.listFiles();
-        if (files != null) {
-            for (File f : files) {
-                if (f.isFile() && f.getName().endsWith(".json")) {
-                    f.delete();
-                }
-            }
-        }
-        mActiveSession = null;
-        createNewSession();
-    }
-
     public synchronized List<SessionMeta> listSessions() {
         List<SessionMeta> list = new ArrayList<SessionMeta>();
         File[] files = mSessionsDir.listFiles();

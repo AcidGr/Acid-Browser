@@ -626,14 +626,6 @@ public class AcidModelStore {
         return m;
     }
 
-    public synchronized String getSelectedProviderId() {
-        return mSelectedProviderId;
-    }
-
-    public synchronized String getSelectedModelId() {
-        return mSelectedModelId;
-    }
-
     public synchronized String getSelectedReasoningEffort() {
         return mSelectedEffort != null ? mSelectedEffort : EFFORT_DEFAULT;
     }

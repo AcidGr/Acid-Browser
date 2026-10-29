@@ -1,11 +1,9 @@
 package com.acid.browser;
 
-import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.text.InputType;
 import android.text.TextUtils;
 import android.text.method.HideReturnsTransformationMethod;
 import android.text.method.PasswordTransformationMethod;
@@ -20,7 +18,6 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -59,6 +56,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         mIsDarkMode = isDark;
     }
 
+    @Override
     public boolean handleBackPressed() {
         if (!isShowing()) return false;
         if (mCurrentState == STATE_EDIT) {

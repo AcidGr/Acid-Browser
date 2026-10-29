@@ -26,7 +26,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * BottomSheet sheet managing Bookmarks, Browsing History, and Download tasks.
@@ -48,6 +50,33 @@ public class BrowserListsSheet extends AcidBottomSheetView {
     private String mDownloadSearchKeyword = "";
     private LinearLayout mDownloadsItemsContainer = null;
     private final List<TextView> mCategoryPillViews = new ArrayList<TextView>();
+
+    /**
+     * Live handles to the views of each rendered download row, keyed by
+     * {@link #rowKey(BrowserController.DownloadItem)}. The progress poller rewrites the
+     * text and progress bar through these handles instead of rebuilding the list, which
+     * keeps the scroll position stable while a download is running.
+     */
+    private final Map<Long, DownloadRowHolder> mDownloadRows =
+        new LinkedHashMap<Long, DownloadRowHolder>();
+
+    /** Mutable view references for one download row, refreshed in place by the poller. */
+    private static final class DownloadRowHolder {
+        final TextView infoView;
+        final ProgressBar progressBar;
+        final AcidIcons.SvgIconView iconView;
+
+        DownloadRowHolder(TextView infoView, ProgressBar progressBar, AcidIcons.SvgIconView iconView) {
+            this.infoView = infoView;
+            this.progressBar = progressBar;
+            this.iconView = iconView;
+        }
+    }
+
+    /** Stable map key; falls back to the timestamp for records without a system id. */
+    private static long rowKey(BrowserController.DownloadItem it) {
+        return it.downloadId > 0 ? it.downloadId : -Math.abs(it.timestamp);
+    }
 
     public BrowserListsSheet(
         Context context,
@@ -583,26 +612,29 @@ public class BrowserListsSheet extends AcidBottomSheetView {
         mProgressPoller = new Runnable() {
             @Override
             public void run() {
-                if (!isShowing()) {
+                if (!isShowing() || mController == null) {
                     stopProgressPolling();
                     return;
                 }
-                boolean hasActive = false;
-                if (mController != null) {
-                    List<BrowserController.DownloadItem> list = mController.getDownloads();
-                    for (BrowserController.DownloadItem item : list) {
-                        if (item.status == DownloadManager.STATUS_RUNNING || item.status == DownloadManager.STATUS_PENDING) {
-                            hasActive = true;
-                            break;
+                // The status refresh runs on a worker thread; the callback decides whether
+                // another pass is needed. Nothing here touches DownloadManager directly.
+                mController.syncDownloadStatusAsync(new BrowserController.DownloadSyncCallback() {
+                    @Override
+                    public void onDownloadSyncDone(boolean anyActive) {
+                        if (!isShowing()) {
+                            stopProgressPolling();
+                            return;
+                        }
+                        refreshDownloadProgressInPlace();
+                        if (anyActive) {
+                            mMainHandler.postDelayed(mProgressPoller, 500);
+                        } else {
+                            // Everything settled: one full rebuild reconciles rows that
+                            // changed status (e.g. running -> completed) and their order.
+                            updateDownloadListRows(mDownloadsItemsContainer);
                         }
                     }
-                }
-                if (mDownloadsItemsContainer != null) {
-                    updateDownloadListRows(mDownloadsItemsContainer);
-                }
-                if (hasActive && isShowing()) {
-                    mMainHandler.postDelayed(this, 500);
-                }
+                });
             }
         };
         mMainHandler.postDelayed(mProgressPoller, 500);
@@ -647,7 +679,13 @@ public class BrowserListsSheet extends AcidBottomSheetView {
 
     private void updateDownloadListRows(final LinearLayout itemsContainer) {
         if (itemsContainer == null) return;
+
+        // Rebuilding detaches every row, which resets the ScrollView to the top. Keep the
+        // offset and put it back once the new rows are measured.
+        final int scrollY = getScrollView() != null ? getScrollView().getScrollY() : 0;
+
         itemsContainer.removeAllViews();
+        mDownloadRows.clear();
 
         Context ctx = getContext();
         int textCol = AcidTheme.text(mIsDarkMode);
@@ -730,25 +768,8 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             textColBox.addView(title);
 
             TextView info = new TextView(ctx);
-            String catTag = it.getCategoryLabel() + " · ";
-
-            if (it.status == DownloadManager.STATUS_RUNNING) {
-                int p = it.getProgressPercent();
-                String progSize = BrowserController.DownloadItem.formatSize(it.downloadedBytes) + " / " + BrowserController.DownloadItem.formatSize(it.contentLength);
-                info.setText(catTag + "↓ 正在下载 " + p + "% · " + progSize);
-                info.setTextColor(AcidTheme.COLOR_BLUE);
-            } else if (it.status == DownloadManager.STATUS_PENDING) {
-                info.setText(catTag + "⏱ 排队等待下载...");
-                info.setTextColor(AcidTheme.COLOR_AMBER);
-            } else if (it.status == DownloadManager.STATUS_FAILED) {
-                info.setText(catTag + "✕ 下载失败 · " + BrowserController.DownloadItem.formatSize(it.contentLength));
-                info.setTextColor(AcidTheme.COLOR_RED);
-            } else {
-                String sizeStr = BrowserController.DownloadItem.formatSize(it.contentLength > 0 ? it.contentLength : it.downloadedBytes);
-                info.setText(catTag + "✓ 已完成 · " + sizeStr + " · /Download/");
-                info.setTextColor(mutedCol);
-            }
-
+            info.setText(buildDownloadSubtitle(it));
+            info.setTextColor(downloadSubtitleColor(it));
             info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             info.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
             textColBox.addView(info);
@@ -757,8 +778,9 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             row.addView(headerRow);
 
             // Dynamic progress bar if active
+            ProgressBar pb = null;
             if (it.status == DownloadManager.STATUS_RUNNING || it.status == DownloadManager.STATUS_PENDING) {
-                ProgressBar pb = new ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal);
+                pb = new ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal);
                 pb.setMax(100);
                 pb.setProgress(it.getProgressPercent());
                 pb.setIndeterminate(it.contentLength <= 0);
@@ -769,6 +791,8 @@ public class BrowserListsSheet extends AcidBottomSheetView {
                 pbLp.leftMargin = AcidTheme.dp(ctx, 28);
                 row.addView(pb, pbLp);
             }
+
+            mDownloadRows.put(rowKey(it), new DownloadRowHolder(info, pb, icon));
 
             row.setOnClickListener(new OnClickListener() {
                 @Override
@@ -818,6 +842,9 @@ public class BrowserListsSheet extends AcidBottomSheetView {
                                 case 4:
                                     mController.startDownload(it.url, it.fileName, null, null, it.mimeType, it.contentLength);
                                     updateDownloadListRows(itemsContainer);
+                                    // A re-download starts a brand-new active task; the poller
+                                    // stopped once the previous one settled, so restart it.
+                                    startProgressPolling();
                                     break;
                                 case 5:
                                     showDeleteConfirmDialog(it, itemsContainer);
@@ -831,6 +858,80 @@ public class BrowserListsSheet extends AcidBottomSheetView {
             });
 
             itemsContainer.addView(row, rLp);
+        }
+
+        // Restore the scroll offset after the rebuilt rows have been laid out.
+        if (scrollY > 0 && getScrollView() != null) {
+            getScrollView().post(new Runnable() {
+                @Override
+                public void run() {
+                    getScrollView().scrollTo(0, scrollY);
+                }
+            });
+        }
+    }
+
+    /** Subtitle line for a download row: category tag plus the current state. */
+    private String buildDownloadSubtitle(BrowserController.DownloadItem it) {
+        String catTag = it.getCategoryLabel() + " · ";
+
+        if (it.status == DownloadManager.STATUS_RUNNING) {
+            String progSize = BrowserController.DownloadItem.formatSize(it.downloadedBytes)
+                + " / " + BrowserController.DownloadItem.formatSize(it.contentLength);
+            return catTag + "↓ 正在下载 " + it.getProgressPercent() + "% · " + progSize;
+        }
+        if (it.status == DownloadManager.STATUS_PENDING) {
+            return catTag + "⏱ 排队等待下载...";
+        }
+        if (it.status == DownloadManager.STATUS_FAILED) {
+            return catTag + "✕ 下载失败 · " + BrowserController.DownloadItem.formatSize(it.contentLength);
+        }
+        String sizeStr = BrowserController.DownloadItem.formatSize(
+            it.contentLength > 0 ? it.contentLength : it.downloadedBytes);
+        return catTag + "✓ 已完成 · " + sizeStr + " · /Download/";
+    }
+
+    /** Subtitle colour matching the row state. */
+    private int downloadSubtitleColor(BrowserController.DownloadItem it) {
+        if (it.status == DownloadManager.STATUS_RUNNING) return AcidTheme.COLOR_BLUE;
+        if (it.status == DownloadManager.STATUS_PENDING) return AcidTheme.COLOR_AMBER;
+        if (it.status == DownloadManager.STATUS_FAILED) return AcidTheme.COLOR_RED;
+        return AcidTheme.muted(mIsDarkMode);
+    }
+
+    /**
+     * Updates the live download rows in place after a background status refresh.
+     *
+     * <p>Only text and progress values are rewritten; no view is added or removed, so the
+     * ScrollView keeps its offset and the user can keep reading the list mid-download.
+     */
+    private void refreshDownloadProgressInPlace() {
+        if (mController == null || mDownloadRows.isEmpty()) return;
+
+        int mutedTint = AcidTheme.muted(mIsDarkMode);
+        List<BrowserController.DownloadItem> allList = mController.getDownloads();
+
+        for (BrowserController.DownloadItem it : allList) {
+            DownloadRowHolder holder = mDownloadRows.get(rowKey(it));
+            if (holder == null) continue;
+
+            holder.infoView.setText(buildDownloadSubtitle(it));
+            holder.infoView.setTextColor(downloadSubtitleColor(it));
+
+            if (holder.progressBar != null) {
+                if (it.contentLength > 0) {
+                    holder.progressBar.setIndeterminate(false);
+                    holder.progressBar.setProgress(it.getProgressPercent());
+                } else {
+                    holder.progressBar.setIndeterminate(true);
+                }
+            }
+
+            // Keep the failure tint in sync; the glyph itself never changes category.
+            if (holder.iconView != null) {
+                holder.iconView.setColor(it.status == DownloadManager.STATUS_FAILED
+                    ? AcidTheme.COLOR_RED : mutedTint);
+            }
         }
     }
 

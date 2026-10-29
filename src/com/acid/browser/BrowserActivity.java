@@ -33,6 +33,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Modern Clean White Browser Edition (Phase 3.2 Modular Architecture):
  * - Thin orchestrator activity managing lifecycle, navigation bars, and top-level modals
@@ -105,6 +108,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AcidBottomSheetView mAboutSheet;
     private AcidBottomSheetView mDownloadConfirmSheet;
     private BroadcastReceiver mDownloadReceiver;
+
+    /**
+     * Every full-screen overlay, in registration order. Theme propagation, back handling
+     * and "close whatever is open" all iterate this list, so adding an overlay no longer
+     * means editing three separate if-chains.
+     */
+    private final List<AcidOverlay> mOverlays = new ArrayList<AcidOverlay>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -343,6 +353,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mRootContainer.addView(mProviderConfigSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
+
+        registerOverlays();
 
         mHttpServer = new HttpControlServer(mController, HttpControlServer.DEFAULT_PORT);
         boolean mcpEnabled = getSharedPreferences("acid_browser_prefs", MODE_PRIVATE)
@@ -765,6 +777,40 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         updateMenuSheetCards();
     }
 
+    // =========================================================================
+    // Overlay registry
+    // =========================================================================
+
+    /**
+     * Registers every overlay once. Each implementation raises itself in {@code show()},
+     * so no ordering logic is needed here.
+     */
+    private void registerOverlays() {
+        mOverlays.clear();
+        addOverlay(mAgentFloatingView);
+        addOverlay(mTabsOverview);
+        addOverlay(mMenuSheet);
+        addOverlay(mListsSheet);
+        addOverlay(mSessionsSheet);
+        addOverlay(mModelSelectorSheet);
+        addOverlay(mProviderConfigSheet);
+        addOverlay(mAboutSheet);
+        addOverlay(mDownloadConfirmSheet);
+    }
+
+    private void addOverlay(AcidOverlay overlay) {
+        if (overlay != null && !mOverlays.contains(overlay)) {
+            mOverlays.add(overlay);
+        }
+    }
+
+    /** Propagates the palette to every registered overlay. */
+    private void applyThemeToOverlays(boolean dark) {
+        for (AcidOverlay overlay : mOverlays) {
+            overlay.applyTheme(dark);
+        }
+    }
+
     private void applyTheme(boolean dark) {
         int bg = AcidTheme.bg(dark);
         int bar = AcidTheme.bar(dark);
@@ -826,15 +872,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         updateTopAgentButton(mAgentLoop != null && mAgentLoop.isRunning(), mAgentLoop != null && mAgentLoop.isPausedForTakeover());
 
         // Propagate theme to modular sub-components
-        if (mTabsOverview != null) mTabsOverview.applyTheme(dark);
-        if (mAgentFloatingView != null) mAgentFloatingView.applyTheme(dark);
-        if (mSessionsSheet != null) mSessionsSheet.applyTheme(dark);
-        if (mMenuSheet != null) mMenuSheet.applyTheme(dark);
-        if (mListsSheet != null) mListsSheet.applyTheme(dark);
-        if (mModelSelectorSheet != null) mModelSelectorSheet.applyTheme(dark);
-        if (mProviderConfigSheet != null) mProviderConfigSheet.applyTheme(dark);
-        if (mAboutSheet != null) mAboutSheet.applyTheme(dark);
-        if (mDownloadConfirmSheet != null) mDownloadConfirmSheet.applyTheme(dark);
+        applyThemeToOverlays(dark);
     }
 
     private void updateTopAgentButton(boolean running, boolean pausedForTakeover) {
@@ -1378,6 +1416,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         btnRow.addView(btnConfirm, confirmLp);
 
         container.addView(btnRow);
+        // bringToFront() inside show() lifts this above the download list it was opened from.
         mDownloadConfirmSheet.show();
     }
 
@@ -1508,39 +1547,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     @Override
     public void onBackPressed() {
-        if (mDownloadConfirmSheet != null && mDownloadConfirmSheet.isShowing()) {
-            mDownloadConfirmSheet.dismiss();
-            return;
-        }
-        if (mAboutSheet != null && mAboutSheet.isShowing()) {
-            mAboutSheet.dismiss();
-            return;
-        }
-        if (mSessionsSheet != null && mSessionsSheet.isShowing()) {
-            mSessionsSheet.dismiss();
-            return;
-        }
-        if (mProviderConfigSheet != null && mProviderConfigSheet.handleBackPressed()) {
-            return;
-        }
-        if (mModelSelectorSheet != null && mModelSelectorSheet.isShowing()) {
-            mModelSelectorSheet.dismiss();
-            return;
-        }
-        if (mListsSheet != null && mListsSheet.isShowing()) {
-            mListsSheet.dismiss();
-            return;
-        }
-        if (mMenuSheet != null && mMenuSheet.isShowing()) {
-            mMenuSheet.dismiss();
-            return;
-        }
-        if (mTabsOverview != null && mTabsOverview.isShowing()) {
-            mTabsOverview.close();
-            return;
-        }
-        if (mAgentFloatingView != null && mAgentFloatingView.handleBackPressed()) {
-            return;
+        // Every overlay owns its own back semantics; walk them from the top of the stack.
+        for (int i = mOverlays.size() - 1; i >= 0; i--) {
+            if (mOverlays.get(i).handleBackPressed()) {
+                return;
+            }
         }
         BrowserController.TabSession tab = mController != null ? mController.getActiveTab() : null;
         if (tab != null && tab.webView.canGoBack()) {
