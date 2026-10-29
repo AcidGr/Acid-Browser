@@ -1,9 +1,17 @@
 package com.acid.browser;
 
 import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -150,6 +158,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
     public void show() {
         if (mController != null) {
             mController.captureActiveTabSnapshot();
+            mController.setOverviewShowing(true);
         }
         renderTabsGrid();
         bringToFront();
@@ -162,6 +171,9 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
     @Override
     public void dismiss() {
+        if (mController != null) {
+            mController.setOverviewShowing(false);
+        }
         setVisibility(View.GONE);
         if (mListener != null) {
             mListener.onOverviewClosed();
@@ -212,22 +224,71 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         }
     }
 
+    private static class AgentCardBorderDrawable extends Drawable {
+        private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF mBounds = new RectF();
+        private final float mCornerRadius;
+        private final float mStrokeWidth;
+
+        public AgentCardBorderDrawable(float cornerRadius, float strokeWidth) {
+            mCornerRadius = cornerRadius;
+            mStrokeWidth = strokeWidth;
+            mPaint.setStyle(Paint.Style.STROKE);
+            mPaint.setStrokeWidth(strokeWidth);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            long now = SystemClock.uptimeMillis();
+            double phase = (now % 1500) / 1500.0 * Math.PI * 2.0;
+            float factor = (float) (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(phase)));
+            int alpha = (int) (255 * factor);
+            mPaint.setColor(Color.argb(alpha, 16, 185, 129)); // Acid emerald green #10B981
+
+            Rect r = getBounds();
+            float half = mStrokeWidth / 2f;
+            mBounds.set(r.left + half, r.top + half, r.right - half, r.bottom - half);
+            canvas.drawRoundRect(mBounds, mCornerRadius, mCornerRadius, mPaint);
+            invalidateSelf();
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+            mPaint.setAlpha(alpha);
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter colorFilter) {
+            mPaint.setColorFilter(colorFilter);
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
+    }
+
     private View buildSingleTabCard(final BrowserController.TabSession tab, boolean isActive) {
         Context ctx = getContext();
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
 
+        final boolean isAgentDriving = (mController != null && mController.isTabDrivenByAgent(tab.id));
+
         int cardBg = mIsDarkMode ? AcidTheme.DARK_BAR : Color.WHITE;
         int borderCol = isActive ? AcidTheme.COLOR_TAB_ACTIVE_BORDER : (mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER);
         card.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, 0, 0, 14));
-        // Clip header / thumbnail to the rounded card, and draw the border as a foreground overlay so
-        // child views can no longer paint over it (this is why the selected tab showed no frame before).
         card.setClipToOutline(true);
-        card.setForeground(AcidTheme.cardBorderBg(ctx, Color.TRANSPARENT, borderCol, isActive ? 3 : 1, 14));
+
+        if (isAgentDriving) {
+            card.setForeground(new AgentCardBorderDrawable(AcidTheme.dp(ctx, 14), AcidTheme.dp(ctx, 3)));
+        } else {
+            card.setForeground(AcidTheme.cardBorderBg(ctx, Color.TRANSPARENT, borderCol, isActive ? 3 : 1, 14));
+        }
         card.setClickable(true);
         card.setFocusable(true);
 
-        // Header: Globe + Title + 'X' close
+        // Header: Globe + Title + [AI badge] + 'X' close
         LinearLayout head = new LinearLayout(ctx);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
@@ -239,7 +300,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         headGd.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
         head.setBackground(headGd);
 
-        int globeColor = isActive ? AcidTheme.COLOR_TAB_ACTIVE_BORDER : AcidTheme.muted(mIsDarkMode);
+        int globeColor = isAgentDriving ? AcidTheme.DARK_ACCENT : (isActive ? AcidTheme.COLOR_TAB_ACTIVE_BORDER : AcidTheme.muted(mIsDarkMode));
         AcidIcons.SvgIconView globe = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_GLOBE, globeColor, 14);
         head.addView(globe);
 
@@ -255,14 +316,33 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         tLp.rightMargin = AcidTheme.dp(ctx, 4);
         head.addView(title, tLp);
 
+        if (isAgentDriving) {
+            TextView aiBadge = new TextView(ctx);
+            aiBadge.setText("● AI操作中");
+            aiBadge.setTextColor(AcidTheme.DARK_ACCENT);
+            aiBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+            aiBadge.setTypeface(Typeface.DEFAULT_BOLD);
+            aiBadge.setPadding(AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 1), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 1));
+            aiBadge.setBackground(AcidTheme.pillBg(ctx, Color.argb(45, 16, 185, 129), 0, 4));
+            head.addView(aiBadge);
+        }
+
         LinearLayout closeBtn = new LinearLayout(ctx);
         closeBtn.setGravity(Gravity.CENTER);
-        AcidIcons.SvgIconView closeIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CLOSE, AcidTheme.muted(mIsDarkMode), 14);
+        int closeColor = isAgentDriving ? AcidTheme.iconDisabled(mIsDarkMode) : AcidTheme.muted(mIsDarkMode);
+        AcidIcons.SvgIconView closeIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CLOSE, closeColor, 14);
         closeBtn.addView(closeIcon);
+        if (isAgentDriving) {
+            closeBtn.setAlpha(0.35f);
+        }
         closeBtn.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (mController == null) return;
+                if (isAgentDriving) {
+                    Toast.makeText(getContext(), "该标签页正在被Agent使用，无法关闭。", Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 boolean wasLastTab = mController.getTabs().size() <= 1;
                 mController.closeTab(tab.id);
                 if (wasLastTab) {
