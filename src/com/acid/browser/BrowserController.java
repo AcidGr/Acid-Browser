@@ -118,40 +118,98 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         public static final int CAT_ARCHIVE = 2;
         public static final int CAT_DOC = 3;
         public static final int CAT_IMAGE = 4;
+        /**
+         * Legacy bucket that used to hold both audio and video. Never returned by
+         * {@link #getCategory()} any more, but kept so old serialized records and
+         * external callers still resolve to a valid value.
+         */
+        @Deprecated
         public static final int CAT_MEDIA = 5;
+        public static final int CAT_VIDEO = 6;
+        public static final int CAT_AUDIO = 7;
+        public static final int CAT_OTHER = 8;
 
+        private static final String[] VIDEO_EXT = {
+            ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".m4v", ".3gp", ".wmv", ".mpg", ".mpeg", ".ts"
+        };
+        private static final String[] AUDIO_EXT = {
+            ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".amr", ".mid", ".midi"
+        };
+        private static final String[] ARCHIVE_EXT = {
+            ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst", ".tgz", ".tbz", ".lz", ".lzma"
+        };
+        private static final String[] DOC_EXT = {
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv",
+            ".json", ".xml", ".md", ".log", ".rtf", ".epub", ".html", ".htm"
+        };
+        private static final String[] IMAGE_EXT = {
+            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".heic", ".heif", ".avif", ".ico"
+        };
+
+        private static boolean matches(String name, String[] exts) {
+            for (String e : exts) {
+                if (name.endsWith(e)) return true;
+            }
+            return false;
+        }
+
+        /**
+         * Classifies the download by extension first, then MIME type, and finally
+         * falls back to {@link #CAT_OTHER}. Unknown files used to be reported as
+         * documents, which made .exe / .iso / .bin show up under "文档".
+         */
         public int getCategory() {
-            String name = fileName != null ? fileName.toLowerCase() : "";
-            String mime = mimeType != null ? mimeType.toLowerCase() : "";
+            String name = fileName != null ? fileName.toLowerCase(java.util.Locale.US) : "";
+            String mime = mimeType != null ? mimeType.toLowerCase(java.util.Locale.US) : "";
 
-            if (name.endsWith(".apk") || name.endsWith(".apks") || name.endsWith(".xapk") || mime.contains("package-archive")) {
+            if (name.endsWith(".apk") || name.endsWith(".apks") || name.endsWith(".xapk")
+                || name.endsWith(".apkm") || mime.contains("package-archive")) {
                 return CAT_APK;
             }
-            if (name.endsWith(".zip") || name.endsWith(".rar") || name.endsWith(".7z") ||
-                name.endsWith(".tar") || name.endsWith(".gz") || name.endsWith(".bz2") ||
-                name.endsWith(".xz") || mime.contains("zip") || mime.contains("compressed") || mime.contains("tar")) {
+            if (matches(name, ARCHIVE_EXT) || mime.contains("zip") || mime.contains("compressed")
+                || mime.contains("x-tar") || mime.contains("x-7z") || mime.contains("x-rar")) {
                 return CAT_ARCHIVE;
             }
-            if (name.endsWith(".pdf") || name.endsWith(".doc") || name.endsWith(".docx") ||
-                name.endsWith(".xls") || name.endsWith(".xlsx") || name.endsWith(".ppt") ||
-                name.endsWith(".pptx") || name.endsWith(".txt") || name.endsWith(".csv") ||
-                name.endsWith(".json") || name.endsWith(".xml") || name.endsWith(".md") ||
-                mime.contains("pdf") || mime.contains("document") || mime.contains("sheet") || mime.contains("text/")) {
+            if (matches(name, DOC_EXT) || mime.contains("pdf") || mime.contains("document")
+                || mime.contains("sheet") || mime.contains("presentation") || mime.startsWith("text/")) {
                 return CAT_DOC;
             }
-            if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") ||
-                name.endsWith(".webp") || name.endsWith(".gif") || name.endsWith(".bmp") ||
-                name.endsWith(".svg") || mime.startsWith("image/")) {
+            if (matches(name, IMAGE_EXT) || mime.startsWith("image/")) {
                 return CAT_IMAGE;
             }
-            if (name.endsWith(".mp4") || name.endsWith(".mkv") || name.endsWith(".avi") ||
-                name.endsWith(".mov") || name.endsWith(".webm") || name.endsWith(".flv") ||
-                name.endsWith(".mp3") || name.endsWith(".wav") || name.endsWith(".flac") ||
-                name.endsWith(".m4a") || name.endsWith(".aac") || name.endsWith(".ogg") ||
-                mime.startsWith("video/") || mime.startsWith("audio/")) {
-                return CAT_MEDIA;
+            if (matches(name, VIDEO_EXT) || mime.startsWith("video/")) {
+                return CAT_VIDEO;
             }
-            return CAT_DOC;
+            if (matches(name, AUDIO_EXT) || mime.startsWith("audio/")) {
+                return CAT_AUDIO;
+            }
+            return CAT_OTHER;
+        }
+
+        /** Short human label used in the list subtitle and the filter pills. */
+        public String getCategoryLabel() {
+            switch (getCategory()) {
+                case CAT_APK: return "安装包";
+                case CAT_ARCHIVE: return "压缩包";
+                case CAT_DOC: return "文档";
+                case CAT_IMAGE: return "图片";
+                case CAT_VIDEO: return "视频";
+                case CAT_AUDIO: return "音频";
+                default: return "其它";
+            }
+        }
+
+        /** Vector glyph for the list row icon. */
+        public int getCategoryIcon() {
+            switch (getCategory()) {
+                case CAT_APK: return AcidIcons.ICON_FILE_APK;
+                case CAT_ARCHIVE: return AcidIcons.ICON_FILE_ARCHIVE;
+                case CAT_DOC: return AcidIcons.ICON_FILE_DOC;
+                case CAT_IMAGE: return AcidIcons.ICON_FILE_IMAGE;
+                case CAT_VIDEO: return AcidIcons.ICON_FILE_VIDEO;
+                case CAT_AUDIO: return AcidIcons.ICON_FILE_AUDIO;
+                default: return AcidIcons.ICON_FILE_OTHER;
+            }
         }
 
         public int getProgressPercent() {

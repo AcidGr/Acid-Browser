@@ -144,6 +144,22 @@ public class BrowserDataStore {
         }
     }
 
+    /**
+     * Rewrites the bookmark at {@code index} with a new title/url pair.
+     * EntryItem's fields are final, so the element is replaced rather than mutated.
+     *
+     * @return true when the index was valid and the list was persisted
+     */
+    public boolean updateBookmark(int index, String title, String url) {
+        if (TextUtils.isEmpty(url)) return false;
+        List<EntryItem> list = loadBookmarks();
+        if (index < 0 || index >= list.size()) return false;
+        String trimmedUrl = url.trim();
+        list.set(index, new EntryItem(TextUtils.isEmpty(title) ? trimmedUrl : title.trim(), trimmedUrl));
+        saveBookmarks(list);
+        return true;
+    }
+
     public List<EntryItem> loadHistory() {
         SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         String raw = prefs.getString(PREF_HISTORY, null);
