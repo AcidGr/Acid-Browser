@@ -34,6 +34,8 @@ public class WebAutomationDriver {
 
     public interface AutomationHost {
         BrowserController.TabSession getActiveTab();
+        BrowserController.TabSession getTargetTab();
+        boolean isTargetTabActive();
         AgentOverlayView getOverlayView();
         UserscriptManager getUserscriptManager();
         void loadUrl(String url);
@@ -107,13 +109,13 @@ public class WebAutomationDriver {
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
-                BrowserController.TabSession activeTab = mHost.getActiveTab();
-                if (activeTab == null) {
-                    ref.set("{\"ok\":false,\"error\":\"NO_ACTIVE_TAB\"}");
+                BrowserController.TabSession targetTab = mHost.getTargetTab();
+                if (targetTab == null) {
+                    ref.set("{\"ok\":false,\"error\":\"NO_TARGET_TAB\"}");
                     latch.countDown();
                     return;
                 }
-                activeTab.webView.evaluateJavascript(jsExpr, new ValueCallback<String>() {
+                targetTab.webView.evaluateJavascript(jsExpr, new ValueCallback<String>() {
                     @Override
                     public void onReceiveValue(String value) {
                         ref.set(unescapeEvaluateResult(value));
@@ -379,7 +381,7 @@ public class WebAutomationDriver {
                 @Override
                 public void run() {
                     try {
-                        BrowserController.TabSession tab = mHost.getActiveTab();
+                        BrowserController.TabSession tab = mHost.getTargetTab();
                         if (tab != null && tab.webView != null) {
                             partial.put("url", tab.webView.getUrl() != null ? tab.webView.getUrl() : tab.url);
                             partial.put("title", tab.webView.getTitle() != null ? tab.webView.getTitle() : tab.title);
@@ -422,7 +424,7 @@ public class WebAutomationDriver {
                         mMainHandler.post(new Runnable() {
                             @Override
                             public void run() {
-                                BrowserController.TabSession tab = mHost.getActiveTab();
+                                BrowserController.TabSession tab = mHost.getTargetTab();
                                 if (tab != null && tab.webView != null) {
                                     tab.webView.evaluateJavascript(bridgeJs, null);
                                 }
@@ -710,7 +712,7 @@ public class WebAutomationDriver {
                 mMainHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        BrowserController.TabSession activeTab = mHost.getActiveTab();
+                        BrowserController.TabSession activeTab = mHost.getTargetTab();
                         loadingRef.set(activeTab != null && activeTab.isLoading);
                         stepLatch.countDown();
                     }
@@ -762,7 +764,8 @@ public class WebAutomationDriver {
             final String matchedBy = prep.optString("matchedBy", "ref");
             final JSONObject hit = prep.optJSONObject("hit") != null ? prep.optJSONObject("hit") : new JSONObject();
 
-            if (useNativeMotionEvent) {
+            boolean isForeground = mHost.isTargetTabActive();
+            if (useNativeMotionEvent && isForeground) {
                 final CountDownLatch tapLatch = new CountDownLatch(1);
                 final AtomicReference<Float> viewXRef = new AtomicReference<Float>(0f);
                 final AtomicReference<Float> viewYRef = new AtomicReference<Float>(0f);
@@ -770,7 +773,7 @@ public class WebAutomationDriver {
                 mMainHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        BrowserController.TabSession activeTab = mHost.getActiveTab();
+                        BrowserController.TabSession activeTab = mHost.getTargetTab();
                         if (activeTab == null) {
                             tapLatch.countDown();
                             return;
@@ -786,7 +789,7 @@ public class WebAutomationDriver {
                         viewYRef.set(vy);
 
                         AgentOverlayView overlay = mHost.getOverlayView();
-                        if (overlay != null) {
+                        if (overlay != null && mHost.isTargetTabActive()) {
                             overlay.showClickPulse(vx, vy, "[" + targetRef + "] " + label);
                         }
                         dispatchHardwareMotionTap(wv, vx, vy);
@@ -889,16 +892,17 @@ public class WebAutomationDriver {
 
     public JSONObject clickCoordinateSync(final float viewX, final float viewY) {
         final CountDownLatch latch = new CountDownLatch(1);
+        final boolean isForeground = mHost.isTargetTabActive();
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
-                BrowserController.TabSession activeTab = mHost.getActiveTab();
-                if (activeTab != null) {
+                BrowserController.TabSession targetTab = mHost.getTargetTab();
+                if (targetTab != null && isForeground) {
                     AgentOverlayView overlay = mHost.getOverlayView();
                     if (overlay != null) {
                         overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
                     }
-                    dispatchHardwareMotionTap(activeTab.webView, viewX, viewY);
+                    dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
                 }
                 latch.countDown();
             }
@@ -909,11 +913,14 @@ public class WebAutomationDriver {
         } catch (Exception e) {
             Log.w(TAG, "Coordinate click wait interrupted", e);
         }
-        mHost.emitLog("[CLICK] Coordinate (" + Math.round(viewX) + ", " + Math.round(viewY) + ")");
+        if (!isForeground) {
+            evaluateJsSync("(function(){ var el = document.elementFromPoint(" + viewX + "," + viewY + "); if (el) el.click(); })()", 2000);
+        }
+        mHost.emitLog("[CLICK] Coordinate (" + Math.round(viewX) + ", " + Math.round(viewY) + ")" + (!isForeground ? " [bg-elementFromPoint]" : ""));
         JSONObject res = new JSONObject();
         try {
             res.put("ok", true);
-            res.put("strategy", "ANDROID_RAW_COORDINATE");
+            res.put("strategy", isForeground ? "ANDROID_RAW_COORDINATE" : "DOM_ELEMENT_FROM_POINT");
             res.put("viewX", Math.round(viewX));
             res.put("viewY", Math.round(viewY));
         } catch (Exception e) {
@@ -1030,7 +1037,7 @@ public class WebAutomationDriver {
             @Override
             public void run() {
                 try {
-                    BrowserController.TabSession activeTab = mHost.getActiveTab();
+                    BrowserController.TabSession activeTab = mHost.getTargetTab();
                     if (activeTab != null && activeTab.webView.getWidth() > 0 && activeTab.webView.getHeight() > 0) {
                         WebView wv = activeTab.webView;
                         Bitmap bmp = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);

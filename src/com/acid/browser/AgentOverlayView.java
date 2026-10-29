@@ -26,7 +26,12 @@ public class AgentOverlayView extends View {
     public static final int MODE_AGENT = 1;
     public static final int MODE_TAKEOVER_REQUESTED = 2;
 
+    public interface TabStateProvider {
+        boolean isAgentDrivingCurrentTab();
+    }
+
     private int mControlMode = MODE_HUMAN;
+    private TabStateProvider mTabStateProvider = null;
     private final Paint mBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint mPulsePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint mLabelBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -69,6 +74,11 @@ public class AgentOverlayView extends View {
         }
     }
 
+    public void setTabStateProvider(TabStateProvider provider) {
+        mTabStateProvider = provider;
+        postInvalidateOnAnimation();
+    }
+
     public int getControlMode() {
         return mControlMode;
     }
@@ -90,15 +100,19 @@ public class AgentOverlayView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // When AI is actively driving, block accidental human touches on the WebView
+        // When AI is actively driving, block accidental human touches on the bound WebView only.
+        // If the user has switched to a different tab, let the user interact with that tab freely!
         if (mControlMode == MODE_AGENT) {
+            if (mTabStateProvider != null && !mTabStateProvider.isAgentDrivingCurrentTab()) {
+                return false; // User is browsing a different tab; pass touch through to that active tab
+            }
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 long now = SystemClock.uptimeMillis();
                 if (now - mLastToastTime > 2200) {
                     mLastToastTime = now;
                     Toast.makeText(
                         getContext(),
-                        "[AI LOCK] AI 正在操作网页，如需手动操作请点击底部 [接管]",
+                        "[AI LOCK] AI 正在操作此网页，如需手动操作请点击底部 [接管]",
                         Toast.LENGTH_SHORT
                     ).show();
                 }
@@ -117,8 +131,10 @@ public class AgentOverlayView extends View {
         int w = getWidth();
         int h = getHeight();
 
-        // 1. Draw breathing border in AGENT or TAKEOVER_REQUESTED mode
-        if (mControlMode == MODE_AGENT || mControlMode == MODE_TAKEOVER_REQUESTED) {
+        boolean isCurrentTabDriven = (mTabStateProvider == null || mTabStateProvider.isAgentDrivingCurrentTab());
+
+        // 1. Draw breathing border in AGENT (only if driving currently visible tab) or TAKEOVER_REQUESTED mode
+        if ((mControlMode == MODE_AGENT && isCurrentTabDriven) || mControlMode == MODE_TAKEOVER_REQUESTED) {
             needsMoreFrames = true;
             double phase = (now % 1800) / 1800.0 * Math.PI * 2.0;
             float alphaFactor = (float) (0.45 + 0.55 * (0.5 + 0.5 * Math.sin(phase)));
