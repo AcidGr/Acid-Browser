@@ -111,19 +111,23 @@ public class AdBlockManager {
         }
     }
 
-    public void setWorkspaceDir(File workspaceDir) {
+    public synchronized void setWorkspaceDir(File workspaceDir) {
         if (workspaceDir != null && workspaceDir.exists()) {
             File wsAdblock = new File(workspaceDir, "adblock");
             if (!wsAdblock.exists()) {
                 wsAdblock.mkdirs();
             }
             File wsCustom = new File(wsAdblock, "custom_rules.txt");
-            if (!wsCustom.exists() && mCustomRulesFile.exists()) {
+            if (!wsCustom.exists() && mCustomRulesFile != null && mCustomRulesFile.exists()) {
                 copyFile(mCustomRulesFile, wsCustom);
             }
+            boolean dirChanged = !wsAdblock.equals(mAdBlockDir);
             mAdBlockDir = wsAdblock;
             mCustomRulesFile = wsCustom;
             mSubscriptionFile = new File(wsAdblock, "subscriptions.txt");
+            if (dirChanged) {
+                loadAllRulesAsync(null);
+            }
         }
     }
 
@@ -200,15 +204,25 @@ public class AdBlockManager {
     }
 
     public void loadAllRulesAsync(final Runnable onLoaded) {
-        new Thread(new Runnable() {
+        AcidAsync.run(new AcidAsync.Task<Void>() {
             @Override
-            public void run() {
+            public Void execute() {
                 loadAllRulesSync();
+                return null;
+            }
+        }, new AcidAsync.Callback<Void>() {
+            @Override
+            public void onSuccess(Void result) {
                 if (onLoaded != null) {
-                    mMainHandler.post(onLoaded);
+                    onLoaded.run();
                 }
             }
-        }).start();
+
+            @Override
+            public void onError(Exception error) {
+                Log.w(TAG, "Failed to reload adblock rules", error);
+            }
+        });
     }
 
     public synchronized void loadAllRulesSync() {

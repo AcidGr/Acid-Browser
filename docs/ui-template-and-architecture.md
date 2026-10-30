@@ -24,13 +24,13 @@
 
 | 令牌 | 大小 | 字重与样式 | 用途 |
 |---|---|---|---|
-| `SP_SHEET_TITLE` | `16sp` | Bold, `text(dark)` | Tier-1 / Tier-2 底部弹窗顶栏主标题 |
-| `SP_DIALOG_TITLE` | `15sp` | Bold, `text(dark)` | Tier-3 模态对话框标题 |
+| `SP_SHEET_TITLE` | `17sp` | Bold, `text(dark)` | Tier-1 / Tier-2 底部弹窗顶栏主标题 |
+| `SP_DIALOG_TITLE` | `16sp` | Bold, `text(dark)` | Tier-3 模态对话框标题（高于首卡标题，低于底部弹窗顶栏） |
 | `SP_HERO` | `15sp` | Bold, `text(dark)` | 状态首卡 / 品牌首卡主标题（与列表项保持 ≥ 1sp 视觉级差） |
 | `SP_ITEM` | `14sp` | Bold, `text(dark)` | 标准设置行、列表卡片主标题 |
 | `SP_BODY` | `13sp` | Regular/Bold | 正文段落、对话框说明、输入框文字、主次按钮文字 |
-| `SP_FIELD_LABEL` | `12sp` | Bold, `icon(dark)` | 表单输入框上方标签、分段 Tab 标签 |
-| `SP_OVERLINE` | `11.5sp` | Bold, `muted(dark)`, `letterSpacing=0.03` | 卡片组外上方的分区小标题（通过字距与颜色同 `SP_FIELD_LABEL` 区分） |
+| `SP_OVERLINE` | `12.5sp` | Bold, `icon(dark)`, `letterSpacing=0.02` | 卡片组外上方的分区标题（高于卡片内 `SP_FIELD_LABEL`，消除视觉倒挂） |
+| `SP_FIELD_LABEL` | `12sp` | Bold, `muted(dark)` | 表单输入框上方标签、分段 Tab 标签 |
 | `SP_CAPTION` | `11.5sp` | Regular, `muted(dark)` | 列表副标题、URL、辅助说明文字 |
 | `SP_BADGE` | `10.5sp` | Bold / Monospace | 状态胶囊标签（`statusTag`）、代码块预览 |
 | `SP_MICRO` | `9.5sp` | Bold | 角标数字、工具状态微标签 |

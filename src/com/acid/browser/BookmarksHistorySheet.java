@@ -45,30 +45,35 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         setRootPage(buildActiveTabPage());
     }
 
-    public void showBookmarks(String currentTitle, String currentUrl) {
-        mActiveTab = TAB_BOOKMARKS;
+    @Override
+    protected void onResetToRootPage() {
+        setRootPage(buildActiveTabPage());
+    }
+
+    public void prepareTab(int tab, String currentTitle, String currentUrl) {
+        mActiveTab = tab;
         mCurrentPageTitle = currentTitle != null ? currentTitle : "";
         mCurrentPageUrl = currentUrl != null ? currentUrl : "";
+    }
+
+    public void showBookmarks(String currentTitle, String currentUrl) {
+        prepareTab(TAB_BOOKMARKS, currentTitle, currentUrl);
         setRootPage(buildActiveTabPage());
         show();
     }
 
     public void showHistory(String currentTitle, String currentUrl) {
-        mActiveTab = TAB_HISTORY;
-        mCurrentPageTitle = currentTitle != null ? currentTitle : "";
-        mCurrentPageUrl = currentUrl != null ? currentUrl : "";
+        prepareTab(TAB_HISTORY, currentTitle, currentUrl);
         setRootPage(buildActiveTabPage());
         show();
     }
 
     private SheetPage buildActiveTabPage() {
         final Context ctx = getContext();
-        final boolean isBookmarks = (mActiveTab == TAB_BOOKMARKS);
-        String pageTitle = isBookmarks ? "书签收藏" : "历史浏览";
 
-        SheetPage page = new SheetPage(pageTitle, new PageRenderer() {
+        final SheetPage page = new SheetPage("书签与历史", new PageRenderer() {
             @Override
-            public void render(LinearLayout pinned, LinearLayout container) {
+            public void render(LinearLayout pinned, final LinearLayout container) {
                 pinned.addView(AcidWidgets.segmentedTabs(
                     ctx,
                     mIsDarkMode,
@@ -80,11 +85,13 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                         public void onTabSelected(int index) {
                             if (mActiveTab != index) {
                                 mActiveTab = index;
-                                setRootPage(buildActiveTabPage());
+                                refreshActivePage();
                             }
                         }
                     }
                 ));
+                boolean isBookmarks = (mActiveTab == TAB_BOOKMARKS);
+                syncHeaderActionForActiveTab(isBookmarks);
                 renderEntriesList(
                     container,
                     isBookmarks ? mDataStore.loadBookmarks() : mDataStore.loadHistory(),
@@ -92,10 +99,14 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                 );
             }
         });
+        return page;
+    }
 
+    private void syncHeaderActionForActiveTab(boolean isBookmarks) {
+        final Context ctx = getContext();
         if (isBookmarks) {
             if (!TextUtils.isEmpty(mCurrentPageUrl)) {
-                page.withAction(AcidIcons.ICON_PLUS, "收藏当前页", new OnClickListener() {
+                setAction(AcidIcons.ICON_PLUS, "收藏当前页", 0, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
                         mDataStore.addBookmark(mCurrentPageTitle, mCurrentPageUrl);
@@ -103,18 +114,21 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                         AcidFeedback.ok(ctx, "已收藏当前网页");
                     }
                 });
+            } else {
+                hideAction();
             }
         } else {
             if (!mDataStore.loadHistory().isEmpty()) {
-                page.withAction(AcidIcons.ICON_TRASH, "清空历史", AcidTheme.COLOR_RED, new OnClickListener() {
+                setAction(AcidIcons.ICON_TRASH, "清空历史", AcidTheme.COLOR_RED, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
                         confirmClearAllHistory();
                     }
                 });
+            } else {
+                hideAction();
             }
         }
-        return page;
     }
 
     private void renderEntriesList(
@@ -132,6 +146,12 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             ));
             return;
         }
+
+        container.addView(AcidWidgets.sectionHeader(
+            ctx,
+            mIsDarkMode,
+            (isBookmarks ? "全部书签 (" : "最近浏览 (") + list.size() + ")"
+        ));
 
         for (int i = 0; i < list.size(); i++) {
             final int index = i;

@@ -44,6 +44,13 @@ public class AdBlockSheet extends AcidBottomSheetView {
         setRootPage(buildAdBlockPage());
     }
 
+    @Override
+    protected void onResetToRootPage() {
+        mDraftSubUrl = null;
+        mDraftCustomRules = null;
+        setRootPage(buildAdBlockPage());
+    }
+
     public void showAdBlock() {
         mDraftSubUrl = null;
         mDraftCustomRules = null;

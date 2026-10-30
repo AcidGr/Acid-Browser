@@ -7,9 +7,16 @@ cd "$SCRIPT_DIR"
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/lib/android-sdk}"
 ANDROID_JAR="${ANDROID_JAR:-$ANDROID_SDK_ROOT/platforms/android-23/android.jar}"
 
-if [ ! -d "build/classes" ]; then
-    echo "[AcidTests] Production classes missing; compiling sources first..."
-    SKIP_TESTS=1 ./build.sh >/dev/null
+if [ ! -d "build/classes" ] || [ "${FROM_BUILD_SH:-0}" != "1" ]; then
+    mkdir -p build/gen/com/acid/browser build/classes
+    if [ ! -f "build/gen/com/acid/browser/BuildInfo.java" ]; then
+        SKIP_TESTS=1 ./build.sh >/dev/null
+    else
+        javac -proc:none -encoding UTF-8 -source 1.8 -target 1.8 -Xlint:-options \
+            -cp "$ANDROID_JAR" \
+            $(find src build/gen -name "*.java") \
+            -d build/classes
+    fi
 fi
 
 rm -rf build/test-stubs build/test-classes

@@ -14,6 +14,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
 
     public interface OnSettingsActionListener {
         void onOpenModelConfig();
+        void onOpenMcp();
         void onToggleMcpServer();
         void onOpenAgentFloatingWindow();
         void onOpenAdBlock();
@@ -40,6 +41,11 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
 
     public void setMcpRunning(boolean running) {
         mIsMcpRunning = running;
+    }
+
+    @Override
+    protected void onResetToRootPage() {
+        setRootPage(buildMainPage());
     }
 
     public void showSettings() {
@@ -203,13 +209,13 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "远程网关与沙盒存储"));
                 container.addView(AcidWidgets.groupCard(
                     ctx, mIsDarkMode,
-                    AcidWidgets.switchRow(
+                    AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_TERMINAL, accent,
-                        AcidSettings.MCP_ENABLED.title, null, mIsMcpRunning,
-                        new AcidWidgets.OnToggleListener() {
-                            @Override
-                            public void onToggle(boolean isChecked) {
-                                if (mListener != null) mListener.onToggleMcpServer();
+                        "MCP 服务与认证", "查看本机/局域网地址、配置 Bearer 令牌",
+                        mIsMcpRunning ? "运行中" : "已停止", true,
+                        new OnClickListener() {
+                            @Override public void onClick(View v) {
+                                if (mListener != null) mListener.onOpenMcp();
                             }
                         }
                     ),

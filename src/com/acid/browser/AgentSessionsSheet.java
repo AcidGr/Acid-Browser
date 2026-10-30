@@ -27,6 +27,11 @@ public class AgentSessionsSheet extends AcidBottomSheetView {
         setRootPage(buildSessionsPage());
     }
 
+    @Override
+    protected void onResetToRootPage() {
+        setRootPage(buildSessionsPage());
+    }
+
     public void showSessions() {
         if (mAgentLoop == null) return;
         setRootPage(buildSessionsPage());
@@ -35,7 +40,9 @@ public class AgentSessionsSheet extends AcidBottomSheetView {
 
     @Override
     public void show() {
-        setRootPage(buildSessionsPage());
+        if (getPageDepth() == 0) {
+            setRootPage(buildSessionsPage());
+        }
         super.show();
     }
 

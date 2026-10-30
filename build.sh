@@ -51,7 +51,7 @@ javac -proc:none -encoding UTF-8 -source 1.8 -target 1.8 -Xlint:-options \
     -d build/classes
 
 if [ "${SKIP_TESTS:-0}" != "1" ] && [ -x "./test.sh" ]; then
-    ./test.sh
+    FROM_BUILD_SH=1 ./test.sh
 fi
 
 echo "[Acid-broswer] 3. Converting classes to classes.dex (minSdk=24)..."

@@ -338,7 +338,20 @@ public final class AcidSettings {
     ));
 
     public static final BoolKey MCP_ENABLED = register(new BoolKey(
-        "mcp_server_enabled", "mcp_server_enabled", true, "本地 MCP 服务", true, true
+        "mcp_server_enabled", "mcp_server_enabled", false, "本地 MCP 服务", true, true
+    ));
+
+    public static final BoolKey MCP_AUTH_ENABLED = register(new BoolKey(
+        "mcp_auth_enabled", "mcp_auth_enabled", true, "MCP 令牌认证", true, false
+    ));
+
+    public static final BoolKey MCP_LAN_ENABLED = register(new BoolKey(
+        "mcp_lan_enabled", "mcp_lan_enabled", false, "MCP 允许局域网连接", true, false
+    ));
+
+    // Internal persisted state (not exported to settings.json)
+    public static final StringKey MCP_AUTH_TOKEN = register(new StringKey(
+        "mcp_auth_token", null, "", "MCP 访问令牌", false, true
     ));
 
     // Internal persisted state (not exported to settings.json)

@@ -8,11 +8,15 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -48,6 +52,7 @@ public class HttpControlServer {
 
     private ServerSocket mServerSocket;
     private volatile boolean mRunning = false;
+    private volatile boolean mLanBound = false;
 
     // Active SSE client sessions
     private final ConcurrentHashMap<String, SseSession> mSseSessions = new ConcurrentHashMap<String, SseSession>();
@@ -97,6 +102,45 @@ public class HttpControlServer {
         return mRunning;
     }
 
+    public boolean isLanBound() {
+        return mLanBound;
+    }
+
+    public int getPort() {
+        return mPort;
+    }
+
+    /**
+     * Resolves the primary local IPv4 address of the device on Wi-Fi/Ethernet.
+     */
+    public static String getLocalIpAddress() {
+        try {
+            List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
+            for (NetworkInterface intf : interfaces) {
+                if (!intf.isUp() || intf.isLoopback()) continue;
+                String name = intf.getName().toLowerCase();
+                if (name.startsWith("wlan") || name.startsWith("eth") || name.startsWith("en") || name.startsWith("ap")) {
+                    List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
+                    for (InetAddress addr : addrs) {
+                        if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
+                            return addr.getHostAddress();
+                        }
+                    }
+                }
+            }
+            for (NetworkInterface intf : interfaces) {
+                if (!intf.isUp() || intf.isLoopback()) continue;
+                List<InetAddress> addrs = Collections.list(intf.getInetAddresses());
+                for (InetAddress addr : addrs) {
+                    if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
+                        return addr.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     public synchronized void start() {
         if (mRunning) return;
         mRunning = true;
@@ -104,8 +148,13 @@ public class HttpControlServer {
             @Override
             public void run() {
                 try {
-                    mServerSocket = new ServerSocket(mPort, 32, InetAddress.getByName("127.0.0.1"));
-                    mController.emitLog("[MCP] Acid MCP Server listening on 127.0.0.1:" + mPort);
+                    boolean lanEnabled = mController != null && mController.getDataStore() != null
+                        && mController.getDataStore().isMcpLanEnabled();
+                    mLanBound = lanEnabled;
+                    InetAddress bindAddr = lanEnabled ? InetAddress.getByName("0.0.0.0") : InetAddress.getByName("127.0.0.1");
+                    mServerSocket = new ServerSocket(mPort, 32, bindAddr);
+                    mController.emitLog("[MCP] Acid MCP Server listening on " + (lanEnabled ? "0.0.0.0" : "127.0.0.1") + ":" + mPort
+                        + (lanEnabled ? " (LAN enabled)" : " (Localhost only)"));
                     while (mRunning) {
                         final Socket client = mServerSocket.accept();
                         mPool.execute(new Runnable() {
@@ -217,6 +266,28 @@ public class HttpControlServer {
                 return;
             }
 
+            // 0. Authentication Verification
+            boolean authEnabled = mController != null && mController.getDataStore() != null
+                && mController.getDataStore().isMcpAuthEnabled();
+            if (authEnabled) {
+                String expectedToken = mController.getDataStore().getOrCreateMcpToken();
+                String clientToken = null;
+                String authHeader = headers.get("authorization");
+                if (authHeader != null && authHeader.toLowerCase().startsWith("bearer ")) {
+                    clientToken = authHeader.substring(7).trim();
+                } else if (headers.containsKey("x-acid-mcp-token")) {
+                    clientToken = headers.get("x-acid-mcp-token").trim();
+                } else if (query.containsKey("token")) {
+                    clientToken = query.get("token").trim();
+                }
+
+                if (clientToken == null || !clientToken.equals(expectedToken)) {
+                    sendUnauthorizedResponse(os);
+                    socket.close();
+                    return;
+                }
+            }
+
             // Read request body if Content-Length present
             byte[] bodyBytes = new byte[0];
             if (headers.containsKey("content-length")) {
@@ -286,9 +357,28 @@ public class HttpControlServer {
         String resp = "HTTP/1.1 204 No Content\r\n" +
             "Access-Control-Allow-Origin: *\r\n" +
             "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
-            "Access-Control-Allow-Headers: Content-Type, Authorization, Accept\r\n" +
+            "Access-Control-Allow-Headers: Content-Type, Authorization, Accept, X-Acid-Mcp-Token\r\n" +
             "Access-Control-Max-Age: 86400\r\n\r\n";
         os.write(resp.getBytes(StandardCharsets.US_ASCII));
+        os.flush();
+    }
+
+    private void sendUnauthorizedResponse(OutputStream os) throws Exception {
+        JSONObject err = new JSONObject();
+        err.put("jsonrpc", "2.0");
+        JSONObject errDetail = new JSONObject();
+        errDetail.put("code", -32000);
+        errDetail.put("message", "Unauthorized: Missing or invalid Bearer token. Please configure 'Authorization: Bearer <token>' header or '?token=<token>' query parameter.");
+        err.put("error", errDetail);
+
+        byte[] payload = err.toString().getBytes(StandardCharsets.UTF_8);
+        String resp = "HTTP/1.1 401 Unauthorized\r\n" +
+            "Content-Type: application/json; charset=utf-8\r\n" +
+            "Content-Length: " + payload.length + "\r\n" +
+            "WWW-Authenticate: Bearer realm=\"AcidMcpServer\"\r\n" +
+            "Connection: close\r\n\r\n";
+        os.write(resp.getBytes(StandardCharsets.US_ASCII));
+        os.write(payload);
         os.flush();
     }
 
@@ -313,6 +403,17 @@ public class HttpControlServer {
         status.put("protocol", "Model Context Protocol (MCP)");
         status.put("mcp_spec_version", MCP_PROTOCOL_VERSION);
         status.put("active_sse_sessions", mSseSessions.size());
+        status.put("auth_required", mController != null && mController.getDataStore() != null && mController.getDataStore().isMcpAuthEnabled());
+        status.put("lan_bound", mLanBound);
+
+        String localEndpoint = "http://127.0.0.1:" + mPort + "/mcp";
+        status.put("local_endpoint", localEndpoint);
+
+        String lanIp = getLocalIpAddress();
+        if (lanIp != null) {
+            status.put("lan_ip", lanIp);
+            status.put("lan_endpoint", "http://" + lanIp + ":" + mPort + "/mcp");
+        }
 
         JSONObject endpoints = new JSONObject();
         endpoints.put("sse_transport", "GET /sse");

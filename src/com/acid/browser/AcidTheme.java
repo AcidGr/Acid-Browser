@@ -31,20 +31,20 @@ public final class AcidTheme {
     // 1. Semantic Typography Scale (in SP) — Visually Distinct Roles
     // =====================================================================
 
-    /** L1/L2 BottomSheet top-bar title (16sp Bold). */
-    public static final float SP_SHEET_TITLE = 16f;
-    /** L3 Modal Dialog title (15sp Bold) — visually subordinate to Sheet Title. */
-    public static final float SP_DIALOG_TITLE = 15f;
+    /** L1/L2 BottomSheet top-bar title (17sp Bold). */
+    public static final float SP_SHEET_TITLE = 17f;
+    /** L3 Modal Dialog title (16sp Bold) — visually subordinate to Sheet Title, above Hero. */
+    public static final float SP_DIALOG_TITLE = 16f;
     /** Hero / status card lead headline (15sp Bold) — full 1sp above row items. */
     public static final float SP_HERO = 15f;
     /** Standard list item / settings row title (14sp Bold). */
     public static final float SP_ITEM = 14f;
     /** Body copy, dialog message, input field & button text (13sp Regular/Bold). */
     public static final float SP_BODY = 13f;
-    /** Form field label above inputs & segmented tab label (12sp Bold). */
+    /** Section header placed outside above a card group (12.5sp Bold, above inner field labels). */
+    public static final float SP_OVERLINE = 12.5f;
+    /** Form field label above inputs & segmented tab label (12sp Bold, muted). */
     public static final float SP_FIELD_LABEL = 12f;
-    /** Section overline header placed outside above a card group (11.5sp Bold, muted, tracked). */
-    public static final float SP_OVERLINE = 11.5f;
     /** Secondary subtitle, URL, metadata & helper hint (11.5sp Regular, muted). */
     public static final float SP_CAPTION = 11.5f;
     /** Compact status pill, tag & code preview text (10.5sp Bold/Monospace). */

@@ -6,12 +6,25 @@ to Acid Browser's native MCP Server running on Android (http://127.0.0.1:3090/mc
 """
 
 import sys
+import os
 import json
 import urllib.request
 
-MCP_ENDPOINT = "http://127.0.0.1:3090/mcp"
+MCP_ENDPOINT = os.environ.get("ACID_MCP_ENDPOINT", "http://127.0.0.1:3090/mcp")
+MCP_TOKEN = os.environ.get("ACID_MCP_TOKEN", "")
+
+# Parse simple CLI args: --token <token> or --endpoint <url>
+for i in range(1, len(sys.argv)):
+    if sys.argv[i] == "--token" and i + 1 < len(sys.argv):
+        MCP_TOKEN = sys.argv[i + 1]
+    elif sys.argv[i] == "--endpoint" and i + 1 < len(sys.argv):
+        MCP_ENDPOINT = sys.argv[i + 1]
 
 def main():
+    headers = {'Content-Type': 'application/json'}
+    if MCP_TOKEN:
+        headers['Authorization'] = f'Bearer {MCP_TOKEN}'
+
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -24,7 +37,7 @@ def main():
             req = urllib.request.Request(
                 MCP_ENDPOINT,
                 data=json.dumps(req_data).encode('utf-8'),
-                headers={'Content-Type': 'application/json'}
+                headers=headers
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp_text = resp.read().decode('utf-8')

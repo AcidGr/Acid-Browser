@@ -522,6 +522,31 @@ public class BrowserDataStore {
     public boolean isMcpServerEnabled() { return get(AcidSettings.MCP_ENABLED).booleanValue(); }
     public void setMcpServerEnabled(boolean enabled) { set(AcidSettings.MCP_ENABLED, Boolean.valueOf(enabled)); }
 
+    public boolean isMcpAuthEnabled() { return get(AcidSettings.MCP_AUTH_ENABLED).booleanValue(); }
+    public void setMcpAuthEnabled(boolean enabled) { set(AcidSettings.MCP_AUTH_ENABLED, Boolean.valueOf(enabled)); }
+
+    public boolean isMcpLanEnabled() { return get(AcidSettings.MCP_LAN_ENABLED).booleanValue(); }
+    public void setMcpLanEnabled(boolean enabled) { set(AcidSettings.MCP_LAN_ENABLED, Boolean.valueOf(enabled)); }
+
+    public synchronized String getOrCreateMcpToken() {
+        String token = get(AcidSettings.MCP_AUTH_TOKEN);
+        if (token == null || token.trim().isEmpty()) {
+            token = generateNewMcpToken();
+        }
+        return token;
+    }
+
+    public synchronized String generateNewMcpToken() {
+        String token = java.util.UUID.randomUUID().toString().replace("-", "")
+            + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        set(AcidSettings.MCP_AUTH_TOKEN, token);
+        return token;
+    }
+
+    public void setMcpToken(String token) {
+        set(AcidSettings.MCP_AUTH_TOKEN, token != null ? token.trim() : "");
+    }
+
     // =========================================================================
     // Workspace & Browsing Data Cleanup Service
     // =========================================================================
