@@ -24,6 +24,8 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     private final View mScrim;
     private final LinearLayout mCardLayout;
     private final View mHandle;
+    private final LinearLayout mBtnBackBox;
+    private final AcidIcons.SvgIconView mBtnBackIcon;
     private final TextView mTitleView;
     private final AcidIcons.BadgeButton mBtnAction;
     private final AcidIcons.SvgIconView mBtnCloseIcon;
@@ -64,10 +66,21 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         hLp.bottomMargin = AcidTheme.dp(context, 10);
         mCardLayout.addView(mHandle, hLp);
 
-        // Header Row: [Title] ... [Action Button] [Close Button]
+        // Header Row: [Back Button] [Title] ... [Action Button] [Close Button]
         LinearLayout head = new LinearLayout(context);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
+
+        mBtnBackBox = new LinearLayout(context);
+        mBtnBackBox.setGravity(Gravity.CENTER);
+        int padBack = AcidTheme.dp(context, 4);
+        mBtnBackBox.setPadding(padBack, padBack, padBack, padBack);
+        mBtnBackIcon = new AcidIcons.SvgIconView(context, AcidIcons.ICON_BACK, AcidTheme.LIGHT_MUTED, 18);
+        mBtnBackBox.addView(mBtnBackIcon);
+        mBtnBackBox.setVisibility(View.GONE);
+        LinearLayout.LayoutParams backLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        backLp.rightMargin = AcidTheme.dp(context, 8);
+        head.addView(mBtnBackBox, backLp);
 
         mTitleView = new TextView(context);
         mTitleView.setText("");
@@ -130,6 +143,16 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mTitleView.setText(title != null ? title : "");
     }
 
+    public void setHeaderNavigation(boolean showBack, OnClickListener backListener) {
+        if (showBack) {
+            mBtnBackBox.setVisibility(View.VISIBLE);
+            mBtnBackBox.setOnClickListener(backListener);
+        } else {
+            mBtnBackBox.setVisibility(View.GONE);
+            mBtnBackBox.setOnClickListener(null);
+        }
+    }
+
     public void setAction(int iconId, String text, int color, OnClickListener listener) {
         mBtnAction.setVisibility(View.VISIBLE);
         mBtnAction.update(iconId, text, color);
@@ -187,6 +210,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mCardLayout.setBackground(AcidTheme.topRoundedSheetBg(getContext(), bar, 16));
         mTitleView.setTextColor(text);
         mBtnCloseIcon.setColor(muted);
+        mBtnBackIcon.setColor(muted);
         mHandle.setBackground(AcidTheme.pillBg(
             getContext(),
             AcidTheme.handle(isDark),
