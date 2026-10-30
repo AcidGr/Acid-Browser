@@ -16,6 +16,9 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Data repository for browser bookmarks, browsing history, and global user preferences.
@@ -87,11 +90,20 @@ public class BrowserDataStore {
         void onSettingsChanged();
     }
 
+    public interface CallbackDispatcher {
+        void dispatch(Runnable action);
+    }
+
     private final Context mContext;
     private final SharedPreferences mPrimaryPrefsOverride;
     private final SharedPreferences mLegacyPrefsOverride;
+    private final Map<AcidSettings.SettingKey<?>, CopyOnWriteArrayList<AcidSettings.KeyObserver<?>>> mKeyObservers =
+        new ConcurrentHashMap<AcidSettings.SettingKey<?>, CopyOnWriteArrayList<AcidSettings.KeyObserver<?>>>();
+    private final Map<AcidSettings.BoolKey, StateSource.BoolState> mBoolStateCache =
+        new ConcurrentHashMap<AcidSettings.BoolKey, StateSource.BoolState>();
     private File mSettingsJsonFile = null;
     private OnSettingsChangedListener mSettingsChangedListener = null;
+    private CallbackDispatcher mDispatcher = null;
     private FileObserver mFileObserver = null;
     private volatile long mLastSelfSaveTime = 0;
 
@@ -160,6 +172,18 @@ public class BrowserDataStore {
         mSettingsChangedListener = l;
     }
 
+    public void setCallbackDispatcher(CallbackDispatcher dispatcher) {
+        mDispatcher = dispatcher;
+    }
+
+    private void dispatchCallback(Runnable action) {
+        if (mDispatcher != null) {
+            mDispatcher.dispatch(action);
+        } else {
+            action.run();
+        }
+    }
+
     public File getSettingsJsonFile() {
         return mSettingsJsonFile;
     }
@@ -173,58 +197,153 @@ public class BrowserDataStore {
         }
     }
 
-    public static String searchEngineToString(int idx) {
-        switch (idx) {
-            case SEARCH_GOOGLE: return "google";
-            case SEARCH_BAIDU: return "baidu";
-            case SEARCH_BING: return "bing";
-            case SEARCH_DUCKDUCKGO: return "duckduckgo";
-            case SEARCH_CUSTOM: return "custom";
-            default: return "google";
+    // =========================================================================
+    // Generic Declarative Settings Accessors & Reactive State Bindings
+    // =========================================================================
+
+    public <T> T get(AcidSettings.SettingKey<T> key) {
+        return key.read(prefs(), legacyPrefs());
+    }
+
+    public <T> boolean set(final AcidSettings.SettingKey<T> key, T value) {
+        final T sanitized = key.sanitize(value);
+        T previous = get(key);
+        boolean changed = (previous == null) ? (sanitized != null) : !previous.equals(sanitized);
+
+        SharedPreferences.Editor ed = prefs().edit();
+        key.write(ed, sanitized);
+        ed.apply();
+
+        if (key.exportToJson) {
+            saveToJsonFile();
         }
+        if (changed) {
+            notifyKeyObservers(key, sanitized);
+        }
+        return changed;
+    }
+
+    public <T> void observe(AcidSettings.SettingKey<T> key, AcidSettings.KeyObserver<T> observer) {
+        if (key == null || observer == null) return;
+        CopyOnWriteArrayList<AcidSettings.KeyObserver<?>> list = mKeyObservers.get(key);
+        if (list == null) {
+            CopyOnWriteArrayList<AcidSettings.KeyObserver<?>> created =
+                new CopyOnWriteArrayList<AcidSettings.KeyObserver<?>>();
+            CopyOnWriteArrayList<AcidSettings.KeyObserver<?>> existing = mKeyObservers.putIfAbsent(key, created);
+            list = existing != null ? existing : created;
+        }
+        if (!list.contains(observer)) {
+            list.add(observer);
+        }
+    }
+
+    public <T> void unobserve(AcidSettings.SettingKey<T> key, AcidSettings.KeyObserver<T> observer) {
+        if (key == null || observer == null) return;
+        CopyOnWriteArrayList<AcidSettings.KeyObserver<?>> list = mKeyObservers.get(key);
+        if (list != null) {
+            list.remove(observer);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void notifyKeyObservers(final AcidSettings.SettingKey<T> key, final T newVal) {
+        final CopyOnWriteArrayList<AcidSettings.KeyObserver<?>> list = mKeyObservers.get(key);
+        if (list == null || list.isEmpty()) return;
+        dispatchCallback(new Runnable() {
+            @Override
+            public void run() {
+                for (AcidSettings.KeyObserver<?> raw : list) {
+                    ((AcidSettings.KeyObserver<T>) raw).onSettingChanged(newVal);
+                }
+            }
+        });
+    }
+
+    /**
+     * Returns a cached {@link StateSource.BoolState} view over a persisted {@link AcidSettings.BoolKey}
+     * so UI switches and menu tiles bind directly to settings without manual listener glue.
+     */
+    public StateSource.BoolState boolState(final AcidSettings.BoolKey key) {
+        StateSource.BoolState cached = mBoolStateCache.get(key);
+        if (cached != null) return cached;
+
+        final CopyOnWriteArrayList<StateSource.Observer> stateObservers =
+            new CopyOnWriteArrayList<StateSource.Observer>();
+
+        observe(key, new AcidSettings.KeyObserver<Boolean>() {
+            @Override
+            public void onSettingChanged(Boolean newValue) {
+                boolean b = newValue != null && newValue.booleanValue();
+                for (StateSource.Observer obs : stateObservers) {
+                    obs.onChanged(b);
+                }
+            }
+        });
+
+        StateSource.BoolState created = new StateSource.BoolState() {
+            @Override
+            public boolean get() {
+                return BrowserDataStore.this.get(key).booleanValue();
+            }
+
+            @Override
+            public void set(boolean value) {
+                BrowserDataStore.this.set(key, Boolean.valueOf(value));
+            }
+
+            @Override
+            public void toggle() {
+                set(!get());
+            }
+
+            @Override
+            public void observe(StateSource.Observer observer) {
+                if (observer != null && !stateObservers.contains(observer)) {
+                    stateObservers.add(observer);
+                }
+            }
+
+            @Override
+            public void unobserve(StateSource.Observer observer) {
+                if (observer != null) {
+                    stateObservers.remove(observer);
+                }
+            }
+        };
+        StateSource.BoolState race = mBoolStateCache.putIfAbsent(key, created);
+        return race != null ? race : created;
+    }
+
+    public static String searchEngineToString(int idx) {
+        return AcidSettings.SEARCH_ENGINE.indexToCode(idx);
     }
 
     public static int searchEngineFromString(String str) {
-        if (str == null) return SEARCH_GOOGLE;
-        str = str.trim().toLowerCase();
-        if ("baidu".equals(str)) return SEARCH_BAIDU;
-        if ("bing".equals(str)) return SEARCH_BING;
-        if ("duckduckgo".equals(str) || "ddg".equals(str)) return SEARCH_DUCKDUCKGO;
-        if ("custom".equals(str)) return SEARCH_CUSTOM;
-        return SEARCH_GOOGLE;
+        return AcidSettings.SEARCH_ENGINE.codeToIndex(str);
     }
 
     public static String homeTypeToString(int type) {
-        switch (type) {
-            case HOME_ACID: return "acid";
-            case HOME_BLANK: return "blank";
-            case HOME_CUSTOM: return "custom";
-            default: return "acid";
-        }
+        return AcidSettings.HOME_TYPE.indexToCode(type);
     }
 
     public static int homeTypeFromString(String str) {
-        if (str == null) return HOME_ACID;
-        str = str.trim().toLowerCase();
-        if ("blank".equals(str) || "about:blank".equals(str)) return HOME_BLANK;
-        if ("custom".equals(str)) return HOME_CUSTOM;
-        return HOME_ACID;
+        return AcidSettings.HOME_TYPE.codeToIndex(str);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void exportSingleKey(JSONObject out, AcidSettings.SettingKey<T> key) throws Exception {
+        key.writeToJson(out, get(key));
     }
 
     public JSONObject exportToJson() {
         JSONObject o = new JSONObject();
         try {
-            o.put("search_engine", searchEngineToString(getSearchEngineIndex()));
-            o.put("search_engine_custom_url", getCustomSearchEngineUrl());
-            o.put("home_type", homeTypeToString(getHomeType()));
-            o.put("home_custom_url", getCustomHomeUrl());
-            o.put("block_images", isBlockImagesEnabled());
-            o.put("do_not_track", isDoNotTrackEnabled());
-            o.put("web_debugging", isWebDebuggingEnabled());
-            o.put("clear_on_exit", isClearOnExit());
-            o.put("dark_mode", isDarkMode());
-            o.put("adblock_enabled", isAdBlockEnabled());
-            o.put("mcp_server_enabled", isMcpServerEnabled());
+            for (int i = 0; i < AcidSettings.ALL_KEYS.size(); i++) {
+                AcidSettings.SettingKey<?> k = AcidSettings.ALL_KEYS.get(i);
+                if (k.exportToJson) {
+                    exportSingleKey(o, k);
+                }
+            }
         } catch (Exception e) {
             Log.w(TAG, "Failed to export settings to JSON", e);
         }
@@ -246,6 +365,33 @@ public class BrowserDataStore {
         }
     }
 
+    private static final class ChangedKeyEntry<T> {
+        final AcidSettings.SettingKey<T> key;
+        final T newValue;
+
+        ChangedKeyEntry(AcidSettings.SettingKey<T> key, T newValue) {
+            this.key = key;
+            this.newValue = newValue;
+        }
+
+        void notifyOn(BrowserDataStore store) {
+            store.notifyKeyObservers(key, newValue);
+        }
+    }
+
+    private <T> ChangedKeyEntry<T> stageKeyFromJson(
+        JSONObject json,
+        SharedPreferences.Editor ed,
+        AcidSettings.SettingKey<T> key
+    ) throws Exception {
+        if (!key.exportToJson || !json.has(key.jsonKey)) return null;
+        T oldVal = get(key);
+        T nextVal = key.sanitize(key.parseFromJson(json.get(key.jsonKey)));
+        key.write(ed, nextVal);
+        boolean changed = (oldVal == null) ? (nextVal != null) : !oldVal.equals(nextVal);
+        return changed ? new ChangedKeyEntry<T>(key, nextVal) : null;
+    }
+
     public boolean reloadFromJsonFile() {
         if (mSettingsJsonFile == null || !mSettingsJsonFile.exists()) return false;
         try {
@@ -261,53 +407,27 @@ public class BrowserDataStore {
             JSONObject o = new JSONObject(content);
 
             SharedPreferences.Editor ed = prefs().edit();
-            if (o.has("search_engine")) {
-                Object se = o.get("search_engine");
-                if (se instanceof Number) {
-                    ed.putInt(PREF_SEARCH_ENGINE, ((Number) se).intValue());
-                } else {
-                    ed.putInt(PREF_SEARCH_ENGINE, searchEngineFromString(String.valueOf(se)));
+            final List<ChangedKeyEntry<?>> changedEntries = new ArrayList<ChangedKeyEntry<?>>();
+            for (int i = 0; i < AcidSettings.ALL_KEYS.size(); i++) {
+                ChangedKeyEntry<?> diff = stageKeyFromJson(o, ed, AcidSettings.ALL_KEYS.get(i));
+                if (diff != null) {
+                    changedEntries.add(diff);
                 }
-            }
-            if (o.has("search_engine_custom_url")) {
-                ed.putString(PREF_SEARCH_ENGINE_CUSTOM, o.getString("search_engine_custom_url"));
-            }
-            if (o.has("home_type")) {
-                Object ht = o.get("home_type");
-                if (ht instanceof Number) {
-                    ed.putInt(PREF_HOME_TYPE, ((Number) ht).intValue());
-                } else {
-                    ed.putInt(PREF_HOME_TYPE, homeTypeFromString(String.valueOf(ht)));
-                }
-            }
-            if (o.has("home_custom_url")) {
-                ed.putString(PREF_HOME_CUSTOM_URL, o.getString("home_custom_url"));
-            }
-            if (o.has("block_images")) {
-                ed.putBoolean(PREF_BLOCK_IMAGES, o.getBoolean("block_images"));
-            }
-            if (o.has("do_not_track")) {
-                ed.putBoolean(PREF_DO_NOT_TRACK, o.getBoolean("do_not_track"));
-            }
-            if (o.has("web_debugging")) {
-                ed.putBoolean(PREF_WEB_DEBUGGING, o.getBoolean("web_debugging"));
-            }
-            if (o.has("clear_on_exit")) {
-                ed.putBoolean(PREF_CLEAR_ON_EXIT, o.getBoolean("clear_on_exit"));
-            }
-            if (o.has("dark_mode")) {
-                ed.putBoolean(PREF_DARK_MODE, o.getBoolean("dark_mode"));
-            }
-            if (o.has("adblock_enabled")) {
-                ed.putBoolean(PREF_ADBLOCK_ENABLED, o.getBoolean("adblock_enabled"));
-            }
-            if (o.has("mcp_server_enabled")) {
-                ed.putBoolean(PREF_MCP_ENABLED, o.getBoolean("mcp_server_enabled"));
             }
             ed.apply();
 
+            for (int i = 0; i < changedEntries.size(); i++) {
+                changedEntries.get(i).notifyOn(this);
+            }
             if (mSettingsChangedListener != null) {
-                mSettingsChangedListener.onSettingsChanged();
+                dispatchCallback(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (mSettingsChangedListener != null) {
+                            mSettingsChangedListener.onSettingsChanged();
+                        }
+                    }
+                });
             }
             return true;
         } catch (Exception e) {
@@ -316,75 +436,24 @@ public class BrowserDataStore {
         }
     }
 
-    public boolean isDarkMode() {
-        SharedPreferences prefs = prefs();
-        return prefs.getBoolean(PREF_DARK_MODE, false);
-    }
+    // Convenience typed delegates (backed by AcidSettings registry)
+    public boolean isDarkMode() { return get(AcidSettings.DARK_MODE).booleanValue(); }
+    public void setDarkMode(boolean dark) { set(AcidSettings.DARK_MODE, Boolean.valueOf(dark)); }
 
-    public void setDarkMode(boolean dark) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putBoolean(PREF_DARK_MODE, dark);
-        ed.apply();
-        saveToJsonFile();
-    }
+    public boolean isAdBlockEnabled() { return get(AcidSettings.ADBLOCK_ENABLED).booleanValue(); }
+    public void setAdBlockEnabled(boolean enabled) { set(AcidSettings.ADBLOCK_ENABLED, Boolean.valueOf(enabled)); }
 
-    public boolean isAdBlockEnabled() {
-        SharedPreferences prefs = prefs();
-        return prefs.getBoolean(PREF_ADBLOCK_ENABLED, true);
-    }
+    public int getAdBlockBlockedCount() { return get(AcidSettings.ADBLOCK_BLOCKED_COUNT).intValue(); }
+    public void setAdBlockBlockedCount(int count) { set(AcidSettings.ADBLOCK_BLOCKED_COUNT, Integer.valueOf(count)); }
 
-    public void setAdBlockEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putBoolean(PREF_ADBLOCK_ENABLED, enabled);
-        ed.apply();
-        saveToJsonFile();
-    }
+    public String getAdBlockSubscriptionUrl() { return get(AcidSettings.ADBLOCK_SUBSCRIPTION_URL); }
+    public void setAdBlockSubscriptionUrl(String url) { set(AcidSettings.ADBLOCK_SUBSCRIPTION_URL, url); }
 
-    public int getAdBlockBlockedCount() {
-        SharedPreferences prefs = prefs();
-        return prefs.getInt(PREF_ADBLOCK_BLOCKED_COUNT, 0);
-    }
+    public int getSearchEngineIndex() { return get(AcidSettings.SEARCH_ENGINE).intValue(); }
+    public void setSearchEngineIndex(int index) { set(AcidSettings.SEARCH_ENGINE, Integer.valueOf(index)); }
 
-    public void setAdBlockBlockedCount(int count) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putInt(PREF_ADBLOCK_BLOCKED_COUNT, count);
-        ed.apply();
-    }
-
-    public String getAdBlockSubscriptionUrl() {
-        SharedPreferences prefs = prefs();
-        return prefs.getString(PREF_ADBLOCK_SUBSCRIPTION_URL, "https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/master/anti-ad-easylist.txt");
-    }
-
-    public void setAdBlockSubscriptionUrl(String url) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putString(PREF_ADBLOCK_SUBSCRIPTION_URL, url != null ? url.trim() : "");
-        ed.apply();
-    }
-
-    public int getSearchEngineIndex() {
-        SharedPreferences prefs = prefs();
-        return prefs.getInt(PREF_SEARCH_ENGINE, SEARCH_GOOGLE);
-    }
-
-    public void setSearchEngineIndex(int index) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putInt(PREF_SEARCH_ENGINE, index);
-        ed.apply();
-        saveToJsonFile();
-    }
-
-    public String getCustomSearchEngineUrl() {
-        SharedPreferences prefs = prefs();
-        return prefs.getString(PREF_SEARCH_ENGINE_CUSTOM, "");
-    }
-
-    public void setCustomSearchEngineUrl(String url) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putString(PREF_SEARCH_ENGINE_CUSTOM, url != null ? url.trim() : "");
-        ed.apply();
-        saveToJsonFile();
-    }
+    public String getCustomSearchEngineUrl() { return get(AcidSettings.SEARCH_ENGINE_CUSTOM_URL); }
+    public void setCustomSearchEngineUrl(String url) { set(AcidSettings.SEARCH_ENGINE_CUSTOM_URL, url); }
 
     public String buildSearchUrl(String query) {
         if (query == null) query = "";
@@ -414,29 +483,11 @@ public class BrowserDataStore {
         }
     }
 
-    public int getHomeType() {
-        SharedPreferences prefs = prefs();
-        return prefs.getInt(PREF_HOME_TYPE, HOME_ACID);
-    }
+    public int getHomeType() { return get(AcidSettings.HOME_TYPE).intValue(); }
+    public void setHomeType(int type) { set(AcidSettings.HOME_TYPE, Integer.valueOf(type)); }
 
-    public void setHomeType(int type) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putInt(PREF_HOME_TYPE, type);
-        ed.apply();
-        saveToJsonFile();
-    }
-
-    public String getCustomHomeUrl() {
-        SharedPreferences prefs = prefs();
-        return prefs.getString(PREF_HOME_CUSTOM_URL, "");
-    }
-
-    public void setCustomHomeUrl(String url) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putString(PREF_HOME_CUSTOM_URL, url != null ? url.trim() : "");
-        ed.apply();
-        saveToJsonFile();
-    }
+    public String getCustomHomeUrl() { return get(AcidSettings.HOME_CUSTOM_URL); }
+    public void setCustomHomeUrl(String url) { set(AcidSettings.HOME_CUSTOM_URL, url); }
 
     public String getEffectiveHomeUrl() {
         int type = getHomeType();
@@ -456,71 +507,20 @@ public class BrowserDataStore {
         return BrowserController.HOME_URL;
     }
 
-    public boolean isClearOnExit() {
-        SharedPreferences prefs = prefs();
-        return prefs.getBoolean(PREF_CLEAR_ON_EXIT, false);
-    }
+    public boolean isClearOnExit() { return get(AcidSettings.CLEAR_ON_EXIT).booleanValue(); }
+    public void setClearOnExit(boolean val) { set(AcidSettings.CLEAR_ON_EXIT, Boolean.valueOf(val)); }
 
-    public void setClearOnExit(boolean val) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putBoolean(PREF_CLEAR_ON_EXIT, val);
-        ed.apply();
-        saveToJsonFile();
-    }
+    public boolean isWebDebuggingEnabled() { return get(AcidSettings.WEB_DEBUGGING).booleanValue(); }
+    public void setWebDebuggingEnabled(boolean enabled) { set(AcidSettings.WEB_DEBUGGING, Boolean.valueOf(enabled)); }
 
-    public boolean isWebDebuggingEnabled() {
-        SharedPreferences prefs = prefs();
-        return prefs.getBoolean(PREF_WEB_DEBUGGING, false);
-    }
+    public boolean isDoNotTrackEnabled() { return get(AcidSettings.DO_NOT_TRACK).booleanValue(); }
+    public void setDoNotTrackEnabled(boolean enabled) { set(AcidSettings.DO_NOT_TRACK, Boolean.valueOf(enabled)); }
 
-    public void setWebDebuggingEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putBoolean(PREF_WEB_DEBUGGING, enabled);
-        ed.apply();
-        saveToJsonFile();
-    }
+    public boolean isBlockImagesEnabled() { return get(AcidSettings.BLOCK_IMAGES).booleanValue(); }
+    public void setBlockImagesEnabled(boolean enabled) { set(AcidSettings.BLOCK_IMAGES, Boolean.valueOf(enabled)); }
 
-    public boolean isDoNotTrackEnabled() {
-        SharedPreferences prefs = prefs();
-        return prefs.getBoolean(PREF_DO_NOT_TRACK, false);
-    }
-
-    public void setDoNotTrackEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putBoolean(PREF_DO_NOT_TRACK, enabled);
-        ed.apply();
-        saveToJsonFile();
-    }
-
-    public boolean isBlockImagesEnabled() {
-        SharedPreferences prefs = prefs();
-        return prefs.getBoolean(PREF_BLOCK_IMAGES, false);
-    }
-
-    public void setBlockImagesEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putBoolean(PREF_BLOCK_IMAGES, enabled);
-        ed.apply();
-        saveToJsonFile();
-    }
-
-    public boolean isMcpServerEnabled() {
-        SharedPreferences prefs = prefs();
-        if (prefs.contains(PREF_MCP_ENABLED)) {
-            return prefs.getBoolean(PREF_MCP_ENABLED, true);
-        }
-        SharedPreferences legacy = legacyPrefs();
-        boolean migrated = legacy.getBoolean(PREF_MCP_ENABLED, true);
-        prefs.edit().putBoolean(PREF_MCP_ENABLED, migrated).apply();
-        return migrated;
-    }
-
-    public void setMcpServerEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = prefs().edit();
-        ed.putBoolean(PREF_MCP_ENABLED, enabled);
-        ed.apply();
-        saveToJsonFile();
-    }
+    public boolean isMcpServerEnabled() { return get(AcidSettings.MCP_ENABLED).booleanValue(); }
+    public void setMcpServerEnabled(boolean enabled) { set(AcidSettings.MCP_ENABLED, Boolean.valueOf(enabled)); }
 
     // =========================================================================
     // Workspace & Browsing Data Cleanup Service

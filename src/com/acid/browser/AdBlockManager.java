@@ -141,9 +141,21 @@ public class AdBlockManager {
         } catch (Exception ignored) {}
     }
 
+    private final AcidSettings.KeyObserver<Boolean> mEnabledSettingObserver =
+        new AcidSettings.KeyObserver<Boolean>() {
+            @Override
+            public void onSettingChanged(Boolean newValue) {
+                mEnabled = newValue != null && newValue.booleanValue();
+            }
+        };
+
     public void bindDataStore(BrowserDataStore store) {
         if (store != null) {
+            if (mDataStore != null) {
+                mDataStore.unobserve(AcidSettings.ADBLOCK_ENABLED, mEnabledSettingObserver);
+            }
             mDataStore = store;
+            mDataStore.observe(AcidSettings.ADBLOCK_ENABLED, mEnabledSettingObserver);
             syncFromDataStore();
         }
     }
