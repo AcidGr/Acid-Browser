@@ -259,6 +259,13 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 mDownloads.clear();
                 mDownloads.addAll(saved);
             }
+            if (Build.VERSION.SDK_INT >= 19) {
+                try {
+                    WebView.setWebContentsDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to set web contents debugging", e);
+                }
+            }
         }
     }
 
@@ -574,6 +581,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
         applyIdentityToSettings(wv, mIsDesktopMode);
         applyDarkModeToSettings(wv, mDarkMode);
+        if (mDataStore != null && mDataStore.isBlockImagesEnabled()) {
+            s.setLoadsImagesAutomatically(false);
+        }
         wv.addJavascriptInterface(mAutomationDriver.getNativeHostBridge(), "__acidNativeHost");
 
         // Track touch coordinates for floating element context menu (PopupWindow)
@@ -898,16 +908,19 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public String normalizeUrl(String raw) {
-        if (raw == null) return HOME_URL;
+        if (raw == null) return getHomeUrl();
         String trimmed = raw.trim();
-        if (trimmed.isEmpty()) return HOME_URL;
+        if (trimmed.isEmpty()) return getHomeUrl();
         if ("acid://home".equalsIgnoreCase(trimmed) || "about:home".equalsIgnoreCase(trimmed)) {
-            return HOME_URL;
+            return getHomeUrl();
         }
-        if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("file://") || trimmed.startsWith("javascript:") || trimmed.startsWith("data:")) {
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("file://") || trimmed.startsWith("javascript:") || trimmed.startsWith("data:") || trimmed.startsWith("about:")) {
             return trimmed;
         }
         if (trimmed.contains(" ") || !trimmed.contains(".")) {
+            if (mDataStore != null) {
+                return mDataStore.buildSearchUrl(trimmed);
+            }
             try {
                 return "https://www.google.com/search?q=" + java.net.URLEncoder.encode(trimmed, "UTF-8");
             } catch (Exception e) {
@@ -915,6 +928,39 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
         }
         return "https://" + trimmed;
+    }
+
+    public String getHomeUrl() {
+        if (mDataStore != null) {
+            return mDataStore.getEffectiveHomeUrl();
+        }
+        return HOME_URL;
+    }
+
+    public void clearAllCache() {
+        for (TabSession t : mTabs) {
+            if (t.webView != null) {
+                t.webView.clearCache(true);
+            }
+        }
+    }
+
+    public void setWebDebuggingEnabled(boolean enabled) {
+        if (Build.VERSION.SDK_INT >= 19) {
+            try {
+                WebView.setWebContentsDebuggingEnabled(enabled);
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to toggle web contents debugging", e);
+            }
+        }
+    }
+
+    public void setBlockImages(boolean block) {
+        for (TabSession t : mTabs) {
+            if (t.webView != null) {
+                t.webView.getSettings().setLoadsImagesAutomatically(!block);
+            }
+        }
     }
 
     @Override

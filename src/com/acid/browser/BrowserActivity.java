@@ -109,6 +109,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AcidBottomSheetView mDownloadConfirmSheet;
     private UserscriptSheet mUserscriptSheet;
     private AdBlockSheet mAdBlockSheet;
+    private BrowserSettingsSheet mSettingsSheet;
     private BroadcastReceiver mDownloadReceiver;
 
     /**
@@ -325,6 +326,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mAdBlockSheet.showAdBlock();
                 }
             }
+
+            @Override
+            public void onOpenSettings() {
+                if (mSettingsSheet != null) {
+                    mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
+                    mSettingsSheet.showSettings();
+                }
+            }
         });
         mRootContainer.addView(mMenuSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
@@ -381,6 +390,85 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mAdBlockSheet = new AdBlockSheet(this, AdBlockManager.getInstance(this));
         mRootContainer.addView(mAdBlockSheet, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        mSettingsSheet = new BrowserSettingsSheet(this, mDataStore, new BrowserSettingsSheet.OnSettingsActionListener() {
+            @Override
+            public void onOpenModelConfig() {
+                mProviderConfigSheet.showConfig();
+            }
+
+            @Override
+            public void onToggleMcpServer() {
+                toggleMcpServer();
+                if (mSettingsSheet != null) {
+                    mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
+                    mSettingsSheet.refresh();
+                }
+            }
+
+            @Override
+            public void onOpenAgentFloatingWindow() {
+                mAgentFloatingView.toggle();
+            }
+
+            @Override
+            public void onOpenAdBlock() {
+                if (mAdBlockSheet != null) {
+                    mAdBlockSheet.showAdBlock();
+                }
+            }
+
+            @Override
+            public void onOpenUserscripts() {
+                if (mUserscriptSheet != null) {
+                    mUserscriptSheet.showScripts();
+                }
+            }
+
+            @Override
+            public void onOpenAbout() {
+                showAboutSheet();
+            }
+
+            @Override
+            public void onClearDataRequested(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage) {
+                clearBrowsingData(clearCache, clearCookies, clearHistory, clearStorage);
+            }
+
+            @Override
+            public void onSearchEngineChanged(int index, String customUrl) {
+                // Preferences saved in mDataStore
+            }
+
+            @Override
+            public void onHomeUrlChanged(int type, String customUrl) {
+                // Preferences saved in mDataStore
+            }
+
+            @Override
+            public void onWebDebuggingChanged(boolean enabled) {
+                if (mController != null) {
+                    mController.setWebDebuggingEnabled(enabled);
+                }
+                Toast.makeText(BrowserActivity.this, enabled ? "已开启网页开发者调试 (Chrome DevTools)" : "已关闭网页开发者调试", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onDoNotTrackChanged(boolean enabled) {
+                Toast.makeText(BrowserActivity.this, enabled ? "已开启「不跟踪 (DNT)」请求" : "已关闭「不跟踪」请求", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onBlockImagesChanged(boolean enabled) {
+                if (mController != null) {
+                    mController.setBlockImages(enabled);
+                }
+                Toast.makeText(BrowserActivity.this, enabled ? "已开启无图省流模式" : "已恢复正常图片加载", Toast.LENGTH_SHORT).show();
+            }
+        });
+        mRootContainer.addView(mSettingsSheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
@@ -860,6 +948,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         addOverlay(mDownloadConfirmSheet);
         addOverlay(mUserscriptSheet);
         addOverlay(mAdBlockSheet);
+        addOverlay(mSettingsSheet);
     }
 
     private void addOverlay(AcidOverlay overlay) {
@@ -1797,8 +1886,48 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         super.onBackPressed();
     }
 
+    private void clearBrowsingData(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage) {
+        int count = 0;
+        if (clearCache) {
+            if (mController != null) {
+                mController.clearAllCache();
+            }
+            count++;
+        }
+        if (clearCookies) {
+            try {
+                android.webkit.CookieManager.getInstance().removeAllCookies(null);
+                android.webkit.CookieManager.getInstance().flush();
+                count++;
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to clear cookies", e);
+            }
+        }
+        if (clearHistory) {
+            if (mDataStore != null) {
+                mDataStore.clearHistory();
+                count++;
+            }
+        }
+        if (clearStorage) {
+            try {
+                android.webkit.WebStorage.getInstance().deleteAllData();
+                count++;
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to clear web storage", e);
+            }
+        }
+        if (mSettingsSheet != null) {
+            mSettingsSheet.refresh();
+        }
+        Toast.makeText(this, "已清除所选浏览数据 (" + count + " 项)", Toast.LENGTH_SHORT).show();
+    }
+
     @Override
     protected void onDestroy() {
+        if (mDataStore != null && mDataStore.isClearOnExit()) {
+            clearBrowsingData(true, true, false, true);
+        }
         if (mDownloadReceiver != null) {
             try {
                 unregisterReceiver(mDownloadReceiver);
