@@ -504,9 +504,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
 
                 @Override
-                public void onSearchEngineChanged(int index, String customUrl) {}
-
-                @Override
                 public void onHomeUrlChanged(int type, String customUrl) {
                     if (mController != null) {
                         mController.loadUrl(mController.getHomeUrl());
