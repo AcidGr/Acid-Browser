@@ -2,18 +2,32 @@ package com.acid.browser;
 
 import android.app.Dialog;
 import android.content.Context;
+import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Bookmarks & Browsing History Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage}
  * template, {@link AcidWidgets.ListRow}, {@link AcidContextMenu}, and {@link AcidDialogs}.
+ *
+ * <p>Supports:
+ * <ul>
+ *   <li>Real-time fuzzy search across both title and URL keywords.</li>
+ *   <li>Smart time-bucketing for browsing history (Today, Yesterday, Past 7 Days, Earlier).</li>
+ *   <li>Relative and absolute timestamps (e.g. "15:42", "昨天 20:15", "10-24 09:30").</li>
+ * </ul>
  */
 public class BookmarksHistorySheet extends AcidBottomSheetView {
 
@@ -31,6 +45,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
     private int mActiveTab = TAB_BOOKMARKS;
     private String mCurrentPageTitle = "";
     private String mCurrentPageUrl = "";
+    private String mSearchQuery = "";
 
     public BookmarksHistorySheet(
         Context context,
@@ -47,6 +62,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
 
     @Override
     protected void onResetToRootPage() {
+        mSearchQuery = "";
         setRootPage(buildActiveTabPage());
     }
 
@@ -54,6 +70,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         mActiveTab = tab;
         mCurrentPageTitle = currentTitle != null ? currentTitle : "";
         mCurrentPageUrl = currentUrl != null ? currentUrl : "";
+        mSearchQuery = "";
     }
 
     public void showBookmarks(String currentTitle, String currentUrl) {
@@ -74,6 +91,9 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         final SheetPage page = new SheetPage("书签与历史", new PageRenderer() {
             @Override
             public void render(LinearLayout pinned, final LinearLayout container) {
+                final boolean isBookmarks = (mActiveTab == TAB_BOOKMARKS);
+
+                // 1. Pinned Header: Tabs switcher
                 pinned.addView(AcidWidgets.segmentedTabs(
                     ctx,
                     mIsDarkMode,
@@ -90,13 +110,42 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                         }
                     }
                 ));
-                boolean isBookmarks = (mActiveTab == TAB_BOOKMARKS);
-                syncHeaderActionForActiveTab(isBookmarks);
-                renderEntriesList(
-                    container,
-                    isBookmarks ? mDataStore.loadBookmarks() : mDataStore.loadHistory(),
-                    isBookmarks
+
+                // 2. Search Box (Persistent focus: mutates container without tearing down pinned view)
+                View spacer = new View(ctx);
+                pinned.addView(spacer, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, AcidTheme.dp(ctx, 8)
+                ));
+
+                final EditText searchInput = new EditText(ctx);
+                searchInput.setText(mSearchQuery);
+                if (mSearchQuery != null && mSearchQuery.length() > 0) {
+                    searchInput.setSelection(mSearchQuery.length());
+                }
+                searchInput.addTextChangedListener(new TextWatcher() {
+                    @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                    @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                    @Override
+                    public void afterTextChanged(Editable s) {
+                        String q = s != null ? s.toString().trim() : "";
+                        if (!mSearchQuery.equals(q)) {
+                            mSearchQuery = q;
+                            container.removeAllViews();
+                            renderContainerEntries(container, mActiveTab == TAB_BOOKMARKS);
+                        }
+                    }
+                });
+
+                LinearLayout searchBox = AcidWidgets.searchBox(
+                    ctx,
+                    mIsDarkMode,
+                    searchInput,
+                    isBookmarks ? "搜索书签标题或网址..." : "搜索历史标题或网址..."
                 );
+                pinned.addView(searchBox);
+
+                syncHeaderActionForActiveTab(isBookmarks);
+                renderContainerEntries(container, isBookmarks);
             }
         });
         return page;
@@ -131,64 +180,179 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         }
     }
 
-    private void renderEntriesList(
-        LinearLayout container,
-        List<BrowserDataStore.EntryItem> list,
-        final boolean isBookmarks
-    ) {
+    private void renderContainerEntries(LinearLayout container, boolean isBookmarks) {
         final Context ctx = getContext();
-        if (list.isEmpty()) {
-            container.addView(AcidWidgets.emptyState(
-                ctx,
-                mIsDarkMode,
-                isBookmarks ? AcidIcons.ICON_BOOKMARK : AcidIcons.ICON_HISTORY,
-                isBookmarks ? "暂无书签收藏，点击右上角可收藏当前页" : "暂无历史浏览记录"
-            ));
+        List<BrowserDataStore.EntryItem> rawList = isBookmarks ? mDataStore.loadBookmarks() : mDataStore.loadHistory();
+
+        // 1. Filter by Query (Title or URL keywords)
+        String q = mSearchQuery.toLowerCase(Locale.ROOT).trim();
+        List<BrowserDataStore.EntryItem> filteredList = new ArrayList<BrowserDataStore.EntryItem>();
+        for (BrowserDataStore.EntryItem item : rawList) {
+            if (item == null) continue;
+            if (q.isEmpty()
+                || item.title.toLowerCase(Locale.ROOT).contains(q)
+                || item.url.toLowerCase(Locale.ROOT).contains(q)) {
+                filteredList.add(item);
+            }
+        }
+
+        // 2. Empty States
+        if (filteredList.isEmpty()) {
+            if (!q.isEmpty()) {
+                container.addView(AcidWidgets.emptyState(
+                    ctx,
+                    mIsDarkMode,
+                    AcidIcons.ICON_SEARCH,
+                    "未找到与 \"" + mSearchQuery + "\" 相关的记录"
+                ));
+            } else {
+                container.addView(AcidWidgets.emptyState(
+                    ctx,
+                    mIsDarkMode,
+                    isBookmarks ? AcidIcons.ICON_BOOKMARK : AcidIcons.ICON_HISTORY,
+                    isBookmarks ? "暂无书签收藏，点击右上角可收藏当前页" : "暂无历史浏览记录"
+                ));
+            }
             return;
         }
 
-        container.addView(AcidWidgets.sectionHeader(
-            ctx,
-            mIsDarkMode,
-            (isBookmarks ? "全部书签 (" : "最近浏览 (") + list.size() + ")"
-        ));
-
-        for (int i = 0; i < list.size(); i++) {
-            final int index = i;
-            final BrowserDataStore.EntryItem item = list.get(i);
-
-            AcidWidgets.ListRow rowBuilder = new AcidWidgets.ListRow()
-                .title(item.title)
-                .subtitle(item.url);
-
-            if (isBookmarks) {
-                rowBuilder.leadingAvatar(ctx, item.title, item.url);
+        // 3. Render Bookmarks or Search Results (Single flat list)
+        if (isBookmarks || !q.isEmpty()) {
+            String headerText;
+            if (!q.isEmpty()) {
+                headerText = "搜索结果 (" + filteredList.size() + ")";
             } else {
-                rowBuilder.leadingIcon(AcidIcons.ICON_HISTORY, AcidTheme.COLOR_AMBER, 18);
+                headerText = "全部书签 (" + filteredList.size() + ")";
             }
+            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, headerText));
 
-            final LinearLayout row = rowBuilder.build(ctx, mIsDarkMode);
-            row.setOnClickListener(new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    closeEntireModalFlow();
-                    if (mNavigateListener != null) {
-                        mNavigateListener.onNavigateUrl(item.url);
-                    }
+            for (int i = 0; i < filteredList.size(); i++) {
+                final int index = i;
+                final BrowserDataStore.EntryItem item = filteredList.get(i);
+                renderEntryRow(container, item, index, isBookmarks);
+            }
+            return;
+        }
+
+        // 4. Render History with Smart Time-Bucketing (Today / Yesterday / Past 7 Days / Earlier)
+        long now = System.currentTimeMillis();
+        long startOfToday = getStartOfDay(now);
+        long startOfYesterday = startOfToday - 86400000L;
+        long startOfPast7Days = startOfToday - 6 * 86400000L;
+
+        List<BrowserDataStore.EntryItem> todayList = new ArrayList<BrowserDataStore.EntryItem>();
+        List<BrowserDataStore.EntryItem> yesterdayList = new ArrayList<BrowserDataStore.EntryItem>();
+        List<BrowserDataStore.EntryItem> past7DaysList = new ArrayList<BrowserDataStore.EntryItem>();
+        List<BrowserDataStore.EntryItem> earlierList = new ArrayList<BrowserDataStore.EntryItem>();
+
+        for (BrowserDataStore.EntryItem item : filteredList) {
+            if (item.time >= startOfToday) {
+                todayList.add(item);
+            } else if (item.time >= startOfYesterday) {
+                yesterdayList.add(item);
+            } else if (item.time >= startOfPast7Days) {
+                past7DaysList.add(item);
+            } else {
+                earlierList.add(item);
+            }
+        }
+
+        int globalIndex = 0;
+        if (!todayList.isEmpty()) {
+            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "今天 (" + todayList.size() + ")"));
+            for (BrowserDataStore.EntryItem item : todayList) {
+                renderEntryRow(container, item, globalIndex++, false);
+            }
+        }
+
+        if (!yesterdayList.isEmpty()) {
+            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "昨天 (" + yesterdayList.size() + ")"));
+            for (BrowserDataStore.EntryItem item : yesterdayList) {
+                renderEntryRow(container, item, globalIndex++, false);
+            }
+        }
+
+        if (!past7DaysList.isEmpty()) {
+            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "最近 7 天 (" + past7DaysList.size() + ")"));
+            for (BrowserDataStore.EntryItem item : past7DaysList) {
+                renderEntryRow(container, item, globalIndex++, false);
+            }
+        }
+
+        if (!earlierList.isEmpty()) {
+            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "更早以前 (" + earlierList.size() + ")"));
+            for (BrowserDataStore.EntryItem item : earlierList) {
+                renderEntryRow(container, item, globalIndex++, false);
+            }
+        }
+    }
+
+    private void renderEntryRow(
+        LinearLayout container,
+        final BrowserDataStore.EntryItem item,
+        final int index,
+        final boolean isBookmarks
+    ) {
+        final Context ctx = getContext();
+        AcidWidgets.ListRow rowBuilder = new AcidWidgets.ListRow()
+            .title(item.title)
+            .subtitle(item.url);
+
+        if (isBookmarks) {
+            rowBuilder.leadingAvatar(ctx, item.title, item.url);
+        } else {
+            rowBuilder.leadingIcon(AcidIcons.ICON_HISTORY, AcidTheme.COLOR_AMBER, 18);
+            if (item.time > 0) {
+                rowBuilder.trailingText(ctx, mIsDarkMode, formatTimestamp(item.time));
+            }
+        }
+
+        final LinearLayout row = rowBuilder.build(ctx, mIsDarkMode);
+        row.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                closeEntireModalFlow();
+                if (mNavigateListener != null) {
+                    mNavigateListener.onNavigateUrl(item.url);
                 }
-            });
-            row.setOnLongClickListener(new OnLongClickListener() {
-                @Override
-                public boolean onLongClick(View v) {
-                    if (isBookmarks) {
-                        showBookmarkContextMenu(row, index, item);
-                    } else {
-                        showHistoryContextMenu(row, item);
-                    }
-                    return true;
+            }
+        });
+        row.setOnLongClickListener(new OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                if (isBookmarks) {
+                    showBookmarkContextMenu(row, index, item);
+                } else {
+                    showHistoryContextMenu(row, item);
                 }
-            });
-            container.addView(row);
+                return true;
+            }
+        });
+        container.addView(row);
+    }
+
+    private static long getStartOfDay(long timeMillis) {
+        Calendar cal = Calendar.getInstance();
+        cal.setTimeInMillis(timeMillis);
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        return cal.getTimeInMillis();
+    }
+
+    private static String formatTimestamp(long timeMillis) {
+        if (timeMillis <= 0) return "";
+        long now = System.currentTimeMillis();
+        long startOfToday = getStartOfDay(now);
+        long startOfYesterday = startOfToday - 86400000L;
+
+        if (timeMillis >= startOfToday) {
+            return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(timeMillis));
+        } else if (timeMillis >= startOfYesterday) {
+            return "昨天 " + new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(timeMillis));
+        } else {
+            return new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(new Date(timeMillis));
         }
     }
 
@@ -247,13 +411,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             @Override
             public void run() {
                 mDataStore.addBookmark(item.title, item.url);
-                AcidFeedback.ok(ctx, "已添加到书签收藏");
-            }
-        }));
-        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_FILE, "复制链接", new Runnable() {
-            @Override
-            public void run() {
-                if (mController != null) mController.copyToClipboard(item.url);
+                AcidFeedback.ok(ctx, "已添加至书签收藏");
             }
         }));
         AcidContextMenu.showForAnchor(ctx, anchor, mIsDarkMode, item.title, actions);
@@ -261,40 +419,34 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
 
     private void showEditBookmarkDialog(final int index, final BrowserDataStore.EntryItem item) {
         final Context ctx = getContext();
-        LinearLayout form = new LinearLayout(ctx);
-        form.setOrientation(LinearLayout.VERTICAL);
-
-        form.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "显示名称"));
-        final EditText etTitle = AcidWidgets.inputField(
-            ctx, mIsDarkMode, item.title, "留空则使用网址", true
-        );
-        form.addView(etTitle);
-
-        form.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "网页地址"));
-        final EditText etUrl = AcidWidgets.inputField(
-            ctx, mIsDarkMode, item.url, "https://example.com", true
-        );
+        final EditText etTitle = AcidWidgets.inputField(ctx, mIsDarkMode, "网站标题", item.title, false);
+        final EditText etUrl = AcidWidgets.inputField(ctx, mIsDarkMode, "网址 (URL)", item.url, false);
         etUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        form.addView(etUrl);
+
+        LinearLayout layout = new LinearLayout(ctx);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(AcidTheme.dp(ctx, 16), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 16), AcidTheme.dp(ctx, 8));
+
+        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "网站标题"));
+        layout.addView(etTitle);
+        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "网址 (URL)"));
+        layout.addView(etUrl);
 
         new AcidDialog(ctx, mIsDarkMode)
             .setTitle("编辑书签")
-            .setCustomView(form)
+            .setCustomView(layout)
             .setPositiveButton("保存", new AcidDialog.OnActionListener() {
                 @Override
                 public boolean onAction(Dialog dialog) {
-                    String newTitle = etTitle.getText().toString().trim();
-                    String newUrl = etUrl.getText().toString().trim();
-                    if (TextUtils.isEmpty(newUrl)) {
+                    String t = etTitle.getText() != null ? etTitle.getText().toString().trim() : "";
+                    String u = etUrl.getText() != null ? etUrl.getText().toString().trim() : "";
+                    if (TextUtils.isEmpty(u)) {
                         AcidFeedback.warn(ctx, "网址不能为空");
                         return false;
                     }
-                    if (mDataStore.updateBookmark(index, newTitle, newUrl)) {
-                        refreshActivePage();
-                        AcidFeedback.ok(ctx, "书签已更新");
-                    } else {
-                        AcidFeedback.warn(ctx, "更新失败，书签可能已被删除");
-                    }
+                    mDataStore.updateBookmark(index, t, u);
+                    refreshActivePage();
+                    AcidFeedback.ok(ctx, "书签已更新");
                     return true;
                 }
             })
@@ -305,16 +457,17 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
     private void showDeleteBookmarkConfirm(final int index, final BrowserDataStore.EntryItem item) {
         final Context ctx = getContext();
         AcidDialogs.confirmDanger(
-            ctx, mIsDarkMode,
+            ctx,
+            mIsDarkMode,
             "删除书签",
-            "确定删除书签「" + item.title + "」吗？",
+            "确定要删除书签「" + item.title + "」吗？",
             "删除",
             new Runnable() {
                 @Override
                 public void run() {
                     mDataStore.removeBookmark(index);
                     refreshActivePage();
-                    AcidFeedback.info(ctx, "书签已删除");
+                    AcidFeedback.info(ctx, "已删除书签");
                 }
             }
         );
@@ -323,19 +476,17 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
     private void confirmClearAllHistory() {
         final Context ctx = getContext();
         AcidDialogs.confirmDanger(
-            ctx, mIsDarkMode,
-            "清空浏览历史",
-            "确定清空全部历史浏览记录吗？此操作无法撤销。",
-            "立即清空",
+            ctx,
+            mIsDarkMode,
+            "清空历史记录",
+            "确定要清空全部历史浏览记录吗？此操作无法撤销。",
+            "清空全部",
             new Runnable() {
                 @Override
                 public void run() {
                     mDataStore.clearHistory();
-                    if (mController != null) {
-                        mController.clearAllHistory();
-                    }
-                    setRootPage(buildActiveTabPage());
-                    AcidFeedback.info(ctx, "历史浏览记录已清空");
+                    refreshActivePage();
+                    AcidFeedback.ok(ctx, "已清空历史浏览记录");
                 }
             }
         );

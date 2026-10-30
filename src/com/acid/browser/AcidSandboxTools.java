@@ -743,6 +743,17 @@ public class AcidSandboxTools {
                     }
                 });
             }
+            if ("history.json".equals(f.getName())) {
+                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadHistoryFromJsonFile();
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (reloaded) {
+                            mController.emitLog("[HISTORY] Live hot-reloaded history from history.json");
+                        }
+                    }
+                });
+            }
             return "Successfully wrote " + content.length() + " characters to " + f.getAbsolutePath() +
                 " (Accessible in browser via: file://" + f.getAbsolutePath() + ")";
         } catch (Exception e) {
@@ -829,6 +840,17 @@ public class AcidSandboxTools {
                     public void run() {
                         if (reloaded) {
                             mController.emitLog("[BOOKMARKS] Live hot-reloaded bookmarks from bookmarks.json");
+                        }
+                    }
+                });
+            }
+            if ("history.json".equals(f.getName())) {
+                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadHistoryFromJsonFile();
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (reloaded) {
+                            mController.emitLog("[HISTORY] Live hot-reloaded history from history.json");
                         }
                     }
                 });

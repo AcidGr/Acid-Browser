@@ -79,10 +79,16 @@ public class BrowserDataStore {
     public static class EntryItem {
         public final String title;
         public final String url;
+        public final long time;
 
         public EntryItem(String title, String url) {
+            this(title, url, 0);
+        }
+
+        public EntryItem(String title, String url, long time) {
             this.title = title != null ? title : "";
             this.url = url != null ? url : "";
+            this.time = time;
         }
     }
 
@@ -92,6 +98,10 @@ public class BrowserDataStore {
 
     public interface OnBookmarksChangedListener {
         void onBookmarksChanged();
+    }
+
+    public interface OnHistoryChangedListener {
+        void onHistoryChanged();
     }
 
     public interface CallbackDispatcher {
@@ -107,12 +117,15 @@ public class BrowserDataStore {
         new ConcurrentHashMap<AcidSettings.BoolKey, StateSource.BoolState>();
     private File mSettingsJsonFile = null;
     private File mBookmarksJsonFile = null;
+    private File mHistoryJsonFile = null;
     private OnSettingsChangedListener mSettingsChangedListener = null;
     private OnBookmarksChangedListener mBookmarksChangedListener = null;
+    private OnHistoryChangedListener mHistoryChangedListener = null;
     private CallbackDispatcher mDispatcher = null;
     private FileObserver mFileObserver = null;
     private volatile long mLastSelfSaveTime = 0;
     private volatile long mLastBookmarksSelfSaveTime = 0;
+    private volatile long mLastHistorySelfSaveTime = 0;
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
@@ -121,15 +134,20 @@ public class BrowserDataStore {
     }
 
     BrowserDataStore(SharedPreferences primary, SharedPreferences legacy, File settingsJsonFile) {
-        this(primary, legacy, settingsJsonFile, null);
+        this(primary, legacy, settingsJsonFile, null, null);
     }
 
     BrowserDataStore(SharedPreferences primary, SharedPreferences legacy, File settingsJsonFile, File bookmarksJsonFile) {
+        this(primary, legacy, settingsJsonFile, bookmarksJsonFile, null);
+    }
+
+    BrowserDataStore(SharedPreferences primary, SharedPreferences legacy, File settingsJsonFile, File bookmarksJsonFile, File historyJsonFile) {
         mContext = null;
         mPrimaryPrefsOverride = primary;
         mLegacyPrefsOverride = legacy;
         mSettingsJsonFile = settingsJsonFile;
         mBookmarksJsonFile = bookmarksJsonFile;
+        mHistoryJsonFile = historyJsonFile;
     }
 
     SharedPreferences prefs() {
@@ -148,20 +166,23 @@ public class BrowserDataStore {
         if (workspaceDir != null) {
             mSettingsJsonFile = new File(workspaceDir, "settings.json");
             mBookmarksJsonFile = new File(workspaceDir, "bookmarks.json");
+            mHistoryJsonFile = new File(workspaceDir, "history.json");
             syncSettingsJsonFile();
             syncBookmarksJsonFile();
+            syncHistoryJsonFile();
             startWatchingSettingsFile();
         }
     }
 
     public void startWatchingSettingsFile() {
-        if (mSettingsJsonFile == null && mBookmarksJsonFile == null) return;
+        if (mSettingsJsonFile == null && mBookmarksJsonFile == null && mHistoryJsonFile == null) return;
         if (mFileObserver != null) {
             try { mFileObserver.stopWatching(); } catch (Exception e) {}
             mFileObserver = null;
         }
         try {
-            File targetFile = mSettingsJsonFile != null ? mSettingsJsonFile : mBookmarksJsonFile;
+            File targetFile = mSettingsJsonFile != null ? mSettingsJsonFile
+                : (mBookmarksJsonFile != null ? mBookmarksJsonFile : mHistoryJsonFile);
             File parent = targetFile.getParentFile();
             if (parent != null && parent.exists()) {
                 mFileObserver = new FileObserver(parent.getAbsolutePath(), FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
@@ -180,6 +201,12 @@ public class BrowserDataStore {
                             }
                             mLastBookmarksSelfSaveTime = System.currentTimeMillis();
                             reloadBookmarksFromJsonFile();
+                        } else if (path.endsWith("history.json")) {
+                            if (System.currentTimeMillis() - mLastHistorySelfSaveTime < 800) {
+                                return; // Ignore own writes
+                            }
+                            mLastHistorySelfSaveTime = System.currentTimeMillis();
+                            reloadHistoryFromJsonFile();
                         }
                     }
                 };
@@ -196,6 +223,10 @@ public class BrowserDataStore {
 
     public void setOnBookmarksChangedListener(OnBookmarksChangedListener l) {
         mBookmarksChangedListener = l;
+    }
+
+    public void setOnHistoryChangedListener(OnHistoryChangedListener l) {
+        mHistoryChangedListener = l;
     }
 
     public void setCallbackDispatcher(CallbackDispatcher dispatcher) {
@@ -218,6 +249,10 @@ public class BrowserDataStore {
         return mBookmarksJsonFile;
     }
 
+    public File getHistoryJsonFile() {
+        return mHistoryJsonFile;
+    }
+
     public void syncSettingsJsonFile() {
         if (mSettingsJsonFile == null) return;
         if (mSettingsJsonFile.exists()) {
@@ -233,6 +268,15 @@ public class BrowserDataStore {
             reloadBookmarksFromJsonFile();
         } else {
             saveBookmarksToJsonFile();
+        }
+    }
+
+    public void syncHistoryJsonFile() {
+        if (mHistoryJsonFile == null) return;
+        if (mHistoryJsonFile.exists()) {
+            reloadHistoryFromJsonFile();
+        } else {
+            saveHistoryToJsonFile();
         }
     }
 
@@ -617,6 +661,7 @@ public class BrowserDataStore {
             String name = f.getName();
             if ("settings.json".equals(name) ||
                 "bookmarks.json".equals(name) ||
+                "history.json".equals(name) ||
                 "homepage".equals(name) ||
                 "userscripts".equals(name) ||
                 "adblock".equals(name) ||
@@ -708,7 +753,8 @@ public class BrowserDataStore {
             Log.w(TAG, kind + "[" + index + "] has no usable url; skipped");
             return null;
         }
-        return new EntryItem(o.optString("title", url), url);
+        long time = o.optLong("time", 0);
+        return new EntryItem(o.optString("title", url), url, time);
     }
 
     public List<EntryItem> loadBookmarks() {
@@ -901,6 +947,100 @@ public class BrowserDataStore {
             .edit()
             .putString(PREF_HISTORY, "[]")
             .apply();
+
+        if (mHistoryJsonFile != null) {
+            saveHistoryToJsonFile();
+        }
+
+        dispatchCallback(new Runnable() {
+            @Override
+            public void run() {
+                if (mHistoryChangedListener != null) {
+                    mHistoryChangedListener.onHistoryChanged();
+                }
+            }
+        });
+    }
+
+    public synchronized boolean saveHistoryToJsonFile() {
+        if (mHistoryJsonFile == null) return false;
+        try {
+            List<EntryItem> list = loadHistory();
+            JSONArray arr = new JSONArray();
+            for (EntryItem item : list) {
+                if (item == null) continue;
+                JSONObject o = new JSONObject();
+                o.put("title", item.title);
+                o.put("url", item.url);
+                o.put("time", item.time);
+                arr.put(o);
+            }
+            File parent = mHistoryJsonFile.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            mLastHistorySelfSaveTime = System.currentTimeMillis();
+            FileOutputStream fos = new FileOutputStream(mHistoryJsonFile);
+            byte[] bytes;
+            try {
+                bytes = arr.toString(2).getBytes(StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                bytes = arr.toString().getBytes(StandardCharsets.UTF_8);
+            }
+            fos.write(bytes);
+            fos.flush();
+            fos.close();
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to save history to " + mHistoryJsonFile, e);
+            return false;
+        }
+    }
+
+    public synchronized boolean reloadHistoryFromJsonFile() {
+        if (mHistoryJsonFile == null || !mHistoryJsonFile.exists()) return false;
+        try {
+            FileInputStream fis = new FileInputStream(mHistoryJsonFile);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = fis.read(buf)) != -1) {
+                baos.write(buf, 0, n);
+            }
+            fis.close();
+            String jsonStr = new String(baos.toByteArray(), StandardCharsets.UTF_8).trim();
+            if (jsonStr.isEmpty()) return false;
+
+            JSONArray arr = new JSONArray(jsonStr);
+            List<EntryItem> list = new ArrayList<EntryItem>();
+            for (int i = 0; i < arr.length(); i++) {
+                EntryItem item = decodeEntry(arr.optJSONObject(i), i, "history");
+                if (item != null) list.add(item);
+            }
+
+            JSONArray next = new JSONArray();
+            for (EntryItem item : list) {
+                JSONObject o = new JSONObject();
+                o.put("title", item.title);
+                o.put("url", item.url);
+                o.put("time", item.time);
+                next.put(o);
+            }
+            prefs().edit().putString(PREF_HISTORY, next.toString()).apply();
+
+            dispatchCallback(new Runnable() {
+                @Override
+                public void run() {
+                    if (mHistoryChangedListener != null) {
+                        mHistoryChangedListener.onHistoryChanged();
+                    }
+                }
+            });
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to reload history from " + mHistoryJsonFile + ": " + e.getMessage(), e);
+            return false;
+        }
     }
 
     public void recordHistory(String url, String title, boolean incognitoMode) {
@@ -920,12 +1060,10 @@ public class BrowserDataStore {
             return;
         }
 
-        // Carry over previous entries, skipping (not aborting on) individually corrupt ones.
-        // A single bad record used to abort the whole loop and leave the write below
-        // unreachable, permanently freezing history collection.
+        // Full unconstrained history retention, skipping corrupt items
         try {
             JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length() && next.length() < 100; i++) {
+            for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
                 if (o == null) {
                     Log.w(TAG, "history[" + i + "] is not a JSON object; dropped on rewrite");
@@ -940,6 +1078,19 @@ public class BrowserDataStore {
         }
 
         prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
+
+        if (mHistoryJsonFile != null) {
+            saveHistoryToJsonFile();
+        }
+
+        dispatchCallback(new Runnable() {
+            @Override
+            public void run() {
+                if (mHistoryChangedListener != null) {
+                    mHistoryChangedListener.onHistoryChanged();
+                }
+            }
+        });
     }
 
     public List<BrowserController.DownloadItem> loadDownloads() {

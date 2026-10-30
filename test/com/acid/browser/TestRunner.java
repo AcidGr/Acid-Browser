@@ -51,6 +51,9 @@ public final class TestRunner {
         run("Bookmarks JSON two-way sync, live hot-reload & cleanup protection", new TestCase() {
             @Override public void execute() throws Exception { testBookmarksSyncAndSafety(); }
         });
+        run("History full unconstrained retention, timestamps & history.json sync", new TestCase() {
+            @Override public void execute() throws Exception { testHistoryFullRetentionAndSafety(); }
+        });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
@@ -414,6 +417,88 @@ public final class TestRunner {
 
         // Cleanup
         dummyHomepage.delete();
+        bookmarksFile.delete();
+        settingsFile.delete();
+        tmpDir.delete();
+    }
+
+    private static void testHistoryFullRetentionAndSafety() throws Exception {
+        File tmpDir = File.createTempFile("acid_history_test_", "");
+        tmpDir.delete();
+        tmpDir.mkdirs();
+        tmpDir.deleteOnExit();
+
+        File settingsFile = new File(tmpDir, "settings.json");
+        settingsFile.createNewFile();
+        File bookmarksFile = new File(tmpDir, "bookmarks.json");
+        bookmarksFile.createNewFile();
+        File historyFile = new File(tmpDir, "history.json");
+
+        InMemoryPrefs prefs = new InMemoryPrefs();
+        BrowserDataStore store = new BrowserDataStore(prefs, new InMemoryPrefs(), settingsFile, bookmarksFile, historyFile);
+
+        // 1. Initial sync
+        store.syncHistoryJsonFile();
+        assertTrue(historyFile.exists(), "history.json created automatically on sync");
+
+        // 2. Unconstrained retention test: record 150 unique history entries (breaking old 100-cap)
+        final int[] callbacks = new int[]{0};
+        store.setOnHistoryChangedListener(new BrowserDataStore.OnHistoryChangedListener() {
+            @Override public void onHistoryChanged() { callbacks[0]++; }
+        });
+
+        for (int i = 1; i <= 150; i++) {
+            store.recordHistory("https://example.com/page/" + i, "Page " + i, false);
+        }
+
+        List<BrowserDataStore.EntryItem> allHistory = store.loadHistory();
+        assertEquals(150, Integer.valueOf(allHistory.size()), "150 history entries preserved without 100-cap limit");
+        assertTrue(allHistory.get(0).time > 0, "history entry carries valid millisecond timestamp");
+        assertEquals("Page 150", allHistory.get(0).title, "most recent entry on top");
+
+        // 3. history.json content must be formatted multi-line JSON (not a single giant line)
+        String historyContent = new String(java.nio.file.Files.readAllBytes(historyFile.toPath()), StandardCharsets.UTF_8);
+        assertTrue(historyContent.contains("\n"), "history.json is multi-line formatted JSON");
+        assertTrue(historyContent.contains("\"title\": \"Page 150\""), "history.json contains recent title");
+        assertTrue(historyContent.contains("\"time\":"), "history.json contains time attribute");
+
+        // 4. External edit and live hot-reload
+        String externalJson = "[\n  {\"title\": \"Bilibili\", \"url\": \"https://www.bilibili.com\", \"time\": 1793340000000}\n]";
+        FileOutputStream fos = new FileOutputStream(historyFile);
+        fos.write(externalJson.getBytes(StandardCharsets.UTF_8));
+        fos.close();
+
+        int prevCallbacks = callbacks[0];
+        assertTrue(store.reloadHistoryFromJsonFile(), "reloadHistoryFromJsonFile succeeds");
+        assertTrue(callbacks[0] > prevCallbacks, "history changed callback fired on reload");
+        List<BrowserDataStore.EntryItem> reloaded = store.loadHistory();
+        assertEquals(1, Integer.valueOf(reloaded.size()), "1 history entry after external reload");
+        assertEquals("Bilibili", reloaded.get(0).title, "reloaded history title");
+        assertEquals(1793340000000L, Long.valueOf(reloaded.get(0).time), "reloaded timestamp preserved");
+
+        // 5. Corrupt JSON in history.json safely rejected without corrupting data
+        FileOutputStream corruptFos = new FileOutputStream(historyFile);
+        corruptFos.write("{corrupt".getBytes(StandardCharsets.UTF_8));
+        corruptFos.close();
+        assertTrue(!store.reloadHistoryFromJsonFile(), "corrupt history.json reload safely rejected");
+        assertEquals(1, Integer.valueOf(store.loadHistory().size()), "previous history preserved on corrupt reload");
+
+        // 6. Whitelist protection in clearWorkspaceTempFiles
+        File dummyTempFile = new File(tmpDir, "temp_report.html");
+        dummyTempFile.createNewFile();
+        int cleaned = store.clearWorkspaceTempFiles(tmpDir);
+        assertEquals(1, Integer.valueOf(cleaned), "cleaned 1 temp entry");
+        assertTrue(!dummyTempFile.exists(), "temp file deleted");
+        assertTrue(historyFile.exists(), "history.json strictly preserved by whitelist");
+
+        // 7. Clear history purges history.json too
+        store.clearHistory();
+        assertEquals(0, Integer.valueOf(store.loadHistory().size()), "history cleared in store");
+        String clearedContent = new String(java.nio.file.Files.readAllBytes(historyFile.toPath()), StandardCharsets.UTF_8).trim();
+        assertTrue(clearedContent.equals("[]") || clearedContent.equals("[\n]"), "history.json reset to empty array on clear");
+
+        // Cleanup
+        historyFile.delete();
         bookmarksFile.delete();
         settingsFile.delete();
         tmpDir.delete();

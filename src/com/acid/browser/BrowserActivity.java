@@ -143,6 +143,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
             }
         });
+        mDataStore.setOnHistoryChangedListener(new BrowserDataStore.OnHistoryChangedListener() {
+            @Override
+            public void onHistoryChanged() {
+                if (mBookmarksHistorySheet != null && mBookmarksHistorySheet.isShowing()) {
+                    mBookmarksHistorySheet.refreshActivePage();
+                }
+            }
+        });
 
         if (Build.VERSION.SDK_INT >= 23) {
             if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
