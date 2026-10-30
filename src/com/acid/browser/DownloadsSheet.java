@@ -3,23 +3,16 @@ package com.acid.browser;
 import android.app.Dialog;
 import android.app.DownloadManager;
 import android.content.Context;
-import android.graphics.Color;
-import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
-import android.text.TextUtils;
 import android.text.TextWatcher;
-import android.util.TypedValue;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
-import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -27,11 +20,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Dedicated Download Manager Sheet built on {@link AcidBottomSheetView}, {@link AcidWidgets},
- * {@link AcidContextMenu}, and {@link AcidDialog}.
- *
- * <p>Keeps the search bar and 8-category filter pills pinned in the top header slot so scrolling
- * long download lists never hides the filter bar, and live search never drops focus.
+ * Download Manager Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage} template,
+ * {@link AcidWidgets#filterChipBar}, {@link AcidWidgets.ListRow}, and {@link AcidContextMenu}.
  */
 public class DownloadsSheet extends AcidBottomSheetView {
 
@@ -70,15 +60,14 @@ public class DownloadsSheet extends AcidBottomSheetView {
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private Runnable mProgressPoller = null;
 
-    private int mSelectedCategory = BrowserController.DownloadItem.CAT_ALL;
+    private int mSelectedCategoryIndex = 0;
     private String mSearchKeyword = "";
-    private final List<TextView> mCategoryPillViews = new ArrayList<TextView>();
     private final Map<Long, DownloadRowHolder> mDownloadRows = new LinkedHashMap<Long, DownloadRowHolder>();
 
     public DownloadsSheet(Context context, BrowserController controller) {
         super(context);
         mController = controller;
-        setMinContentHeightDp(280);
+        setRootPage(buildDownloadsPage());
     }
 
     @Override
@@ -87,16 +76,15 @@ public class DownloadsSheet extends AcidBottomSheetView {
         super.dismiss();
     }
 
-    @Override
-    protected void onThemeChanged(boolean isDark) {
-        if (isShowing()) {
-            rebuildShellAndRows();
-        }
+    public void showDownloads() {
+        setRootPage(buildDownloadsPage());
+        show();
     }
 
-    public void showDownloads() {
-        rebuildShellAndRows();
-        show();
+    @Override
+    public void show() {
+        setRootPage(buildDownloadsPage());
+        super.show();
         startProgressPolling();
     }
 
@@ -106,110 +94,64 @@ public class DownloadsSheet extends AcidBottomSheetView {
         }
     }
 
-    private void rebuildShellAndRows() {
-        final Context ctx = getContext();
-        setTitle("下载管理");
-        setAction(AcidIcons.ICON_FILE, "打开目录", AcidTheme.accent(mIsDarkMode), new OnClickListener() {
+    private SheetPage buildDownloadsPage() {
+        return new SheetPage("下载管理", new PageRenderer() {
             @Override
-            public void onClick(View v) {
-                if (mController != null) {
-                    mController.openDownloadFolder();
-                }
-            }
-        });
+            public void render(LinearLayout pinned, LinearLayout container) {
+                final Context ctx = getContext();
 
-        clearPinnedHeader();
-        LinearLayout pinned = getPinnedHeaderContainer();
+                // 1. Pinned Search Bar
+                final EditText etSearch = new EditText(ctx);
+                etSearch.setText(mSearchKeyword);
+                LinearLayout searchBox = AcidWidgets.searchBox(ctx, mIsDarkMode, etSearch, "搜索下载文件名...");
+                LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                sbLp.bottomMargin = AcidTheme.dp(ctx, 8);
+                pinned.addView(searchBox, sbLp);
 
-        // 1. Pinned Search Bar
-        final EditText etSearch = new EditText(ctx);
-        etSearch.setText(mSearchKeyword);
-        LinearLayout searchBox = AcidWidgets.searchBox(ctx, mIsDarkMode, etSearch, "搜索下载文件名...");
-        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        sbLp.bottomMargin = AcidTheme.dp(ctx, 8);
-        pinned.addView(searchBox, sbLp);
+                // 2. Pinned Category Filter Chips (using AcidTheme.RADIUS_PILL & onColor contrast)
+                pinned.addView(AcidWidgets.filterChipBar(
+                    ctx, mIsDarkMode, CAT_LABELS, mSelectedCategoryIndex,
+                    new AcidWidgets.OnTabSelectedListener() {
+                        @Override
+                        public void onTabSelected(int index) {
+                            mSelectedCategoryIndex = index;
+                            updateDownloadListRows();
+                        }
+                    }
+                ), new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ));
 
-        // 2. Pinned Category Filter Pills
-        HorizontalScrollView hsv = new HorizontalScrollView(ctx);
-        hsv.setHorizontalScrollBarEnabled(false);
+                etSearch.addTextChangedListener(new TextWatcher() {
+                    @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                    @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                    @Override
+                    public void afterTextChanged(Editable s) {
+                        mSearchKeyword = s != null ? s.toString().trim() : "";
+                        updateDownloadListRows();
+                    }
+                });
 
-        LinearLayout pillBar = new LinearLayout(ctx);
-        pillBar.setOrientation(LinearLayout.HORIZONTAL);
-
-        mCategoryPillViews.clear();
-        for (int i = 0; i < CAT_IDS.length; i++) {
-            final int catId = CAT_IDS[i];
-            TextView pill = new TextView(ctx);
-            pill.setText(CAT_LABELS[i]);
-            pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
-            pill.setTypeface(Typeface.DEFAULT_BOLD);
-            pill.setGravity(Gravity.CENTER);
-            int pH = AcidTheme.dp(ctx, 12);
-            int pV = AcidTheme.dp(ctx, 5);
-            pill.setPadding(pH, pV, pH, pV);
-            pill.setClickable(true);
-            pill.setFocusable(true);
-
-            LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            if (i > 0) pLp.leftMargin = AcidTheme.dp(ctx, 6);
-
-            pill.setOnClickListener(new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    mSelectedCategory = catId;
-                    updateCategoryPillsStyle();
-                    updateDownloadListRows();
-                }
-            });
-
-            mCategoryPillViews.add(pill);
-            pillBar.addView(pill, pLp);
-        }
-        updateCategoryPillsStyle();
-        hsv.addView(pillBar);
-        pinned.addView(hsv, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-
-        etSearch.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
-            @Override
-            public void afterTextChanged(Editable s) {
-                mSearchKeyword = s != null ? s.toString().trim() : "";
                 updateDownloadListRows();
             }
-        });
-
-        updateDownloadListRows();
-    }
-
-    private void updateCategoryPillsStyle() {
-        Context ctx = getContext();
-        int accentCol = AcidTheme.accent(mIsDarkMode);
-        int itemBg = AcidTheme.menuItemBg(mIsDarkMode);
-        int mutedCol = AcidTheme.muted(mIsDarkMode);
-        int borderCol = AcidTheme.border(mIsDarkMode);
-
-        for (int i = 0; i < mCategoryPillViews.size() && i < CAT_IDS.length; i++) {
-            TextView p = mCategoryPillViews.get(i);
-            boolean sel = (mSelectedCategory == CAT_IDS[i]);
-            if (sel) {
-                p.setBackground(AcidTheme.interactiveBg(
-                    ctx, accentCol, AcidTheme.adjustPressFill(accentCol, mIsDarkMode), 0, 12
-                ));
-                p.setTextColor(mIsDarkMode ? Color.BLACK : Color.WHITE);
-            } else {
-                p.setBackground(AcidTheme.interactiveBg(
-                    ctx, itemBg, AcidTheme.rowPressed(mIsDarkMode), borderCol, 12
-                ));
-                p.setTextColor(mutedCol);
-            }
-        }
+        })
+            .withAction(AcidIcons.ICON_FILE, "打开目录", new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (mController != null) {
+                        mController.openDownloadFolder();
+                    }
+                }
+            })
+            .withMinContentHeightDp(280f)
+            .withOnPause(new Runnable() {
+                @Override
+                public void run() {
+                    stopProgressPolling();
+                }
+            });
     }
 
     private void startProgressPolling() {
@@ -257,14 +199,16 @@ public class DownloadsSheet extends AcidBottomSheetView {
         mDownloadRows.clear();
 
         final Context ctx = getContext();
-        int textCol = AcidTheme.text(mIsDarkMode);
+        int selectedCat = (mSelectedCategoryIndex >= 0 && mSelectedCategoryIndex < CAT_IDS.length)
+            ? CAT_IDS[mSelectedCategoryIndex]
+            : BrowserController.DownloadItem.CAT_ALL;
 
         List<BrowserController.DownloadItem> allList = mController != null ? mController.getDownloads() : null;
         List<BrowserController.DownloadItem> list = new ArrayList<BrowserController.DownloadItem>();
 
         if (allList != null) {
             for (BrowserController.DownloadItem it : allList) {
-                if (mSelectedCategory != BrowserController.DownloadItem.CAT_ALL && it.getCategory() != mSelectedCategory) {
+                if (selectedCat != BrowserController.DownloadItem.CAT_ALL && it.getCategory() != selectedCat) {
                     continue;
                 }
                 if (!mSearchKeyword.isEmpty()) {
@@ -288,44 +232,9 @@ public class DownloadsSheet extends AcidBottomSheetView {
         }
 
         for (final BrowserController.DownloadItem it : list) {
-            final LinearLayout row = AcidWidgets.listItemCard(ctx, mIsDarkMode, false, 0);
-            row.setOrientation(LinearLayout.VERTICAL);
-
-            LinearLayout headerRow = new LinearLayout(ctx);
-            headerRow.setOrientation(LinearLayout.HORIZONTAL);
-            headerRow.setGravity(Gravity.CENTER_VERTICAL);
-
             int iconTint = (it.status == DownloadManager.STATUS_FAILED)
                 ? AcidTheme.COLOR_RED
                 : AcidTheme.muted(mIsDarkMode);
-            AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(ctx, it.getCategoryIcon(), iconTint, 20);
-            headerRow.addView(icon);
-
-            LinearLayout textBox = new LinearLayout(ctx);
-            textBox.setOrientation(LinearLayout.VERTICAL);
-            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
-            );
-            tLp.leftMargin = AcidTheme.dp(ctx, 10);
-
-            TextView title = new TextView(ctx);
-            title.setText(it.fileName);
-            title.setTextColor(textCol);
-            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H4_ITEM);
-            title.setTypeface(Typeface.DEFAULT_BOLD);
-            title.setSingleLine(true);
-            title.setEllipsize(TextUtils.TruncateAt.END);
-            textBox.addView(title);
-
-            TextView info = new TextView(ctx);
-            info.setText(buildDownloadSubtitle(it));
-            info.setTextColor(downloadSubtitleColor(it));
-            info.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
-            info.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
-            textBox.addView(info);
-
-            headerRow.addView(textBox, tLp);
-            row.addView(headerRow);
 
             ProgressBar pb = null;
             if (it.status == DownloadManager.STATUS_RUNNING || it.status == DownloadManager.STATUS_PENDING) {
@@ -333,24 +242,32 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 pb.setMax(100);
                 pb.setProgress(it.getProgressPercent());
                 pb.setIndeterminate(it.contentLength <= 0);
-                LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, AcidTheme.dp(ctx, 4)
-                );
-                pbLp.topMargin = AcidTheme.dp(ctx, 6);
-                pbLp.leftMargin = AcidTheme.dp(ctx, 30);
-                row.addView(pb, pbLp);
             }
 
-            mDownloadRows.put(rowKey(it), new DownloadRowHolder(info, pb, icon));
+            AcidWidgets.ListRow rowBuilder = new AcidWidgets.ListRow()
+                .leadingIcon(it.getCategoryIcon(), iconTint, 20)
+                .title(it.fileName)
+                .subtitle(buildDownloadSubtitle(it))
+                .subtitleColor(downloadSubtitleColor(it));
+
+            if (pb != null) {
+                rowBuilder.bottomView(pb, 30f);
+            }
+
+            final LinearLayout row = rowBuilder.build(ctx, mIsDarkMode);
+            mDownloadRows.put(
+                rowKey(it),
+                new DownloadRowHolder(rowBuilder.subtitleView, pb, rowBuilder.iconView)
+            );
 
             row.setOnClickListener(new OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     if (mController == null) return;
                     if (it.status == DownloadManager.STATUS_RUNNING) {
-                        Toast.makeText(ctx, "正在下载: " + it.fileName + " (" + it.getProgressPercent() + "%)", Toast.LENGTH_SHORT).show();
+                        AcidFeedback.info(ctx, "正在下载: " + it.fileName + " (" + it.getProgressPercent() + "%)");
                     } else if (it.status == DownloadManager.STATUS_FAILED) {
-                        Toast.makeText(ctx, "该任务下载失败，长按可重新下载", Toast.LENGTH_SHORT).show();
+                        AcidFeedback.warn(ctx, "该任务下载失败，长按可重新下载");
                     } else {
                         mController.openDownloadedFile(it);
                     }
@@ -452,11 +369,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
                         mController.deleteDownload(it.downloadId, delFile);
                     }
                     updateDownloadListRows();
-                    Toast.makeText(
-                        ctx,
-                        delFile ? "已删除任务及本地源文件" : "已移除下载任务记录",
-                        Toast.LENGTH_SHORT
-                    ).show();
+                    AcidFeedback.info(ctx, delFile ? "已删除任务及本地源文件" : "已移除下载任务记录");
                     return true;
                 }
             })
@@ -499,9 +412,10 @@ public class DownloadsSheet extends AcidBottomSheetView {
             DownloadRowHolder holder = mDownloadRows.get(rowKey(it));
             if (holder == null) continue;
 
-            holder.infoView.setText(buildDownloadSubtitle(it));
-            holder.infoView.setTextColor(downloadSubtitleColor(it));
-
+            if (holder.infoView != null) {
+                holder.infoView.setText(buildDownloadSubtitle(it));
+                holder.infoView.setTextColor(downloadSubtitleColor(it));
+            }
             if (holder.progressBar != null) {
                 if (it.contentLength > 0) {
                     holder.progressBar.setIndeterminate(false);

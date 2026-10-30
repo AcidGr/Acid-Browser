@@ -1,10 +1,8 @@
 package com.acid.browser;
 
 import android.content.Context;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.text.Editable;
-import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -13,18 +11,14 @@ import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * Model & Reasoning Effort Selector Sheet built on {@link AcidBottomSheetView} and {@link AcidWidgets}.
- *
- * <p>Uses the pinned header slot for the live search input so filtering never steals focus,
- * and delegates to {@code OverlayStackManager.pushModal} when opening provider settings so
- * closing provider settings returns right back to this selector.
+ * Model & Reasoning Effort Selector Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage}
+ * template and {@link AcidWidgets}.
  */
 public class AgentModelSelectorSheet extends AcidBottomSheetView {
 
@@ -41,44 +35,43 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
         super(context);
         mModelStore = modelStore;
         mListener = listener;
+        setRootPage(buildSelectorPage());
     }
 
     public void showSelector() {
         if (mModelStore == null) return;
         mFilterQuery = "";
-        rebuildAll();
+        setRootPage(buildSelectorPage());
         show();
     }
 
     @Override
     public void show() {
-        rebuildAll();
+        setRootPage(buildSelectorPage());
         super.show();
     }
 
-    @Override
-    protected void onThemeChanged(boolean isDark) {
-        if (isShowing()) {
-            rebuildAll();
-        }
+    private SheetPage buildSelectorPage() {
+        boolean manyModels = mModelStore != null && mModelStore.getTotalLoadedModelsCount() > 4;
+        return new SheetPage("选择模型", new PageRenderer() {
+            @Override
+            public void render(LinearLayout pinned, LinearLayout container) {
+                renderSelectorContent(pinned, container);
+            }
+        })
+            .withAction(AcidIcons.ICON_SETTINGS, "模型配置", new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (mListener != null) {
+                        mListener.onOpenModelProviderConfig();
+                    }
+                }
+            })
+            .withMinContentHeightDp(manyModels ? 300f : 0f);
     }
 
-    private void rebuildAll() {
+    private void renderSelectorContent(LinearLayout pinned, LinearLayout container) {
         if (mModelStore == null) return;
-        setTitle("选择模型与思考深度");
-        setAction(AcidIcons.ICON_SETTINGS, "模型配置", AcidTheme.accent(mIsDarkMode), new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mListener != null) {
-                    mListener.onOpenModelProviderConfig();
-                }
-            }
-        });
-
-        clearPinnedHeader();
-        LinearLayout container = getContentContainer();
-        container.removeAllViews();
-
         final Context ctx = getContext();
         final List<AcidModelStore.ConfiguredProvider> providers = mModelStore.getProviders();
         final AcidModelStore.ConfiguredProvider activeProvider = mModelStore.getActiveProvider();
@@ -86,20 +79,12 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
         final String activeEffort = mModelStore.getSelectedReasoningEffort();
 
         int textCol = AcidTheme.text(mIsDarkMode);
-        int mutedCol = AcidTheme.muted(mIsDarkMode);
+        int accent = AcidTheme.accent(mIsDarkMode);
         int blue = AcidTheme.COLOR_BLUE;
 
-        // 1. Active Model & Reasoning Effort Card (H3 Card Lead)
-        LinearLayout topCard = AcidWidgets.cardGroup(ctx, mIsDarkMode, blue, 1f);
-        int pad = AcidTheme.dp(ctx, 14);
-        topCard.setPadding(pad, AcidTheme.dp(ctx, 12), pad, AcidTheme.dp(ctx, 12));
-
-        TextView lblCur = new TextView(ctx);
-        lblCur.setText("当前使用模型");
-        lblCur.setTextColor(mutedCol);
-        lblCur.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
-        lblCur.setTypeface(Typeface.DEFAULT_BOLD);
-        topCard.addView(lblCur);
+        // 1. Active Model & Reasoning Effort Hero Card
+        LinearLayout topCard = AcidWidgets.heroCard(ctx, mIsDarkMode, accent);
+        topCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "当前使用模型"));
 
         TextView tvCurVal = new TextView(ctx);
         if (activeProvider != null && activeModel != null) {
@@ -109,26 +94,18 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
             tvCurVal.setText("暂无可用模型，请点击右上角「模型配置」添加");
             tvCurVal.setTextColor(AcidTheme.COLOR_AMBER);
         }
-        tvCurVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H3_CARD);
+        tvCurVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
         tvCurVal.setTypeface(Typeface.DEFAULT_BOLD);
-        tvCurVal.setPadding(0, AcidTheme.dp(ctx, 3), 0, AcidTheme.dp(ctx, 8));
+        tvCurVal.setPadding(0, AcidTheme.dp(ctx, 2), 0, AcidTheme.dp(ctx, 8));
         topCard.addView(tvCurVal);
 
         if (activeModel != null) {
-            LinearLayout effortHead = new LinearLayout(ctx);
-            effortHead.setOrientation(LinearLayout.HORIZONTAL);
-            effortHead.setGravity(Gravity.CENTER_VERTICAL);
-
-            TextView lblEffort = AcidWidgets.fieldLabel(ctx, mIsDarkMode, "思考深度 (Reasoning Effort)");
-            effortHead.addView(lblEffort, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-            TextView curEffortBadge = new TextView(ctx);
-            curEffortBadge.setText(AcidModelStore.getEffortDisplayName(activeEffort));
-            curEffortBadge.setTextColor(blue);
-            curEffortBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
-            curEffortBadge.setTypeface(Typeface.DEFAULT_BOLD);
-            effortHead.addView(curEffortBadge);
-            topCard.addView(effortHead);
+            topCard.addView(AcidWidgets.fieldLabelWithAction(
+                ctx,
+                mIsDarkMode,
+                "思考深度 (Reasoning Effort)",
+                AcidWidgets.statusTag(ctx, mIsDarkMode, AcidModelStore.getEffortDisplayName(activeEffort), blue)
+            ));
 
             String[] effortIds = AcidModelStore.EFFORT_IDS;
             for (int r = 0; r < 2; r++) {
@@ -154,9 +131,9 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
                     int pPad = AcidTheme.dp(ctx, 7);
                     pill.setPadding(pPad, pPad, pPad, pPad);
                     if (isSel) {
-                        pill.setTextColor(Color.WHITE);
+                        pill.setTextColor(AcidTheme.onColor(accent));
                         pill.setBackground(AcidTheme.interactiveBg(
-                            ctx, blue, AcidTheme.adjustPressFill(blue, mIsDarkMode), 0, AcidTheme.RADIUS_CONTROL
+                            ctx, accent, AcidTheme.adjustPressFill(accent, mIsDarkMode), 0, AcidTheme.RADIUS_CONTROL
                         ));
                     } else {
                         pill.setTextColor(textCol);
@@ -177,7 +154,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
                             if (mListener != null) {
                                 mListener.onModelConfigChanged();
                             }
-                            rebuildAll();
+                            refreshActivePage();
                         }
                     });
 
@@ -195,11 +172,9 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
         groupsContainer.setOrientation(LinearLayout.VERTICAL);
 
         if (mModelStore.getTotalLoadedModelsCount() > 4) {
-            setMinContentHeightDp(300);
             final EditText etSearch = new EditText(ctx);
             etSearch.setText(mFilterQuery);
-            LinearLayout searchBox = AcidWidgets.searchBox(ctx, mIsDarkMode, etSearch, "搜索已装载的供应商或模型名称...");
-            getPinnedHeaderContainer().addView(searchBox);
+            pinned.addView(AcidWidgets.searchBox(ctx, mIsDarkMode, etSearch, "搜索已装载的供应商或模型名称..."));
 
             etSearch.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -210,8 +185,6 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
                 }
                 @Override public void afterTextChanged(Editable s) {}
             });
-        } else {
-            setWrapContentHeight();
         }
 
         container.addView(groupsContainer, new LinearLayout.LayoutParams(
@@ -228,10 +201,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
     ) {
         container.removeAllViews();
         final Context ctx = getContext();
-        int textCol = AcidTheme.text(mIsDarkMode);
-        int mutedCol = AcidTheme.muted(mIsDarkMode);
         int accent = AcidTheme.accent(mIsDarkMode);
-        int blue = AcidTheme.COLOR_BLUE;
 
         String query = mFilterQuery != null ? mFilterQuery.trim().toLowerCase(Locale.US) : "";
         int matchedCount = 0;
@@ -266,67 +236,30 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
                 final boolean isSelected = (activeProvider != null && activeModel != null &&
                     p.id.equals(activeProvider.id) && m.id.equals(activeModel.id));
 
-                LinearLayout row = AcidWidgets.listItemCard(ctx, mIsDarkMode, isSelected, blue);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-
-                AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(
-                    ctx, AcidIcons.ICON_MODEL, isSelected ? blue : accent, 18
-                );
-                row.addView(icon);
-
-                LinearLayout textColView = new LinearLayout(ctx);
-                textColView.setOrientation(LinearLayout.VERTICAL);
-                LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
-                );
-                tcLp.leftMargin = AcidTheme.dp(ctx, 10);
-                tcLp.rightMargin = AcidTheme.dp(ctx, 8);
-
-                TextView tvTitle = new TextView(ctx);
-                tvTitle.setText(m.name);
-                tvTitle.setTextColor(textCol);
-                tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H4_ITEM);
-                tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-                tvTitle.setSingleLine(true);
-                tvTitle.setEllipsize(TextUtils.TruncateAt.END);
-                textColView.addView(tvTitle);
-
-                TextView tvSub = new TextView(ctx);
-                tvSub.setText(p.displayName + " · " + m.id);
-                tvSub.setTextColor(mutedCol);
-                tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
-                tvSub.setSingleLine(true);
-                tvSub.setEllipsize(TextUtils.TruncateAt.END);
-                tvSub.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
-                textColView.addView(tvSub);
-
-                row.addView(textColView, tcLp);
+                AcidWidgets.ListRow rowBuilder = new AcidWidgets.ListRow()
+                    .leadingIcon(AcidIcons.ICON_MODEL, accent, 18)
+                    .title(m.name)
+                    .subtitle(p.displayName + " · " + m.id)
+                    .selected(isSelected, accent)
+                    .onClick(new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            mModelStore.selectModel(p.id, m.id, null);
+                            if (mListener != null) {
+                                mListener.onModelConfigChanged();
+                            }
+                            refreshActivePage();
+                            AcidFeedback.ok(ctx, "已切换模型: " + p.displayName + " / " + m.name);
+                        }
+                    });
 
                 if (isSelected) {
-                    AcidIcons.SvgIconView check = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CHECK, blue, 18);
-                    row.addView(check);
+                    rowBuilder.trailingCheck(ctx, accent);
                 } else {
-                    TextView tvPick = new TextView(ctx);
-                    tvPick.setText("选择");
-                    tvPick.setTextColor(mutedCol);
-                    tvPick.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
-                    row.addView(tvPick);
+                    rowBuilder.trailingText(ctx, mIsDarkMode, "选择");
                 }
 
-                row.setOnClickListener(new OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        mModelStore.selectModel(p.id, m.id, null);
-                        if (mListener != null) {
-                            mListener.onModelConfigChanged();
-                        }
-                        rebuildAll();
-                        Toast.makeText(ctx, "已切换模型: " + p.displayName + " / " + m.name, Toast.LENGTH_SHORT).show();
-                    }
-                });
-
-                container.addView(row);
+                container.addView(rowBuilder.build(ctx, mIsDarkMode));
             }
         }
 

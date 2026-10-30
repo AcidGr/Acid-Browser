@@ -2,6 +2,8 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.graphics.Typeface;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -11,11 +13,13 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.TextView;
-import android.widget.Toast;
 
 /**
  * AdBlock Configuration, Statistics, Online Subscriptions & Custom Rules Sheet
- * built on {@link AcidBottomSheetView} and {@link AcidWidgets}.
+ * built on {@link AcidBottomSheetView}'s {@link SheetPage} template and {@link AcidWidgets}.
+ *
+ * <p>Preserves unsaved custom rules and subscription URL drafts across toggle switches,
+ * subscription downloads, and Day/Night theme transitions.
  */
 public class AdBlockSheet extends AcidBottomSheetView {
 
@@ -26,6 +30,9 @@ public class AdBlockSheet extends AcidBottomSheetView {
     private final AdBlockManager mManager;
     private final OnAdBlockStateChangeListener mStateListener;
 
+    private String mDraftSubUrl = null;
+    private String mDraftCustomRules = null;
+
     public AdBlockSheet(Context context, AdBlockManager manager) {
         this(context, manager, null);
     }
@@ -34,210 +41,226 @@ public class AdBlockSheet extends AcidBottomSheetView {
         super(context);
         mManager = manager;
         mStateListener = listener;
+        setRootPage(buildAdBlockPage());
     }
 
     public void showAdBlock() {
-        renderContent();
+        mDraftSubUrl = null;
+        mDraftCustomRules = null;
+        setRootPage(buildAdBlockPage());
         show();
     }
 
     @Override
-    protected void onThemeChanged(boolean isDark) {
-        if (isShowing()) {
-            renderContent();
+    public void show() {
+        if (getPageDepth() == 0) {
+            setRootPage(buildAdBlockPage());
+        } else {
+            refreshActivePage();
         }
+        super.show();
     }
 
     public void renderContent() {
-        if (mManager == null) return;
-        setTitle("广告拦截");
-        hideAction();
-        clearPinnedHeader();
+        mDraftSubUrl = null;
+        mDraftCustomRules = null;
+        setRootPage(buildAdBlockPage());
+    }
 
-        LinearLayout container = getContentContainer();
-        container.removeAllViews();
-        final Context ctx = getContext();
-
-        int textColor = AcidTheme.text(mIsDarkMode);
-        int mutedColor = AcidTheme.muted(mIsDarkMode);
-        int accentColor = AcidTheme.accent(mIsDarkMode);
-        final boolean enabled = mManager.isEnabled();
-
-        // 1. Hero Status Card (H3 Lead = 14.5sp Bold)
-        LinearLayout statusCard = AcidWidgets.cardGroup(
-            ctx, mIsDarkMode,
-            enabled ? accentColor : AcidTheme.border(mIsDarkMode),
-            1f
-        );
-        int pad = AcidTheme.dp(ctx, 14);
-        statusCard.setPadding(pad, AcidTheme.dp(ctx, 12), pad, AcidTheme.dp(ctx, 12));
-
-        LinearLayout topRow = new LinearLayout(ctx);
-        topRow.setOrientation(LinearLayout.HORIZONTAL);
-        topRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        AcidIcons.SvgIconView iconView = new AcidIcons.SvgIconView(
-            ctx, AcidIcons.ICON_ADBLOCK, enabled ? accentColor : mutedColor, 26
-        );
-        topRow.addView(iconView);
-
-        LinearLayout titleCol = new LinearLayout(ctx);
-        titleCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
-            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
-        );
-        tLp.leftMargin = AcidTheme.dp(ctx, 10);
-        tLp.rightMargin = AcidTheme.dp(ctx, 8);
-
-        TextView tvTitle = new TextView(ctx);
-        tvTitle.setText(enabled ? "广告与追踪防护已开启" : "广告拦截防护已暂停");
-        tvTitle.setTextColor(textColor);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H3_CARD);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        titleCol.addView(tvTitle);
-
-        TextView tvSub = new TextView(ctx);
-        tvSub.setText("自动拦截网页广告请求、弹窗贴片与恶意唤端");
-        tvSub.setTextColor(mutedColor);
-        tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
-        tvSub.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
-        titleCol.addView(tvSub);
-
-        topRow.addView(titleCol, tLp);
-
-        final Switch sw = new Switch(ctx);
-        sw.setChecked(enabled);
-        AcidWidgets.styleSwitch(sw, mIsDarkMode, enabled);
-        sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+    private SheetPage buildAdBlockPage() {
+        return new SheetPage("广告拦截", new PageRenderer() {
             @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                if (mManager.isEnabled() == isChecked) return;
-                mManager.setEnabled(isChecked);
-                Toast.makeText(ctx, isChecked ? "广告拦截已开启" : "广告拦截已暂停", Toast.LENGTH_SHORT).show();
-                if (mStateListener != null) {
-                    mStateListener.onAdBlockStateChanged(isChecked);
-                }
-                renderContent();
-            }
-        });
-        topRow.addView(sw);
-        statusCard.addView(topRow);
+            public void render(LinearLayout pinned, LinearLayout container) {
+                if (mManager == null) return;
+                final Context ctx = getContext();
+                int textColor = AcidTheme.text(mIsDarkMode);
+                int mutedColor = AcidTheme.muted(mIsDarkMode);
+                int accentColor = AcidTheme.accent(mIsDarkMode);
+                final boolean enabled = mManager.isEnabled();
 
-        // Counter + 3-Column Stats Pills inside Status Card
-        LinearLayout counterRow = new LinearLayout(ctx);
-        counterRow.setOrientation(LinearLayout.HORIZONTAL);
-        counterRow.setGravity(Gravity.CENTER_VERTICAL);
-        counterRow.setPadding(0, AcidTheme.dp(ctx, 10), 0, AcidTheme.dp(ctx, 8));
+                // 1. Hero Status Card (SP_HERO = 15sp Bold)
+                LinearLayout statusCard = AcidWidgets.heroCard(
+                    ctx, mIsDarkMode,
+                    enabled ? accentColor : AcidTheme.border(mIsDarkMode)
+                );
 
-        TextView tvCountLabel = new TextView(ctx);
-        tvCountLabel.setText("累计已拦截请求: ");
-        tvCountLabel.setTextColor(mutedColor);
-        tvCountLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
-        counterRow.addView(tvCountLabel);
+                LinearLayout topRow = new LinearLayout(ctx);
+                topRow.setOrientation(LinearLayout.HORIZONTAL);
+                topRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView tvCountNum = new TextView(ctx);
-        tvCountNum.setText(mManager.getBlockedCount() + " 次");
-        tvCountNum.setTextColor(accentColor);
-        tvCountNum.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H3_CARD);
-        tvCountNum.setTypeface(Typeface.DEFAULT_BOLD);
-        counterRow.addView(tvCountNum);
-        statusCard.addView(counterRow);
+                AcidIcons.SvgIconView iconView = new AcidIcons.SvgIconView(
+                    ctx, AcidIcons.ICON_ADBLOCK, enabled ? accentColor : mutedColor, 26
+                );
+                topRow.addView(iconView);
 
-        LinearLayout pillRow = new LinearLayout(ctx);
-        pillRow.setOrientation(LinearLayout.HORIZONTAL);
-        addStatPill(pillRow, "内置规则", mManager.getBuiltinRulesCount() + " 条");
-        addStatPill(pillRow, "订阅规则", mManager.getSubscriptionRulesCount() + " 条");
-        addStatPill(pillRow, "自定义规则", mManager.getCustomRulesCount() + " 条");
-        statusCard.addView(pillRow);
+                LinearLayout titleCol = new LinearLayout(ctx);
+                titleCol.setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                );
+                tLp.leftMargin = AcidTheme.dp(ctx, 10);
+                tLp.rightMargin = AcidTheme.dp(ctx, 8);
 
-        container.addView(statusCard);
+                TextView tvTitle = new TextView(ctx);
+                tvTitle.setText(enabled ? "防护已开启" : "防护已暂停");
+                tvTitle.setTextColor(textColor);
+                tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
+                tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+                titleCol.addView(tvTitle);
 
-        // 2. Online Subscription Section (H2 Section Header + Card)
-        container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "规则库在线订阅 (ABP / EasyList)"));
-        LinearLayout subCard = AcidWidgets.cardGroup(ctx, mIsDarkMode);
-        subCard.setPadding(pad, AcidTheme.dp(ctx, 12), pad, AcidTheme.dp(ctx, 12));
+                TextView tvSub = new TextView(ctx);
+                tvSub.setText("自动拦截网页广告请求、弹窗贴片与恶意唤端");
+                tvSub.setTextColor(mutedColor);
+                tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+                tvSub.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
+                titleCol.addView(tvSub);
 
-        subCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "订阅规则 Raw URL"));
-        final EditText etSubUrl = AcidWidgets.inputField(
-            ctx, mIsDarkMode,
-            mManager.getSubscriptionUrl(),
-            "https://raw.githubusercontent.com/.../easylist.txt",
-            true
-        );
-        subCard.addView(etSubUrl);
+                topRow.addView(titleCol, tLp);
 
-        final TextView[] dlBtnRef = new TextView[1];
-        TextView btnDownload = AcidWidgets.primaryButton(ctx, mIsDarkMode, "拉取并更新订阅规则", accentColor, new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                final String url = etSubUrl.getText().toString().trim();
-                if (url.isEmpty()) {
-                    Toast.makeText(ctx, "请输入有效的订阅规则 URL", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                final TextView btn = dlBtnRef[0];
-                if (btn != null) {
-                    btn.setText("正在拉取规则...");
-                    btn.setEnabled(false);
-                }
-                mManager.downloadSubscription(url, new AdBlockManager.AdBlockCallback() {
+                final Switch sw = new Switch(ctx);
+                sw.setChecked(enabled);
+                AcidWidgets.styleSwitch(sw, mIsDarkMode, enabled);
+                sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                     @Override
-                    public void onSuccess(int totalRules) {
-                        if (btn != null) {
-                            btn.setText("拉取并更新订阅规则");
-                            btn.setEnabled(true);
+                    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                        if (mManager.isEnabled() == isChecked) return;
+                        mManager.setEnabled(isChecked);
+                        AcidFeedback.info(ctx, isChecked ? "广告拦截已开启" : "广告拦截已暂停");
+                        if (mStateListener != null) {
+                            mStateListener.onAdBlockStateChanged(isChecked);
                         }
-                        Toast.makeText(ctx, "规则更新成功！当前活跃规则共 " + totalRules + " 条", Toast.LENGTH_LONG).show();
-                        renderContent();
-                    }
-
-                    @Override
-                    public void onError(String message) {
-                        if (btn != null) {
-                            btn.setText("拉取并更新订阅规则");
-                            btn.setEnabled(true);
-                        }
-                        Toast.makeText(ctx, message, Toast.LENGTH_LONG).show();
+                        refreshActivePage();
                     }
                 });
+                topRow.addView(sw);
+                statusCard.addView(topRow);
+
+                // Counter + 3-Column Stats Pills inside Status Card
+                LinearLayout counterRow = new LinearLayout(ctx);
+                counterRow.setOrientation(LinearLayout.HORIZONTAL);
+                counterRow.setGravity(Gravity.CENTER_VERTICAL);
+                counterRow.setPadding(0, AcidTheme.dp(ctx, 10), 0, AcidTheme.dp(ctx, 8));
+
+                TextView tvCountLabel = new TextView(ctx);
+                tvCountLabel.setText("累计已拦截请求: ");
+                tvCountLabel.setTextColor(mutedColor);
+                tvCountLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
+                counterRow.addView(tvCountLabel);
+
+                TextView tvCountNum = new TextView(ctx);
+                tvCountNum.setText(mManager.getBlockedCount() + " 次");
+                tvCountNum.setTextColor(accentColor);
+                tvCountNum.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
+                tvCountNum.setTypeface(Typeface.DEFAULT_BOLD);
+                counterRow.addView(tvCountNum);
+                statusCard.addView(counterRow);
+
+                LinearLayout pillRow = new LinearLayout(ctx);
+                pillRow.setOrientation(LinearLayout.HORIZONTAL);
+                addStatPill(pillRow, "内置规则", mManager.getBuiltinRulesCount() + " 条");
+                addStatPill(pillRow, "订阅规则", mManager.getSubscriptionRulesCount() + " 条");
+                addStatPill(pillRow, "自定义规则", mManager.getCustomRulesCount() + " 条");
+                statusCard.addView(pillRow);
+                container.addView(statusCard);
+
+                // 2. Online Subscription Section
+                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "在线规则订阅"));
+                LinearLayout subCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
+
+                subCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "ABP / EasyList 订阅地址"));
+                String initialSubUrl = mDraftSubUrl != null ? mDraftSubUrl : mManager.getSubscriptionUrl();
+                final EditText etSubUrl = AcidWidgets.inputField(
+                    ctx, mIsDarkMode,
+                    initialSubUrl,
+                    "https://raw.githubusercontent.com/.../easylist.txt",
+                    true
+                );
+                etSubUrl.addTextChangedListener(new TextWatcher() {
+                    @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                    @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                    @Override public void afterTextChanged(Editable s) {
+                        mDraftSubUrl = s != null ? s.toString() : "";
+                    }
+                });
+                subCard.addView(etSubUrl);
+
+                AcidWidgets.LoadingButton btnDownload = AcidWidgets.LoadingButton.primary(
+                    ctx, mIsDarkMode,
+                    "拉取并更新订阅规则", "正在拉取规则...",
+                    accentColor,
+                    new AcidWidgets.LoadingButton.OnAsyncActionListener() {
+                        @Override
+                        public void onTrigger(final AcidWidgets.LoadingButton button) {
+                            final String url = etSubUrl.getText().toString().trim();
+                            if (url.isEmpty()) {
+                                AcidFeedback.warn(ctx, "请输入有效的订阅规则 URL");
+                                return;
+                            }
+                            button.setLoading();
+                            mManager.downloadSubscription(url, new AdBlockManager.AdBlockCallback() {
+                                @Override
+                                public void onSuccess(int totalRules) {
+                                    button.reset();
+                                    AcidFeedback.ok(ctx, "规则更新成功！当前活跃规则共 " + totalRules + " 条");
+                                    refreshActivePage();
+                                }
+
+                                @Override
+                                public void onError(String message) {
+                                    button.reset();
+                                    AcidFeedback.error(ctx, message);
+                                }
+                            });
+                        }
+                    }
+                );
+                subCard.addView(btnDownload.view, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ));
+                container.addView(subCard);
+
+                // 3. Custom Rules Section (preserves draft across toggles & theme switches!)
+                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "自定义拦截规则"));
+                LinearLayout customCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
+                customCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "规则列表 (支持 ||domain^ 域名拦截与 ##selector 元素隐藏)"));
+
+                String initialCustom = mDraftCustomRules != null ? mDraftCustomRules : mManager.getCustomRulesText();
+                final EditText etCustom = AcidWidgets.inputField(
+                    ctx, mIsDarkMode,
+                    initialCustom,
+                    "例如:\n||ads.example.com^\nexample.com##.floating-banner",
+                    false
+                );
+                etCustom.setTypeface(Typeface.MONOSPACE);
+                etCustom.setMinLines(4);
+                etCustom.setMaxLines(8);
+                etCustom.setGravity(Gravity.TOP | Gravity.START);
+                etCustom.addTextChangedListener(new TextWatcher() {
+                    @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                    @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                    @Override public void afterTextChanged(Editable s) {
+                        mDraftCustomRules = s != null ? s.toString() : "";
+                    }
+                });
+                customCard.addView(etCustom);
+
+                TextView btnSaveCustom = AcidWidgets.primaryButton(ctx, mIsDarkMode, "保存自定义规则", accentColor, new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        AcidTheme.hideKeyboard(AdBlockSheet.this);
+                        String text = etCustom.getText() != null ? etCustom.getText().toString() : "";
+                        mDraftCustomRules = text;
+                        mManager.saveCustomRulesText(text);
+                        AcidFeedback.ok(ctx, "自定义拦截规则已保存生效");
+                        refreshActivePage();
+                    }
+                });
+                customCard.addView(btnSaveCustom, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ));
+                container.addView(customCard);
             }
         });
-        dlBtnRef[0] = btnDownload;
-        subCard.addView(btnDownload, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-        container.addView(subCard);
-
-        // 3. Custom Rules Section (H2 Section Header + Card)
-        container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "自定义拦截规则 (||domain^ 或 ##selector)"));
-        LinearLayout customCard = AcidWidgets.cardGroup(ctx, mIsDarkMode);
-        customCard.setPadding(pad, AcidTheme.dp(ctx, 12), pad, AcidTheme.dp(ctx, 12));
-
-        final EditText etCustom = AcidWidgets.inputField(
-            ctx, mIsDarkMode,
-            mManager.getCustomRulesText(),
-            "例如:\n||ads.example.com^\nexample.com##.floating-banner",
-            false
-        );
-        etCustom.setTypeface(Typeface.MONOSPACE);
-        etCustom.setMinLines(4);
-        etCustom.setMaxLines(8);
-        etCustom.setGravity(Gravity.TOP | Gravity.START);
-        customCard.addView(etCustom);
-
-        TextView btnSaveCustom = AcidWidgets.primaryButton(ctx, mIsDarkMode, "保存自定义规则", AcidTheme.COLOR_BLUE, new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                AcidTheme.hideKeyboard(AdBlockSheet.this);
-                mManager.saveCustomRulesText(etCustom.getText().toString());
-                Toast.makeText(ctx, "自定义拦截规则已保存生效", Toast.LENGTH_SHORT).show();
-                renderContent();
-            }
-        });
-        customCard.addView(btnSaveCustom, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-        container.addView(customCard);
     }
 
     private void addStatPill(LinearLayout parent, String label, String value) {
