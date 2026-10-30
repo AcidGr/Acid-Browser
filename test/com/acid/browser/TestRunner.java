@@ -36,6 +36,9 @@ public final class TestRunner {
         run("BrowserDataStore settings.json round-trip & legacy migration", new TestCase() {
             @Override public void execute() throws Exception { testDataStoreSettingsAndSafety(); }
         });
+        run("AcidSettings registry, BoolState reactivity & prompt schema", new TestCase() {
+            @Override public void execute() throws Exception { testAcidSettingsReactivity(); }
+        });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
@@ -205,6 +208,64 @@ public final class TestRunner {
 
         JSONObject exported = store2.exportToJson();
         assertEquals("bing", exported.getString("search_engine"), "exported search_engine");
+        tmpFile.delete();
+    }
+
+    private static void testAcidSettingsReactivity() throws Exception {
+        String schema = AcidSettings.describeJsonSchemaForPrompt();
+        assertTrue(schema.contains("`mcp_server_enabled`: boolean"), "prompt schema includes mcp_server_enabled");
+        assertTrue(schema.contains("`search_engine`: 'google'|'baidu'|'bing'|'duckduckgo'|'custom'"), "prompt schema includes enum codes");
+        assertTrue(!schema.contains("adblock_blocked_count"), "internal counter excluded from settings.json schema");
+
+        File tmpFile = File.createTempFile("acid_reactive_test_", ".json");
+        tmpFile.deleteOnExit();
+
+        BrowserDataStore store = new BrowserDataStore(new InMemoryPrefs(), new InMemoryPrefs(), tmpFile);
+        StateSource.BoolState dntState = store.boolState(AcidSettings.DO_NOT_TRACK);
+        StateSource.BoolState darkState = store.boolState(AcidSettings.DARK_MODE);
+
+        final int[] dntEvents = new int[]{0};
+        final int[] darkEvents = new int[]{0};
+        dntState.observe(new StateSource.Observer() {
+            @Override public void onChanged(boolean value) { dntEvents[0]++; }
+        });
+        darkState.observe(new StateSource.Observer() {
+            @Override public void onChanged(boolean value) { darkEvents[0]++; }
+        });
+
+        dntState.toggle();
+        assertTrue(dntState.get(), "dnt toggled on");
+        assertEquals(1, Integer.valueOf(dntEvents[0]), "dnt observer fired once");
+        assertEquals(0, Integer.valueOf(darkEvents[0]), "dark observer untouched");
+
+        // Setting same value does not re-fire
+        dntState.set(true);
+        assertEquals(1, Integer.valueOf(dntEvents[0]), "idempotent set does not spam observer");
+
+        // Hot-reload where only dark_mode changes: only dark observer should fire
+        String json = "{\"do_not_track\": true, \"dark_mode\": true}";
+        FileOutputStream fos = new FileOutputStream(tmpFile);
+        fos.write(json.getBytes(StandardCharsets.UTF_8));
+        fos.close();
+        assertTrue(store.reloadFromJsonFile(), "hot reload succeeds");
+        assertEquals(1, Integer.valueOf(dntEvents[0]), "unchanged key observer not spammed on reload");
+        assertEquals(1, Integer.valueOf(darkEvents[0]), "changed key observer fired on reload");
+        assertTrue(darkState.get(), "darkState reflects reload");
+
+        // MutableBoolState with SetterHook
+        final int[] hookCalls = new int[]{0};
+        StateSource.MutableBoolState runtime = new StateSource.MutableBoolState(false, new StateSource.SetterHook() {
+            @Override public boolean apply(boolean requestedValue) {
+                hookCalls[0]++;
+                return requestedValue;
+            }
+        });
+        runtime.toggle();
+        assertTrue(runtime.get(), "runtime toggled");
+        assertEquals(1, Integer.valueOf(hookCalls[0]), "hook called on set");
+        runtime.syncExternal(false);
+        assertTrue(!runtime.get(), "syncExternal updates state");
+        assertEquals(1, Integer.valueOf(hookCalls[0]), "syncExternal bypasses hook");
         tmpFile.delete();
     }
 }
