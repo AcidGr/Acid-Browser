@@ -123,7 +123,7 @@ public class BrowserDataStore {
     SharedPreferences prefs() {
         return mPrimaryPrefsOverride != null
             ? mPrimaryPrefsOverride
-            : prefs();
+            : mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
     }
 
     SharedPreferences legacyPrefs() {
