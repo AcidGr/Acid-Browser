@@ -2,12 +2,18 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.FileObserver;
 import android.text.TextUtils;
 import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -75,10 +81,210 @@ public class BrowserDataStore {
         }
     }
 
+    public interface OnSettingsChangedListener {
+        void onSettingsChanged();
+    }
+
     private final Context mContext;
+    private File mSettingsJsonFile = null;
+    private OnSettingsChangedListener mSettingsChangedListener = null;
+    private FileObserver mFileObserver = null;
+    private volatile long mLastSelfSaveTime = 0;
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
+    }
+
+    public void setWorkspaceDir(File workspaceDir) {
+        if (workspaceDir != null) {
+            mSettingsJsonFile = new File(workspaceDir, "settings.json");
+            syncSettingsJsonFile();
+            startWatchingSettingsFile();
+        }
+    }
+
+    public void startWatchingSettingsFile() {
+        if (mSettingsJsonFile == null) return;
+        if (mFileObserver != null) {
+            try { mFileObserver.stopWatching(); } catch (Exception e) {}
+            mFileObserver = null;
+        }
+        try {
+            File parent = mSettingsJsonFile.getParentFile();
+            if (parent != null && parent.exists()) {
+                mFileObserver = new FileObserver(parent.getAbsolutePath(), FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
+                    @Override
+                    public void onEvent(int event, String path) {
+                        if (path != null && path.endsWith("settings.json")) {
+                            if (System.currentTimeMillis() - mLastSelfSaveTime < 800) {
+                                return; // Ignore own writes
+                            }
+                            mLastSelfSaveTime = System.currentTimeMillis();
+                            reloadFromJsonFile();
+                        }
+                    }
+                };
+                mFileObserver.startWatching();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not start FileObserver on settings directory", e);
+        }
+    }
+
+    public void setOnSettingsChangedListener(OnSettingsChangedListener l) {
+        mSettingsChangedListener = l;
+    }
+
+    public File getSettingsJsonFile() {
+        return mSettingsJsonFile;
+    }
+
+    public void syncSettingsJsonFile() {
+        if (mSettingsJsonFile == null) return;
+        if (mSettingsJsonFile.exists()) {
+            reloadFromJsonFile();
+        } else {
+            saveToJsonFile();
+        }
+    }
+
+    public static String searchEngineToString(int idx) {
+        switch (idx) {
+            case SEARCH_GOOGLE: return "google";
+            case SEARCH_BAIDU: return "baidu";
+            case SEARCH_BING: return "bing";
+            case SEARCH_DUCKDUCKGO: return "duckduckgo";
+            case SEARCH_CUSTOM: return "custom";
+            default: return "google";
+        }
+    }
+
+    public static int searchEngineFromString(String str) {
+        if (str == null) return SEARCH_GOOGLE;
+        str = str.trim().toLowerCase();
+        if ("baidu".equals(str)) return SEARCH_BAIDU;
+        if ("bing".equals(str)) return SEARCH_BING;
+        if ("duckduckgo".equals(str) || "ddg".equals(str)) return SEARCH_DUCKDUCKGO;
+        if ("custom".equals(str)) return SEARCH_CUSTOM;
+        return SEARCH_GOOGLE;
+    }
+
+    public static String homeTypeToString(int type) {
+        switch (type) {
+            case HOME_ACID: return "acid";
+            case HOME_BLANK: return "blank";
+            case HOME_CUSTOM: return "custom";
+            default: return "acid";
+        }
+    }
+
+    public static int homeTypeFromString(String str) {
+        if (str == null) return HOME_ACID;
+        str = str.trim().toLowerCase();
+        if ("blank".equals(str) || "about:blank".equals(str)) return HOME_BLANK;
+        if ("custom".equals(str)) return HOME_CUSTOM;
+        return HOME_ACID;
+    }
+
+    public JSONObject exportToJson() {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("search_engine", searchEngineToString(getSearchEngineIndex()));
+            o.put("search_engine_custom_url", getCustomSearchEngineUrl());
+            o.put("home_type", homeTypeToString(getHomeType()));
+            o.put("home_custom_url", getCustomHomeUrl());
+            o.put("block_images", isBlockImagesEnabled());
+            o.put("do_not_track", isDoNotTrackEnabled());
+            o.put("web_debugging", isWebDebuggingEnabled());
+            o.put("clear_on_exit", isClearOnExit());
+            o.put("dark_mode", isDarkMode());
+            o.put("adblock_enabled", isAdBlockEnabled());
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to export settings to JSON", e);
+        }
+        return o;
+    }
+
+    public void saveToJsonFile() {
+        if (mSettingsJsonFile == null) return;
+        try {
+            mLastSelfSaveTime = System.currentTimeMillis();
+            JSONObject o = exportToJson();
+            String jsonStr = o.toString(2);
+            FileOutputStream fos = new FileOutputStream(mSettingsJsonFile);
+            fos.write(jsonStr.getBytes(StandardCharsets.UTF_8));
+            fos.flush();
+            fos.close();
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to save settings.json", e);
+        }
+    }
+
+    public boolean reloadFromJsonFile() {
+        if (mSettingsJsonFile == null || !mSettingsJsonFile.exists()) return false;
+        try {
+            FileInputStream fis = new FileInputStream(mSettingsJsonFile);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            byte[] buf = new byte[2048];
+            int n;
+            while ((n = fis.read(buf)) != -1) {
+                baos.write(buf, 0, n);
+            }
+            fis.close();
+            String content = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            JSONObject o = new JSONObject(content);
+
+            SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+            if (o.has("search_engine")) {
+                Object se = o.get("search_engine");
+                if (se instanceof Number) {
+                    ed.putInt(PREF_SEARCH_ENGINE, ((Number) se).intValue());
+                } else {
+                    ed.putInt(PREF_SEARCH_ENGINE, searchEngineFromString(String.valueOf(se)));
+                }
+            }
+            if (o.has("search_engine_custom_url")) {
+                ed.putString(PREF_SEARCH_ENGINE_CUSTOM, o.getString("search_engine_custom_url"));
+            }
+            if (o.has("home_type")) {
+                Object ht = o.get("home_type");
+                if (ht instanceof Number) {
+                    ed.putInt(PREF_HOME_TYPE, ((Number) ht).intValue());
+                } else {
+                    ed.putInt(PREF_HOME_TYPE, homeTypeFromString(String.valueOf(ht)));
+                }
+            }
+            if (o.has("home_custom_url")) {
+                ed.putString(PREF_HOME_CUSTOM_URL, o.getString("home_custom_url"));
+            }
+            if (o.has("block_images")) {
+                ed.putBoolean(PREF_BLOCK_IMAGES, o.getBoolean("block_images"));
+            }
+            if (o.has("do_not_track")) {
+                ed.putBoolean(PREF_DO_NOT_TRACK, o.getBoolean("do_not_track"));
+            }
+            if (o.has("web_debugging")) {
+                ed.putBoolean(PREF_WEB_DEBUGGING, o.getBoolean("web_debugging"));
+            }
+            if (o.has("clear_on_exit")) {
+                ed.putBoolean(PREF_CLEAR_ON_EXIT, o.getBoolean("clear_on_exit"));
+            }
+            if (o.has("dark_mode")) {
+                ed.putBoolean(PREF_DARK_MODE, o.getBoolean("dark_mode"));
+            }
+            if (o.has("adblock_enabled")) {
+                ed.putBoolean(PREF_ADBLOCK_ENABLED, o.getBoolean("adblock_enabled"));
+            }
+            ed.apply();
+
+            if (mSettingsChangedListener != null) {
+                mSettingsChangedListener.onSettingsChanged();
+            }
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to reload settings from " + mSettingsJsonFile, e);
+            return false;
+        }
     }
 
     public boolean isDarkMode() {
@@ -90,6 +296,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putBoolean(PREF_DARK_MODE, dark);
         ed.apply();
+        saveToJsonFile();
     }
 
     public boolean isAdBlockEnabled() {
@@ -101,6 +308,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putBoolean(PREF_ADBLOCK_ENABLED, enabled);
         ed.apply();
+        saveToJsonFile();
     }
 
     public int getAdBlockBlockedCount() {
@@ -134,6 +342,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putInt(PREF_SEARCH_ENGINE, index);
         ed.apply();
+        saveToJsonFile();
     }
 
     public String getCustomSearchEngineUrl() {
@@ -145,6 +354,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putString(PREF_SEARCH_ENGINE_CUSTOM, url != null ? url.trim() : "");
         ed.apply();
+        saveToJsonFile();
     }
 
     public String buildSearchUrl(String query) {
@@ -184,6 +394,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putInt(PREF_HOME_TYPE, type);
         ed.apply();
+        saveToJsonFile();
     }
 
     public String getCustomHomeUrl() {
@@ -195,6 +406,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putString(PREF_HOME_CUSTOM_URL, url != null ? url.trim() : "");
         ed.apply();
+        saveToJsonFile();
     }
 
     public String getEffectiveHomeUrl() {
@@ -205,7 +417,8 @@ public class BrowserDataStore {
         if (type == HOME_CUSTOM) {
             String custom = getCustomHomeUrl();
             if (!TextUtils.isEmpty(custom)) {
-                if (!custom.startsWith("http://") && !custom.startsWith("https://")) {
+                custom = custom.trim();
+                if (!custom.startsWith("http://") && !custom.startsWith("https://") && !custom.startsWith("file://") && !custom.startsWith("about:")) {
                     custom = "https://" + custom;
                 }
                 return custom;
@@ -223,6 +436,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putBoolean(PREF_CLEAR_ON_EXIT, val);
         ed.apply();
+        saveToJsonFile();
     }
 
     public boolean isWebDebuggingEnabled() {
@@ -234,6 +448,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putBoolean(PREF_WEB_DEBUGGING, enabled);
         ed.apply();
+        saveToJsonFile();
     }
 
     public boolean isDoNotTrackEnabled() {
@@ -245,6 +460,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putBoolean(PREF_DO_NOT_TRACK, enabled);
         ed.apply();
+        saveToJsonFile();
     }
 
     public boolean isBlockImagesEnabled() {
@@ -256,6 +472,7 @@ public class BrowserDataStore {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putBoolean(PREF_BLOCK_IMAGES, enabled);
         ed.apply();
+        saveToJsonFile();
     }
 
     /**

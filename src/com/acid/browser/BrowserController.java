@@ -65,6 +65,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         void onAgentActionLog(String logLine);
         void onDownloadRequested(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength);
         void onUserscriptInstallRequested(String url, String fileName);
+        void onSettingsReloaded();
     }
 
     public static class TabSession {
@@ -275,7 +276,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         AgentOverlayView overlayView,
         BrowserStateListener listener
     ) {
-        this(context, webViewContainer, overlayView, listener, false);
+        this(context, webViewContainer, overlayView, listener, null, false);
     }
 
     public BrowserController(
@@ -285,14 +286,29 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         BrowserStateListener listener,
         boolean isDarkMode
     ) {
+        this(context, webViewContainer, overlayView, listener, null, isDarkMode);
+    }
+
+    public BrowserController(
+        Context context,
+        FrameLayout webViewContainer,
+        AgentOverlayView overlayView,
+        BrowserStateListener listener,
+        BrowserDataStore dataStore,
+        boolean isDarkMode
+    ) {
         mContext = context;
         mWebViewContainer = webViewContainer;
         mOverlayView = overlayView;
         mListener = listener;
         mDarkMode = isDarkMode;
+        mDataStore = dataStore;
 
         mUserscriptManager = new UserscriptManager(context);
         AdBlockManager.getInstance(context).setWorkspaceDir(getWorkspaceDir());
+        if (mDataStore != null) {
+            mDataStore.setWorkspaceDir(getWorkspaceDir());
+        }
         mAutomationDriver = new WebAutomationDriver(context, this);
 
         if (mOverlayView != null) {
@@ -309,7 +325,22 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             });
         }
 
-        createNewTab(HOME_URL, true);
+        if (mDataStore != null) {
+            List<DownloadItem> saved = mDataStore.loadDownloads();
+            synchronized (mDownloads) {
+                mDownloads.clear();
+                mDownloads.addAll(saved);
+            }
+            if (Build.VERSION.SDK_INT >= 19) {
+                try {
+                    WebView.setWebContentsDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to set web contents debugging", e);
+                }
+            }
+        }
+
+        createNewTab(getHomeUrl(), true);
     }
 
     public Context getContext() {
@@ -366,7 +397,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             switchToTab(tabId);
         }
 
-        String targetUrl = (initialUrl != null && !initialUrl.isEmpty()) ? initialUrl : HOME_URL;
+        String targetUrl = (initialUrl != null && !initialUrl.isEmpty()) ? initialUrl : getHomeUrl();
         tab.url = targetUrl;
         wv.loadUrl(targetUrl);
 
@@ -461,7 +492,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (mTabs.isEmpty()) {
             // Fallback: the browser must always own one tab. Closing the last tab destroys it completely
             // (history included) and a brand-new Home tab takes over, so Back can never return to the old page.
-            createNewTab(HOME_URL, true);
+            createNewTab(getHomeUrl(), true);
             return true;
         }
 
@@ -581,9 +612,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
         applyIdentityToSettings(wv, mIsDesktopMode);
         applyDarkModeToSettings(wv, mDarkMode);
-        if (mDataStore != null && mDataStore.isBlockImagesEnabled()) {
-            s.setLoadsImagesAutomatically(false);
-        }
+        boolean blockImages = mDataStore != null && mDataStore.isBlockImagesEnabled();
+        s.setLoadsImagesAutomatically(!blockImages);
+        s.setBlockNetworkImage(blockImages);
         wv.addJavascriptInterface(mAutomationDriver.getNativeHostBridge(), "__acidNativeHost");
 
         // Track touch coordinates for floating element context menu (PopupWindow)
@@ -716,6 +747,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 mUserscriptManager.injectRuntimeAndUserscripts(
                     view, url, UserscriptMeta.RUN_AT_START);
                 AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
+                if (mDataStore != null && mDataStore.isDoNotTrackEnabled()) {
+                    view.evaluateJavascript("try{Object.defineProperty(navigator,'doNotTrack',{get:function(){return'1';}});}catch(e){}", null);
+                }
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(url, tab.title);
                     mListener.onProgressChanged(0, true);
@@ -945,6 +979,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
+    public void clearAllHistory() {
+        for (TabSession t : mTabs) {
+            if (t.webView != null) {
+                t.webView.clearHistory();
+            }
+        }
+    }
+
+    public BrowserDataStore getDataStore() {
+        return mDataStore;
+    }
+
     public void setWebDebuggingEnabled(boolean enabled) {
         if (Build.VERSION.SDK_INT >= 19) {
             try {
@@ -958,8 +1004,13 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void setBlockImages(boolean block) {
         for (TabSession t : mTabs) {
             if (t.webView != null) {
-                t.webView.getSettings().setLoadsImagesAutomatically(!block);
+                WebSettings s = t.webView.getSettings();
+                s.setLoadsImagesAutomatically(!block);
+                s.setBlockNetworkImage(block);
             }
+        }
+        if (mActiveTab != null && mActiveTab.webView != null) {
+            mActiveTab.webView.reload();
         }
     }
 
@@ -967,7 +1018,25 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void loadUrl(String url) {
         final String finalUrl = normalizeUrl(url);
         if (mActiveTab != null) {
-            mActiveTab.webView.loadUrl(finalUrl);
+            if (mDataStore != null && mDataStore.isDoNotTrackEnabled()) {
+                java.util.Map<String, String> headers = new java.util.HashMap<String, String>();
+                headers.put("DNT", "1");
+                mActiveTab.webView.loadUrl(finalUrl, headers);
+            } else {
+                mActiveTab.webView.loadUrl(finalUrl);
+            }
+        }
+    }
+
+    public void applySettingsHotReload() {
+        if (mDataStore == null) return;
+        setWebDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
+        setBlockImages(mDataStore.isBlockImagesEnabled());
+        if (mDarkMode != mDataStore.isDarkMode()) {
+            setDarkMode(mDataStore.isDarkMode());
+        }
+        if (mListener != null) {
+            mListener.onSettingsReloaded();
         }
     }
 
