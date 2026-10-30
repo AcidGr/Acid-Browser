@@ -44,6 +44,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         void onOpenAgentFloatingWindow();
         void onOpenModelProviderConfig();
         void onOpenAbout();
+        void onOpenMcp();
         void onToggleMcpServer();
         void onOpenUserscripts();
         void onOpenAdBlock();
@@ -460,10 +461,10 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         list.add(TileSpec.route(AcidIcons.ICON_FILE, "脚本管理", new Runnable() {
             @Override public void run() { if (listener != null) listener.onOpenUserscripts(); }
         }));
-        list.add(new TileSpec(
-            AcidIcons.ICON_TERMINAL, AcidIcons.ICON_TERMINAL, "MCP 运行中", "MCP 已关闭", false, mMcpState,
+        list.add(TileSpec.routeWithStatus(
+            AcidIcons.ICON_TERMINAL, "MCP", mMcpState,
             new Runnable() {
-                @Override public void run() { if (listener != null) listener.onToggleMcpServer(); }
+                @Override public void run() { if (listener != null) listener.onOpenMcp(); }
             }
         ));
         list.add(TileSpec.route(AcidIcons.ICON_INFO, "关于", new Runnable() {
@@ -649,15 +650,28 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         int providerCount,
         int modelCount
     ) {
+        updateCards(isDarkMode, isIncognito, isDesktop, mMcpState != null && mMcpState.get(), providerCount, modelCount);
+    }
+
+    public void updateCards(
+        boolean isDarkMode,
+        boolean isIncognito,
+        boolean isDesktop,
+        boolean isMcpRunning,
+        int providerCount,
+        int modelCount
+    ) {
         mDarkState.syncExternal(isDarkMode);
         mIncognitoState.syncExternal(isIncognito);
         mDesktopState.syncExternal(isDesktop);
         mAdBlockState.syncExternal(AdBlockManager.getInstance(getContext()).isEnabled());
+        mMcpState.syncExternal(isMcpRunning);
         refreshTileVisuals();
     }
 
     public void updateMcpState(boolean isRunning) {
         mMcpState.syncExternal(isRunning);
+        refreshTileVisuals();
     }
 
     private void refreshSingleTile(TileSpec spec, MenuCardItem tile) {

@@ -243,7 +243,7 @@ public class AcidSandboxTools {
                 return makeTool(
                     "bash",
                     "Execute a shell command (`sh -c`) with working directory set to the Acid sandbox workspace (`" +
-                    "/data/user/0/com.acid.browser/files/workspace`). Returns stdout, stderr, and exit code.",
+                    "/data/user/0/com.acid.browser/files/acid_workspace`). Returns stdout, stderr, and exit code.",
                     bashProps,
                     new String[]{"command"}
                 );
@@ -705,7 +705,7 @@ public class AcidSandboxTools {
                 + "Scope: " + meta.describeScope() + "\n"
                 + "Run at: " + meta.runAt + "\n"
                 + "File: " + f.getAbsolutePath() + "\n\n"
-                + "The entry now appears in the browser menu (功能 -> 快捷工具). "
+                + "The script is now managed in the browser menu (功能 -> 脚本管理). "
                 + (meta.enabled ? "It is enabled and will run on matching pages." : "It is marked as pending/disabled until the user enables it.");
         }
 

@@ -67,7 +67,9 @@ public final class OverlayStackManager {
         if (modal == null) return;
         dismissAllModals();
         if (modal instanceof AcidBottomSheetView) {
-            ((AcidBottomSheetView) modal).setParentBackHandler(null);
+            AcidBottomSheetView sheet = (AcidBottomSheetView) modal;
+            sheet.setParentBackHandler(null);
+            sheet.onResetToRootPage();
         }
         modal.show();
         mActiveModalOrder.remove(modal);
@@ -88,6 +90,7 @@ public final class OverlayStackManager {
         }
         if (child instanceof AcidBottomSheetView) {
             final AcidBottomSheetView childSheet = (AcidBottomSheetView) child;
+            childSheet.onResetToRootPage();
             if (!mSuspendedChain.isEmpty()) {
                 childSheet.setParentBackHandler(new Runnable() {
                     @Override

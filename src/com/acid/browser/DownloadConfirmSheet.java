@@ -32,7 +32,12 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
         mController = controller;
     }
 
-    public void showConfirm(
+    @Override
+    protected void onResetToRootPage() {
+        setRootPage(buildConfirmPage());
+    }
+
+    public void prepareConfirm(
         String url,
         String fileName,
         String userAgent,
@@ -46,8 +51,18 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
         mPendingContentDisposition = contentDisposition;
         mPendingMimeType = mimeType;
         mPendingContentLength = contentLength;
-
         setRootPage(buildConfirmPage());
+    }
+
+    public void showConfirm(
+        String url,
+        String fileName,
+        String userAgent,
+        String contentDisposition,
+        String mimeType,
+        long contentLength
+    ) {
+        prepareConfirm(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
         show();
     }
 

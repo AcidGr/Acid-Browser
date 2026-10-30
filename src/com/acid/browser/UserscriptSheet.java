@@ -47,6 +47,11 @@ public class UserscriptSheet extends AcidBottomSheetView {
         setRootPage(buildScriptsListPage());
     }
 
+    @Override
+    protected void onResetToRootPage() {
+        setRootPage(buildScriptsListPage());
+    }
+
     public void showScripts() {
         setRootPage(buildScriptsListPage());
         show();

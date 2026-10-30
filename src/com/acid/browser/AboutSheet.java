@@ -31,6 +31,11 @@ public class AboutSheet extends AcidBottomSheetView {
         setRootPage(buildAboutPage());
     }
 
+    @Override
+    protected void onResetToRootPage() {
+        setRootPage(buildAboutPage());
+    }
+
     public void showAbout() {
         setRootPage(buildAboutPage());
         show();

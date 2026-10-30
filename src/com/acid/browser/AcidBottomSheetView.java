@@ -194,6 +194,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
 
     protected boolean mIsDarkMode = false;
     private float mMaxHeightRatio = 0.75f;
+    private boolean mNeedsRenderOnShow = false;
 
     public AcidBottomSheetView(Context context) {
         super(context);
@@ -345,6 +346,26 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         }
     }
 
+    private int resolveSlotHeightPx(View slotView) {
+        if (slotView == null || slotView.getVisibility() != View.VISIBLE) return 0;
+        int measured = slotView.getMeasuredHeight();
+        if (measured > 0) return measured;
+        try {
+            int w = mCardLayout.getWidth() - mCardLayout.getPaddingLeft() - mCardLayout.getPaddingRight();
+            if (w <= 0) {
+                DisplayMetrics dm = getResources().getDisplayMetrics();
+                w = dm.widthPixels - AcidTheme.dp(getContext(), 32);
+            }
+            slotView.measure(
+                MeasureSpec.makeMeasureSpec(Math.max(0, w), MeasureSpec.AT_MOST),
+                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            );
+            int h = slotView.getMeasuredHeight();
+            if (h > 0) return h;
+        } catch (Exception ignored) {}
+        return AcidTheme.dp(getContext(), FALLBACK_SLOT_RESERVE_DP);
+    }
+
     private void updateScrollCeiling() {
         int hostH = getHeight();
         if (hostH <= 0) {
@@ -352,14 +373,8 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
             hostH = dm.heightPixels;
         }
         int chromeReserve = AcidTheme.dp(getContext(), HEADER_CHROME_RESERVE_DP);
-        if (mPinnedHeaderContainer != null && mPinnedHeaderContainer.getVisibility() == View.VISIBLE) {
-            int measured = mPinnedHeaderContainer.getMeasuredHeight();
-            chromeReserve += measured > 0 ? measured : AcidTheme.dp(getContext(), FALLBACK_SLOT_RESERVE_DP);
-        }
-        if (mPinnedFooterContainer != null && mPinnedFooterContainer.getVisibility() == View.VISIBLE) {
-            int measured = mPinnedFooterContainer.getMeasuredHeight();
-            chromeReserve += measured > 0 ? measured : AcidTheme.dp(getContext(), FALLBACK_SLOT_RESERVE_DP);
-        }
+        chromeReserve += resolveSlotHeightPx(mPinnedHeaderContainer);
+        chromeReserve += resolveSlotHeightPx(mPinnedFooterContainer);
         int maxTotal = Math.round(hostH * mMaxHeightRatio);
         int maxScroll = Math.max(AcidTheme.dp(getContext(), MIN_SCROLL_CEILING_DP), maxTotal - chromeReserve);
         mScrollView.setMaxHeightPx(maxScroll);
@@ -498,8 +513,22 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mPageStack.clear();
         if (rootPage != null) {
             mPageStack.add(rootPage);
-            renderActivePage(false);
+            if (isShowing()) {
+                mNeedsRenderOnShow = false;
+                renderActivePage(false);
+            } else {
+                mNeedsRenderOnShow = true;
+            }
         }
+    }
+
+    /**
+     * Hook invoked when opening this sheet as a fresh modal destination (via
+     * {@link OverlayStackManager#openRootModal} or as the child of {@link OverlayStackManager#pushModal}),
+     * ensuring it always starts at its L1 root page rather than a stale L2/L3 sub-page.
+     */
+    protected void onResetToRootPage() {
+        // Subclasses override to reset their root SheetPage
     }
 
     public void pushPage(SheetPage subPage) {
@@ -613,10 +642,15 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
 
     @Override
     public void show() {
-        refreshHeaderNavigationState();
-        updateScrollCeiling();
-        bringToFront();
         setVisibility(View.VISIBLE);
+        if (mNeedsRenderOnShow && !mPageStack.isEmpty()) {
+            mNeedsRenderOnShow = false;
+            renderActivePage(false);
+        } else {
+            refreshHeaderNavigationState();
+            updateScrollCeiling();
+        }
+        bringToFront();
         for (LifecycleObserver obs : mObservers) {
             obs.onSheetShown(this);
         }
@@ -688,8 +722,12 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         }
         mHeaderDivider.setBackgroundColor(AcidTheme.border(isDark));
 
-        if (!mPageStack.isEmpty() && (isShowing() || changed)) {
-            refreshActivePage();
+        if (!mPageStack.isEmpty()) {
+            if (isShowing()) {
+                refreshActivePage();
+            } else if (changed) {
+                mNeedsRenderOnShow = true;
+            }
         }
         onThemeChanged(isDark);
     }

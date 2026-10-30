@@ -106,6 +106,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AdBlockSheet mAdBlockSheet;
     private BrowserSettingsSheet mSettingsSheet;
     private AboutSheet mAboutSheet;
+    private McpSheet mMcpSheet;
     private DownloadConfirmSheet mDownloadConfirmSheet;
 
     private BroadcastReceiver mDownloadReceiver;
@@ -146,9 +147,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         }
 
         initViewportOverlays();
+        mHttpServer = new HttpControlServer(mController, HttpControlServer.DEFAULT_PORT);
         initModalSheets();
 
-        mHttpServer = new HttpControlServer(mController, HttpControlServer.DEFAULT_PORT);
         if (mDataStore.isMcpServerEnabled()) {
             mHttpServer.start();
         }
@@ -419,13 +420,40 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         );
         attachModalSheet(mModelSelectorSheet);
 
-        // 10. Settings Center (Hierarchical L1/L2)
+        // 10. MCP Control Gateway & Security Sheet
+        mMcpSheet = new McpSheet(
+            this, mDataStore, mHttpServer,
+            new McpSheet.OnMcpActionListener() {
+                @Override
+                public void onToggleMcpServer(boolean enable) {
+                    if (enable) {
+                        startMcpServerInternal();
+                    } else {
+                        stopMcpServerInternal();
+                    }
+                }
+
+                @Override
+                public void onRestartMcpServer() {
+                    restartMcpServerInternal();
+                }
+            }
+        );
+        attachModalSheet(mMcpSheet);
+
+        // 11. Settings Center (Hierarchical L1/L2)
         mSettingsSheet = new BrowserSettingsSheet(
             this, mDataStore,
             new BrowserSettingsSheet.OnSettingsActionListener() {
                 @Override
                 public void onOpenModelConfig() {
                     mOverlayStack.pushModal(mSettingsSheet, mProviderConfigSheet);
+                }
+
+                @Override
+                public void onOpenMcp() {
+                    mMcpSheet.renderContent();
+                    mOverlayStack.pushModal(mSettingsSheet, mMcpSheet);
                 }
 
                 @Override
@@ -555,7 +583,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onOpenBookmarks() {
                 BrowserController.TabSession cur = mController.getActiveTab();
-                mBookmarksHistorySheet.showBookmarks(
+                mBookmarksHistorySheet.prepareTab(
+                    BookmarksHistorySheet.TAB_BOOKMARKS,
                     cur != null ? cur.title : "",
                     cur != null ? cur.url : ""
                 );
@@ -565,7 +594,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onOpenHistory() {
                 BrowserController.TabSession cur = mController.getActiveTab();
-                mBookmarksHistorySheet.showHistory(
+                mBookmarksHistorySheet.prepareTab(
+                    BookmarksHistorySheet.TAB_HISTORY,
                     cur != null ? cur.title : "",
                     cur != null ? cur.url : ""
                 );
@@ -601,6 +631,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onOpenAbout() {
                 mOverlayStack.openRootModal(mAboutSheet);
+            }
+
+            @Override
+            public void onOpenMcp() {
+                if (mMcpSheet != null) {
+                    mMcpSheet.renderContent();
+                    mOverlayStack.openRootModal(mMcpSheet);
+                }
             }
 
             @Override
@@ -1054,19 +1092,63 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         );
     }
 
+    private void startMcpServerInternal() {
+        if (mHttpServer == null) return;
+        if (!mHttpServer.isRunning()) {
+            mHttpServer.start();
+        }
+        mDataStore.setMcpServerEnabled(true);
+        boolean lan = mDataStore.isMcpLanEnabled();
+        AcidFeedback.ok(this, "MCP 服务已启动 (" + (lan ? "0.0.0.0:3090 局域网模式" : "127.0.0.1:3090 本机模式") + ")");
+        updateMenuSheetCards();
+        if (mSettingsSheet != null) {
+            mSettingsSheet.setMcpRunning(true);
+            mSettingsSheet.refresh();
+        }
+        if (mMcpSheet != null) {
+            mMcpSheet.renderContent();
+        }
+    }
+
+    private void stopMcpServerInternal() {
+        if (mHttpServer == null) return;
+        if (mHttpServer.isRunning()) {
+            mHttpServer.stop();
+        }
+        mDataStore.setMcpServerEnabled(false);
+        AcidFeedback.info(this, "MCP 服务已停止 (3090 端口已释放)");
+        updateMenuSheetCards();
+        if (mSettingsSheet != null) {
+            mSettingsSheet.setMcpRunning(false);
+            mSettingsSheet.refresh();
+        }
+        if (mMcpSheet != null) {
+            mMcpSheet.renderContent();
+        }
+    }
+
+    private void restartMcpServerInternal() {
+        if (mHttpServer == null) return;
+        if (mHttpServer.isRunning()) {
+            mHttpServer.stop();
+            mHttpServer.start();
+            boolean lan = mDataStore.isMcpLanEnabled();
+            AcidFeedback.ok(this, "MCP 服务已重启 (" + (lan ? "0.0.0.0:3090 局域网模式" : "127.0.0.1:3090 本机模式") + ")");
+        }
+        updateMenuSheetCards();
+        if (mMcpSheet != null) {
+            mMcpSheet.renderContent();
+        }
+    }
+
     private void toggleMcpServer() {
         if (mHttpServer == null) return;
         boolean currentlyRunning = mHttpServer.isRunning();
         if (currentlyRunning) {
-            mHttpServer.stop();
-            mDataStore.setMcpServerEnabled(false);
-            AcidFeedback.info(this, "MCP 服务已停止 (3090 端口已释放)");
+            stopMcpServerInternal();
         } else {
-            mHttpServer.start();
-            mDataStore.setMcpServerEnabled(true);
-            AcidFeedback.ok(this, "MCP 服务已启动 (127.0.0.1:3090)");
+            startMcpServerInternal();
         }
-        updateMenuSheetCards();
     }
 
     private void updateMenuSheetCards() {
@@ -1079,10 +1161,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mIsDarkMode,
             mIncognitoMode,
             mController != null && mController.isDesktopMode(),
+            mHttpServer != null && mHttpServer.isRunning(),
             providerCount,
             modelCount
         );
-        mMenuSheet.updateMcpState(mHttpServer != null && mHttpServer.isRunning());
     }
 
     private void updateShieldVisual() {
@@ -1326,9 +1408,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void run() {
                 if (mDownloadConfirmSheet != null) {
-                    mDownloadConfirmSheet.showConfirm(
+                    mDownloadConfirmSheet.prepareConfirm(
                         url, fileName, userAgent, contentDisposition, mimeType, contentLength
                     );
+                    mOverlayStack.openRootModal(mDownloadConfirmSheet);
                 }
             }
         });

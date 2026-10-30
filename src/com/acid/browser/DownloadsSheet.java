@@ -76,6 +76,11 @@ public class DownloadsSheet extends AcidBottomSheetView {
         super.dismiss();
     }
 
+    @Override
+    protected void onResetToRootPage() {
+        setRootPage(buildDownloadsPage());
+    }
+
     public void showDownloads() {
         setRootPage(buildDownloadsPage());
         show();
@@ -83,7 +88,9 @@ public class DownloadsSheet extends AcidBottomSheetView {
 
     @Override
     public void show() {
-        setRootPage(buildDownloadsPage());
+        if (getPageDepth() == 0) {
+            setRootPage(buildDownloadsPage());
+        }
         super.show();
         startProgressPolling();
     }

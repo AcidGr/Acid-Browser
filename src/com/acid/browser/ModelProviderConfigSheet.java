@@ -47,8 +47,15 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         setRootPage(buildProvidersListPage());
     }
 
+    @Override
+    protected void onResetToRootPage() {
+        mAddTabCustomMode = false;
+        setRootPage(buildProvidersListPage());
+    }
+
     public void showConfig() {
         if (mModelStore == null) return;
+        mAddTabCustomMode = false;
         setRootPage(buildProvidersListPage());
         show();
     }
@@ -210,20 +217,6 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             card.addView(actionsBar);
             container.addView(card);
         }
-
-        TextView btnAddBottom = AcidWidgets.secondaryButton(
-            ctx, mIsDarkMode, "+ 添加模型供应商 (内置目录 / 自定义 API)", accent,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    mAddTabCustomMode = false;
-                    pushPage(buildAddProviderPage());
-                }
-            }
-        );
-        container.addView(btnAddBottom, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
     }
 
     private void confirmDeleteProvider(final AcidModelStore.ConfiguredProvider p) {

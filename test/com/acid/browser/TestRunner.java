@@ -45,6 +45,9 @@ public final class TestRunner {
         run("AcidSandboxTools AgentTool registry & MCP schema generation", new TestCase() {
             @Override public void execute() throws Exception { testAgentToolRegistry(); }
         });
+        run("MCP Authentication, Token generation & LAN configuration", new TestCase() {
+            @Override public void execute() throws Exception { testMcpAuthAndLan(); }
+        });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
@@ -276,10 +279,12 @@ public final class TestRunner {
     }
 
     private static void testThemeAndAsync() throws Exception {
-        // Distinct typography hierarchy (no fake 0.5sp H3 vs H4 gap, Dialog Title < Sheet Title)
+        // Strict monotonic typography hierarchy (Sheet > Dialog > Hero > Item > Body > Section Overline > Field Label > Caption)
         assertTrue(AcidTheme.SP_SHEET_TITLE > AcidTheme.SP_DIALOG_TITLE, "Sheet title > Dialog title");
+        assertTrue(AcidTheme.SP_DIALOG_TITLE > AcidTheme.SP_HERO, "Dialog title > Hero headline");
         assertTrue(AcidTheme.SP_HERO >= AcidTheme.SP_ITEM + 1.0f, "Hero headline >= 1sp above Item title");
-        assertTrue(AcidTheme.SP_FIELD_LABEL > AcidTheme.SP_OVERLINE, "Field label distinct from section overline");
+        assertTrue(AcidTheme.SP_OVERLINE > AcidTheme.SP_FIELD_LABEL, "Outer section header > inner field label");
+        assertTrue(AcidTheme.SP_FIELD_LABEL > AcidTheme.SP_CAPTION, "Field label > caption");
         assertEquals(Float.valueOf(58f), Float.valueOf(AcidTheme.ROW_DIVIDER_INDENT_DP), "Derived row divider indent");
 
         // Contrast helper onColor
@@ -317,5 +322,27 @@ public final class TestRunner {
         assertEquals(5, Integer.valueOf(mcpSchema.length()), "5 MCP tool definitions");
         assertEquals("browser", mcpSchema.getJSONObject(0).getString("name"), "first MCP tool is browser");
         assertTrue(mcpSchema.getJSONObject(0).optJSONObject("inputSchema") != null, "MCP inputSchema populated");
+    }
+
+    private static void testMcpAuthAndLan() throws Exception {
+        BrowserDataStore store = new BrowserDataStore(new InMemoryPrefs(), new InMemoryPrefs(), null);
+        assertTrue(store.isMcpAuthEnabled(), "MCP auth enabled by default");
+        assertTrue(!store.isMcpLanEnabled(), "MCP LAN disabled by default");
+
+        String token1 = store.getOrCreateMcpToken();
+        assertTrue(token1 != null && token1.length() >= 32, "MCP token generated with >=32 chars");
+
+        String token2 = store.getOrCreateMcpToken();
+        assertEquals(token1, token2, "getOrCreateMcpToken returns idempotent persisted token");
+
+        String token3 = store.generateNewMcpToken();
+        assertTrue(token3 != null && token3.length() >= 32, "New MCP token generated");
+        assertTrue(!token1.equals(token3), "Regenerated token differs from old token");
+
+        store.setMcpLanEnabled(true);
+        assertTrue(store.isMcpLanEnabled(), "MCP LAN toggled to enabled");
+
+        store.setMcpAuthEnabled(false);
+        assertTrue(!store.isMcpAuthEnabled(), "MCP Auth toggled to disabled");
     }
 }

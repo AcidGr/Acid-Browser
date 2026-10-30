@@ -42,20 +42,20 @@ public final class AcidWidgets {
     // =====================================================================
 
     /**
-     * Section Overline Header ({@code 11.5sp Bold Muted}, tracked) placed outside above a card group.
+     * Section Header ({@code 12.5sp Bold}, crisp icon-level contrast) placed outside above a card group.
      */
     public static TextView sectionHeader(Context ctx, boolean dark, String title) {
         TextView tv = new TextView(ctx);
         tv.setText(title != null ? title : "");
-        tv.setTextColor(AcidTheme.muted(dark));
+        tv.setTextColor(AcidTheme.icon(dark));
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_OVERLINE);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
         if (Build.VERSION.SDK_INT >= 21) {
-            tv.setLetterSpacing(0.03f);
+            tv.setLetterSpacing(0.02f);
         }
         tv.setPadding(
             AcidTheme.dp(ctx, 4),
-            AcidTheme.dp(ctx, 10),
+            AcidTheme.dp(ctx, 12),
             AcidTheme.dp(ctx, 4),
             AcidTheme.dp(ctx, 6)
         );
@@ -63,7 +63,7 @@ public final class AcidWidgets {
     }
 
     /**
-     * Section Overline Header row with a right-aligned status badge/label.
+     * Section Header row with a right-aligned status badge/label.
      */
     public static LinearLayout sectionHeaderRow(
         Context ctx,
@@ -77,18 +77,18 @@ public final class AcidWidgets {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(
             AcidTheme.dp(ctx, 4),
-            AcidTheme.dp(ctx, 10),
+            AcidTheme.dp(ctx, 12),
             AcidTheme.dp(ctx, 4),
             AcidTheme.dp(ctx, 6)
         );
 
         TextView tvLeft = new TextView(ctx);
         tvLeft.setText(leftTitle != null ? leftTitle : "");
-        tvLeft.setTextColor(AcidTheme.muted(dark));
+        tvLeft.setTextColor(AcidTheme.icon(dark));
         tvLeft.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_OVERLINE);
         tvLeft.setTypeface(Typeface.DEFAULT_BOLD);
         if (Build.VERSION.SDK_INT >= 21) {
-            tvLeft.setLetterSpacing(0.03f);
+            tvLeft.setLetterSpacing(0.02f);
         }
         row.addView(tvLeft, new LinearLayout.LayoutParams(
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
@@ -727,12 +727,12 @@ public final class AcidWidgets {
     // =====================================================================
 
     /**
-     * Standard Form Field Label ({@code 12sp Bold}, visually distinct from section overlines).
+     * Standard Form Field Label ({@code 12sp Bold Muted}, visually subordinate to outer section headers).
      */
     public static TextView fieldLabel(Context ctx, boolean dark, String label) {
         TextView tv = new TextView(ctx);
         tv.setText(label != null ? label : "");
-        tv.setTextColor(AcidTheme.icon(dark));
+        tv.setTextColor(AcidTheme.muted(dark));
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_FIELD_LABEL);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
         tv.setPadding(0, AcidTheme.dp(ctx, 2), 0, AcidTheme.dp(ctx, 5));
