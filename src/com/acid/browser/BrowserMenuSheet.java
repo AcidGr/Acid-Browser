@@ -44,6 +44,7 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         void onToggleMcpServer();
         void onOpenUserscripts();
         void onOpenAdBlock();
+        void onOpenSettings();
     }
 
     /**
@@ -321,13 +322,14 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
     private final MenuCardItem mMenuItemDesktop;
     private final MenuCardItem mMenuItemDownload;
     private final MenuCardItem mMenuItemAgent;
-    private final MenuCardItem mMenuItemModelConfig;
+    private final MenuCardItem mMenuItemSettings;
 
-    // Page 2: 9th, 10th, 11th & 12th tools (About, MCP Server, Userscripts, AdBlock)
-    private final MenuCardItem mMenuItemAbout;
-    private final MenuCardItem mMenuItemMcp;
-    private final MenuCardItem mMenuItemScripts;
+    // Page 2: 9th, 10th, 11th, 12th & 13th tools (ModelConfig, AdBlock, Userscripts, MCP Server, About)
+    private final MenuCardItem mMenuItemModelConfig;
     private final MenuCardItem mMenuItemAdBlock;
+    private final MenuCardItem mMenuItemScripts;
+    private final MenuCardItem mMenuItemMcp;
+    private final MenuCardItem mMenuItemAbout;
     private boolean mIsMcpRunning = false;
 
     private final MenuActionListener mListener;
@@ -521,6 +523,30 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         itemLp7.rightMargin = AcidTheme.dp(context, 2);
         row2.addView(mMenuItemAgent, itemLp7);
 
+        mMenuItemSettings = new MenuCardItem(
+            context, AcidIcons.ICON_SETTINGS, "设置",
+            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    dismiss();
+                    if (mListener != null) mListener.onOpenSettings();
+                }
+            }
+        );
+        LinearLayout.LayoutParams itemLp8 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        itemLp8.leftMargin = AcidTheme.dp(context, 4);
+        row2.addView(mMenuItemSettings, itemLp8);
+        page1.addView(row2);
+
+        // --- PAGE 2 (5 tools: ModelConfig, AdBlock, Scripts, MCP, About) ---
+        page2 = new LinearLayout(context);
+        page2.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout page2Row1 = new LinearLayout(context);
+        page2Row1.setOrientation(LinearLayout.HORIZONTAL);
+        page2Row1.setPadding(0, AcidTheme.dp(context, 8), 0, AcidTheme.dp(context, 4));
+
         mMenuItemModelConfig = new MenuCardItem(
             context, AcidIcons.ICON_MODEL, "模型配置",
             AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
@@ -532,48 +558,25 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
                 }
             }
         );
-        LinearLayout.LayoutParams itemLp8 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp8.leftMargin = AcidTheme.dp(context, 4);
-        row2.addView(mMenuItemModelConfig, itemLp8);
-        page1.addView(row2);
+        LinearLayout.LayoutParams modelLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        modelLp.rightMargin = AcidTheme.dp(context, 2);
+        page2Row1.addView(mMenuItemModelConfig, modelLp);
 
-        // --- PAGE 2 (9th tool: About) ---
-        page2 = new LinearLayout(context);
-        page2.setOrientation(LinearLayout.VERTICAL);
-
-        LinearLayout page2Row1 = new LinearLayout(context);
-        page2Row1.setOrientation(LinearLayout.HORIZONTAL);
-        page2Row1.setPadding(0, AcidTheme.dp(context, 8), 0, AcidTheme.dp(context, 4));
-
-        mMenuItemAbout = new MenuCardItem(
-            context, AcidIcons.ICON_INFO, "关于",
+        mMenuItemAdBlock = new MenuCardItem(
+            context, AcidIcons.ICON_ADBLOCK, "广告拦截",
             AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
             new OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     dismiss();
-                    if (mListener != null) mListener.onOpenAbout();
+                    if (mListener != null) mListener.onOpenAdBlock();
                 }
             }
         );
-        LinearLayout.LayoutParams aboutLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        aboutLp.rightMargin = AcidTheme.dp(context, 2);
-        page2Row1.addView(mMenuItemAbout, aboutLp);
-
-        mMenuItemMcp = new MenuCardItem(
-            context, AcidIcons.ICON_TERMINAL, "MCP 服务",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (mListener != null) mListener.onToggleMcpServer();
-                }
-            }
-        );
-        LinearLayout.LayoutParams mcpLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        mcpLp.leftMargin = AcidTheme.dp(context, 2);
-        mcpLp.rightMargin = AcidTheme.dp(context, 2);
-        page2Row1.addView(mMenuItemMcp, mcpLp);
+        LinearLayout.LayoutParams adBlockLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        adBlockLp.leftMargin = AcidTheme.dp(context, 2);
+        adBlockLp.rightMargin = AcidTheme.dp(context, 2);
+        page2Row1.addView(mMenuItemAdBlock, adBlockLp);
 
         mMenuItemScripts = new MenuCardItem(
             context, AcidIcons.ICON_FILE, "脚本管理",
@@ -591,30 +594,45 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         scriptsLp.rightMargin = AcidTheme.dp(context, 2);
         page2Row1.addView(mMenuItemScripts, scriptsLp);
 
-        mMenuItemAdBlock = new MenuCardItem(
-            context, AcidIcons.ICON_ADBLOCK, "广告拦截",
+        mMenuItemMcp = new MenuCardItem(
+            context, AcidIcons.ICON_TERMINAL, "MCP 服务",
+            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (mListener != null) mListener.onToggleMcpServer();
+                }
+            }
+        );
+        LinearLayout.LayoutParams mcpLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        mcpLp.leftMargin = AcidTheme.dp(context, 2);
+        page2Row1.addView(mMenuItemMcp, mcpLp);
+        page2.addView(page2Row1);
+
+        // Row 2: About + 3 placeholders
+        LinearLayout page2Row2 = new LinearLayout(context);
+        page2Row2.setOrientation(LinearLayout.HORIZONTAL);
+        page2Row2.setPadding(0, AcidTheme.dp(context, 4), 0, AcidTheme.dp(context, 4));
+
+        mMenuItemAbout = new MenuCardItem(
+            context, AcidIcons.ICON_INFO, "关于",
             AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
             new OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     dismiss();
-                    if (mListener != null) mListener.onOpenAdBlock();
+                    if (mListener != null) mListener.onOpenAbout();
                 }
             }
         );
-        LinearLayout.LayoutParams adBlockLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        adBlockLp.leftMargin = AcidTheme.dp(context, 2);
-        page2Row1.addView(mMenuItemAdBlock, adBlockLp);
-        page2.addView(page2Row1);
+        LinearLayout.LayoutParams aboutLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        aboutLp.rightMargin = AcidTheme.dp(context, 2);
+        page2Row2.addView(mMenuItemAbout, aboutLp);
 
-        // Row 2 placeholder row on Page 2 for identical height stability
-        LinearLayout page2Row2 = new LinearLayout(context);
-        page2Row2.setOrientation(LinearLayout.HORIZONTAL);
-        page2Row2.setPadding(0, AcidTheme.dp(context, 4), 0, AcidTheme.dp(context, 4));
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 3; i++) {
             View ph = new View(context);
             LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(0, AcidTheme.dp(context, 54), 1f);
-            if (i > 0) r2Lp.leftMargin = AcidTheme.dp(context, 2);
+            r2Lp.leftMargin = AcidTheme.dp(context, 2);
             page2Row2.addView(ph, r2Lp);
         }
         page2.addView(page2Row2);
@@ -786,6 +804,7 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         mMenuItemHistory.update(AcidIcons.ICON_HISTORY, "历史浏览", muted, text, itemBg);
         mMenuItemDownload.update(AcidIcons.ICON_DOWNLOAD, "下载管理", muted, text, itemBg);
         mMenuItemAgent.update(AcidIcons.ICON_AGENT, "Acid Agent", muted, text, itemBg);
+        mMenuItemSettings.update(AcidIcons.ICON_SETTINGS, "设置", muted, text, itemBg);
         mMenuItemModelConfig.update(AcidIcons.ICON_MODEL, "模型配置", muted, text, itemBg);
         mMenuItemAbout.update(AcidIcons.ICON_INFO, "关于", muted, text, itemBg);
         mMenuItemScripts.update(AcidIcons.ICON_FILE, "脚本管理", muted, text, itemBg);

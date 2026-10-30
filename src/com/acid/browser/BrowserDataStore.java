@@ -30,6 +30,40 @@ public class BrowserDataStore {
     public static final String PREF_ADBLOCK_ENABLED = "adblock_enabled";
     public static final String PREF_ADBLOCK_BLOCKED_COUNT = "adblock_blocked_count";
     public static final String PREF_ADBLOCK_SUBSCRIPTION_URL = "adblock_sub_url";
+    public static final String PREF_SEARCH_ENGINE = "search_engine";
+    public static final String PREF_SEARCH_ENGINE_CUSTOM = "search_engine_custom";
+    public static final String PREF_HOME_TYPE = "home_type";
+    public static final String PREF_HOME_CUSTOM_URL = "home_custom_url";
+    public static final String PREF_CLEAR_ON_EXIT = "clear_on_exit";
+    public static final String PREF_WEB_DEBUGGING = "web_debugging";
+    public static final String PREF_DO_NOT_TRACK = "do_not_track";
+    public static final String PREF_BLOCK_IMAGES = "block_images";
+
+    public static final int SEARCH_GOOGLE = 0;
+    public static final int SEARCH_BAIDU = 1;
+    public static final int SEARCH_BING = 2;
+    public static final int SEARCH_DUCKDUCKGO = 3;
+    public static final int SEARCH_CUSTOM = 4;
+
+    public static final String[] SEARCH_ENGINE_NAMES = new String[] {
+        "Google", "百度 (Baidu)", "必应 (Bing)", "DuckDuckGo", "自定义"
+    };
+
+    public static final String[] SEARCH_ENGINE_URLS = new String[] {
+        "https://www.google.com/search?q=%s",
+        "https://www.baidu.com/s?wd=%s",
+        "https://www.bing.com/search?q=%s",
+        "https://duckduckgo.com/?q=%s",
+        ""
+    };
+
+    public static final int HOME_ACID = 0;
+    public static final int HOME_BLANK = 1;
+    public static final int HOME_CUSTOM = 2;
+
+    public static final String[] HOME_TYPE_NAMES = new String[] {
+        "Acid 默认首页", "空白页 (about:blank)", "自定义网址"
+    };
 
     public static class EntryItem {
         public final String title;
@@ -88,6 +122,139 @@ public class BrowserDataStore {
     public void setAdBlockSubscriptionUrl(String url) {
         SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
         ed.putString(PREF_ADBLOCK_SUBSCRIPTION_URL, url != null ? url.trim() : "");
+        ed.apply();
+    }
+
+    public int getSearchEngineIndex() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getInt(PREF_SEARCH_ENGINE, SEARCH_GOOGLE);
+    }
+
+    public void setSearchEngineIndex(int index) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putInt(PREF_SEARCH_ENGINE, index);
+        ed.apply();
+    }
+
+    public String getCustomSearchEngineUrl() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(PREF_SEARCH_ENGINE_CUSTOM, "");
+    }
+
+    public void setCustomSearchEngineUrl(String url) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putString(PREF_SEARCH_ENGINE_CUSTOM, url != null ? url.trim() : "");
+        ed.apply();
+    }
+
+    public String buildSearchUrl(String query) {
+        if (query == null) query = "";
+        int idx = getSearchEngineIndex();
+        String template = null;
+        if (idx >= 0 && idx < SEARCH_ENGINE_URLS.length - 1) {
+            template = SEARCH_ENGINE_URLS[idx];
+        } else if (idx == SEARCH_CUSTOM) {
+            String custom = getCustomSearchEngineUrl();
+            if (!TextUtils.isEmpty(custom)) {
+                template = custom;
+            }
+        }
+        if (TextUtils.isEmpty(template)) {
+            template = SEARCH_ENGINE_URLS[SEARCH_GOOGLE];
+        }
+
+        try {
+            String encoded = java.net.URLEncoder.encode(query, "UTF-8");
+            if (template.contains("%s")) {
+                return template.replace("%s", encoded);
+            } else {
+                return template + encoded;
+            }
+        } catch (Exception e) {
+            return "https://www.google.com/search?q=" + query;
+        }
+    }
+
+    public int getHomeType() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getInt(PREF_HOME_TYPE, HOME_ACID);
+    }
+
+    public void setHomeType(int type) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putInt(PREF_HOME_TYPE, type);
+        ed.apply();
+    }
+
+    public String getCustomHomeUrl() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getString(PREF_HOME_CUSTOM_URL, "");
+    }
+
+    public void setCustomHomeUrl(String url) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putString(PREF_HOME_CUSTOM_URL, url != null ? url.trim() : "");
+        ed.apply();
+    }
+
+    public String getEffectiveHomeUrl() {
+        int type = getHomeType();
+        if (type == HOME_BLANK) {
+            return "about:blank";
+        }
+        if (type == HOME_CUSTOM) {
+            String custom = getCustomHomeUrl();
+            if (!TextUtils.isEmpty(custom)) {
+                if (!custom.startsWith("http://") && !custom.startsWith("https://")) {
+                    custom = "https://" + custom;
+                }
+                return custom;
+            }
+        }
+        return BrowserController.HOME_URL;
+    }
+
+    public boolean isClearOnExit() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(PREF_CLEAR_ON_EXIT, false);
+    }
+
+    public void setClearOnExit(boolean val) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putBoolean(PREF_CLEAR_ON_EXIT, val);
+        ed.apply();
+    }
+
+    public boolean isWebDebuggingEnabled() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(PREF_WEB_DEBUGGING, false);
+    }
+
+    public void setWebDebuggingEnabled(boolean enabled) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putBoolean(PREF_WEB_DEBUGGING, enabled);
+        ed.apply();
+    }
+
+    public boolean isDoNotTrackEnabled() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(PREF_DO_NOT_TRACK, true);
+    }
+
+    public void setDoNotTrackEnabled(boolean enabled) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putBoolean(PREF_DO_NOT_TRACK, enabled);
+        ed.apply();
+    }
+
+    public boolean isBlockImagesEnabled() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(PREF_BLOCK_IMAGES, false);
+    }
+
+    public void setBlockImagesEnabled(boolean enabled) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putBoolean(PREF_BLOCK_IMAGES, enabled);
         ed.apply();
     }
 
