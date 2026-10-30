@@ -48,6 +48,9 @@ public final class TestRunner {
         run("MCP Authentication, Token generation & LAN configuration", new TestCase() {
             @Override public void execute() throws Exception { testMcpAuthAndLan(); }
         });
+        run("Bookmarks JSON two-way sync, live hot-reload & cleanup protection", new TestCase() {
+            @Override public void execute() throws Exception { testBookmarksSyncAndSafety(); }
+        });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
@@ -344,5 +347,75 @@ public final class TestRunner {
 
         store.setMcpAuthEnabled(false);
         assertTrue(!store.isMcpAuthEnabled(), "MCP Auth toggled to disabled");
+    }
+
+    private static void testBookmarksSyncAndSafety() throws Exception {
+        File tmpDir = File.createTempFile("acid_ws_test_", "");
+        tmpDir.delete();
+        tmpDir.mkdirs();
+        tmpDir.deleteOnExit();
+
+        File settingsFile = new File(tmpDir, "settings.json");
+        settingsFile.createNewFile();
+        File bookmarksFile = new File(tmpDir, "bookmarks.json");
+
+        InMemoryPrefs prefs = new InMemoryPrefs();
+        BrowserDataStore store = new BrowserDataStore(prefs, new InMemoryPrefs(), settingsFile, bookmarksFile);
+
+        // 1. Initial sync creates bookmarks.json with defaults
+        store.syncBookmarksJsonFile();
+        assertTrue(bookmarksFile.exists(), "bookmarks.json created automatically");
+        List<BrowserDataStore.EntryItem> items = store.loadBookmarks();
+        assertTrue(items.size() >= 4, "default bookmarks seeded");
+
+        // 2. Add bookmark via store updates bookmarks.json
+        final int[] callbacks = new int[]{0};
+        store.setOnBookmarksChangedListener(new BrowserDataStore.OnBookmarksChangedListener() {
+            @Override public void onBookmarksChanged() { callbacks[0]++; }
+        });
+        store.addBookmark("My Custom Site", "https://custom.example.com");
+        assertTrue(bookmarksFile.length() > 0, "bookmarks.json updated");
+
+        // 3. Edit bookmarks.json externally and hot-reload
+        String externalJson = "[\n  {\"title\": \"DeepSeek AI\", \"url\": \"https://chat.deepseek.com\"}\n]";
+        FileOutputStream fos = new FileOutputStream(bookmarksFile);
+        fos.write(externalJson.getBytes(StandardCharsets.UTF_8));
+        fos.close();
+
+        assertTrue(store.reloadBookmarksFromJsonFile(), "reloadBookmarksFromJsonFile succeeds");
+        assertEquals(1, Integer.valueOf(callbacks[0]), "bookmarks change callback fired");
+        List<BrowserDataStore.EntryItem> reloaded = store.loadBookmarks();
+        assertEquals(1, Integer.valueOf(reloaded.size()), "1 bookmark after external reload");
+        assertEquals("DeepSeek AI", reloaded.get(0).title, "reloaded title");
+        assertEquals("https://chat.deepseek.com", reloaded.get(0).url, "reloaded url");
+
+        // 4. Corrupt JSON in bookmarks.json should be rejected safely without wiping existing bookmarks
+        FileOutputStream corruptFos = new FileOutputStream(bookmarksFile);
+        corruptFos.write("{invalid_json".getBytes(StandardCharsets.UTF_8));
+        corruptFos.close();
+        assertTrue(!store.reloadBookmarksFromJsonFile(), "corrupt json reload safely rejected");
+        assertEquals(1, Integer.valueOf(store.loadBookmarks().size()), "existing bookmarks preserved on corrupt reload");
+
+        // 5. Test clearWorkspaceTempFiles protection
+        File dummyHomepage = new File(tmpDir, "homepage");
+        dummyHomepage.mkdirs();
+        File dummyTempFile = new File(tmpDir, "report.html");
+        dummyTempFile.createNewFile();
+        File dummyTempDir = new File(tmpDir, "temp_data");
+        dummyTempDir.mkdirs();
+
+        int cleaned = store.clearWorkspaceTempFiles(tmpDir);
+        assertEquals(2, Integer.valueOf(cleaned), "cleaned 2 temp entries");
+        assertTrue(!dummyTempFile.exists(), "temp file deleted");
+        assertTrue(!dummyTempDir.exists(), "temp dir deleted");
+        assertTrue(bookmarksFile.exists(), "bookmarks.json strictly preserved by whitelist");
+        assertTrue(settingsFile.exists(), "settings.json strictly preserved by whitelist");
+        assertTrue(dummyHomepage.exists(), "homepage directory strictly preserved by whitelist");
+
+        // Cleanup
+        dummyHomepage.delete();
+        bookmarksFile.delete();
+        settingsFile.delete();
+        tmpDir.delete();
     }
 }
