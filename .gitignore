@@ -5,8 +5,7 @@ build/
 *.dex
 *.class
 
-# Sensitive: exported cookies / credentials must never be committed
-via_cookies.json
+# Sensitive: local credentials or cookie dumps must never be committed
 *_cookies.json
 *.cookies.db
 

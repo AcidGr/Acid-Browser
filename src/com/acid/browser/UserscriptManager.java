@@ -88,16 +88,6 @@ public class UserscriptManager {
                 Log.w(TAG, "Could not install default userscript to " + defaultScript.getAbsolutePath());
             }
         }
-
-        File skillsDir = new File(mWorkspaceDir, "skills");
-        if (!skillsDir.exists()) {
-            skillsDir.mkdirs();
-        }
-        File defaultSkill = new File(skillsDir, "userscript_dev.md");
-        String skillSrc = readAssetText("skills/userscript_dev.md");
-        if (!skillSrc.isEmpty()) {
-            writeFileText(defaultSkill, skillSrc);
-        }
     }
 
     public String getBridgeJs() {
