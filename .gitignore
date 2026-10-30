@@ -20,3 +20,5 @@ via_cookies.json
 publish*.sh
 upload*.sh
 deploy*.sh
+changelog.txt
+release_notes.txt
