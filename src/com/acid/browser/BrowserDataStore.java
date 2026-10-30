@@ -170,6 +170,9 @@ public class BrowserDataStore {
     public void setWorkspaceDir(File workspaceDir) {
         if (workspaceDir != null) {
             mWorkspaceDir = workspaceDir;
+            if (!workspaceDir.exists()) {
+                workspaceDir.mkdirs();
+            }
             mSettingsJsonFile = new File(workspaceDir, "settings.json");
             mBookmarksJsonFile = new File(workspaceDir, "bookmarks.json");
             mHistoryJsonFile = new File(workspaceDir, "history.json");
@@ -474,6 +477,10 @@ public class BrowserDataStore {
     public void saveToJsonFile() {
         if (mSettingsJsonFile == null) return;
         try {
+            File parent = mSettingsJsonFile.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
             mLastSelfSaveTime = System.currentTimeMillis();
             JSONObject o = exportToJson();
             String jsonStr = o.toString(2);
