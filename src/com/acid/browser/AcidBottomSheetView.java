@@ -20,22 +20,26 @@ import java.util.List;
 /**
  * Standard Tier-1 / Tier-2 BottomSheet Modal Scaffold for Acid Browser.
  *
- * <p>Capabilities:
- * <ul>
- *   <li>Unified scrim, {@code H1 (16sp Bold)} header bar, optional action badge,
- *       and 34x34dp close button with press feedback (no fake drag handle on non-draggable sheets).</li>
- *   <li><b>Adaptive height with max-height ceiling</b>: wraps short content naturally while
- *       capping tall content at 78% of screen height (eliminating the rigid 430dp blank gap).</li>
- *   <li><b>Pinned sub-header slot</b> ({@link #getPinnedHeaderContainer()}): holds search bars or
- *       segmented tabs above the scroll area so filtering never destroys input focus.</li>
- *   <li><b>Built-in Tier-2 sub-page navigation stack</b> ({@link #setRootPage}, {@link #pushPage},
- *       {@link #popPage}): automatically renders {@code [← Back]} in the top-left header and
- *       handles system Back presses without ad-hoc state flags.</li>
- *   <li><b>Live theme rebuild hook</b> ({@link #onThemeChanged(boolean)}): subclasses automatically
- *       re-render dynamic content when day/night mode flips.</li>
- * </ul>
+ * <p>Template Anatomy:
+ * <ol>
+ *   <li><b>Header Bar</b>: {@code [← Title (16sp Bold)] ... [Action Pill?] [✕ (40x40dp)]}.
+ *       {@code [←]} appears automatically whenever the internal sub-page stack depth &gt; 1
+ *       OR when this sheet was pushed from a parent sheet via {@link OverlayStackManager#pushModal}.
+ *       Tapping {@code [←]} or pressing system Back steps back one level; tapping {@code [✕]}
+ *       or the scrim always closes the entire modal flow.</li>
+ *   <li><b>Pinned Sub-Header Slot</b> ({@code pinnedHeader}): holds search bars, segmented tabs,
+ *       or filter chips above the scroll view so live filtering never steals input focus.</li>
+ *   <li><b>Adaptive Scrollable Body</b> ({@code contentContainer}): wraps short content naturally
+ *       and clamps tall content at 75% of screen height.</li>
+ *   <li><b>Pinned Bottom Footer Slot</b> ({@code pinnedFooter}): holds primary/secondary CTA buttons
+ *       below the scroll area so form submit actions never scroll out of view.</li>
+ * </ol>
  */
 public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
+
+    private static final float HEADER_CHROME_RESERVE_DP = 76f;
+    private static final float FALLBACK_SLOT_RESERVE_DP = 52f;
+    private static final float MIN_SCROLL_CEILING_DP = 180f;
 
     public interface OnDismissListener {
         void onDismiss();
@@ -44,23 +48,39 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     public interface LifecycleObserver {
         void onSheetShown(AcidBottomSheetView sheet);
         void onSheetDismissed(AcidBottomSheetView sheet);
+        void onSheetCloseAllRequested(AcidBottomSheetView sheet);
     }
 
     public interface PageRenderer {
         void render(LinearLayout pinnedHeader, LinearLayout contentContainer);
     }
 
+    public interface FullPageRenderer {
+        void render(LinearLayout pinnedHeader, LinearLayout contentContainer, LinearLayout pinnedFooter);
+    }
+
     public static final class SheetPage {
         public final String title;
-        public final int actionIconId;
-        public final String actionText;
-        public final int actionColor;
-        public final OnClickListener actionListener;
-        public final PageRenderer renderer;
+        public int actionIconId;
+        public String actionText;
+        public int actionColor;
+        public OnClickListener actionListener;
+        public final FullPageRenderer fullRenderer;
+        public float minContentHeightDp = 0f;
+        public Runnable onPauseListener = null;
         public int savedScrollY = 0;
 
-        public SheetPage(String title, PageRenderer renderer) {
+        public SheetPage(String title, final PageRenderer renderer) {
             this(title, 0, null, 0, null, renderer);
+        }
+
+        public SheetPage(String title, FullPageRenderer fullRenderer) {
+            this.title = title != null ? title : "";
+            this.actionIconId = 0;
+            this.actionText = null;
+            this.actionColor = 0;
+            this.actionListener = null;
+            this.fullRenderer = fullRenderer;
         }
 
         public SheetPage(
@@ -69,14 +89,41 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
             String actionText,
             int actionColor,
             OnClickListener actionListener,
-            PageRenderer renderer
+            final PageRenderer renderer
         ) {
             this.title = title != null ? title : "";
             this.actionIconId = actionIconId;
             this.actionText = actionText;
             this.actionColor = actionColor;
             this.actionListener = actionListener;
-            this.renderer = renderer;
+            this.fullRenderer = renderer == null ? null : new FullPageRenderer() {
+                @Override
+                public void render(LinearLayout pinnedHeader, LinearLayout contentContainer, LinearLayout pinnedFooter) {
+                    renderer.render(pinnedHeader, contentContainer);
+                }
+            };
+        }
+
+        public SheetPage withAction(int iconId, String text, OnClickListener listener) {
+            return withAction(iconId, text, 0, listener);
+        }
+
+        public SheetPage withAction(int iconId, String text, int color, OnClickListener listener) {
+            this.actionIconId = iconId;
+            this.actionText = text;
+            this.actionColor = color;
+            this.actionListener = listener;
+            return this;
+        }
+
+        public SheetPage withMinContentHeightDp(float minDp) {
+            this.minContentHeightDp = minDp;
+            return this;
+        }
+
+        public SheetPage withOnPause(Runnable listener) {
+            this.onPauseListener = listener;
+            return this;
         }
     }
 
@@ -138,10 +185,12 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     private final LinearLayout mPinnedHeaderContainer;
     private final AdaptiveScrollView mScrollView;
     private final LinearLayout mContentContainer;
+    private final LinearLayout mPinnedFooterContainer;
 
     private final List<SheetPage> mPageStack = new ArrayList<SheetPage>();
     private final List<LifecycleObserver> mObservers = new ArrayList<LifecycleObserver>();
     private OnDismissListener mDismissListener;
+    private Runnable mParentBackHandler = null;
 
     protected boolean mIsDarkMode = false;
     private float mMaxHeightRatio = 0.75f;
@@ -150,14 +199,13 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         super(context);
         setVisibility(View.GONE);
 
-        // 1. Semi-transparent Scrim
+        // 1. Semi-transparent Scrim (always closes entire modal flow)
         mScrim = new View(context);
         mScrim.setBackgroundColor(AcidTheme.SCRIM);
         mScrim.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
-                AcidTheme.hideKeyboard(AcidBottomSheetView.this);
-                dismiss();
+                closeEntireModalFlow();
             }
         });
         addView(mScrim, new FrameLayout.LayoutParams(
@@ -170,7 +218,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mCardLayout.setClickable(true);
         mCardLayout.setFocusable(true);
         int padH = AcidTheme.dp(context, 16);
-        int padTop = AcidTheme.dp(context, 13);
+        int padTop = AcidTheme.dp(context, 12);
         int padBottom = AcidTheme.dp(context, 16);
         mCardLayout.setPadding(padH, padTop, padH, padBottom);
 
@@ -178,6 +226,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mHeaderRow = new LinearLayout(context);
         mHeaderRow.setOrientation(LinearLayout.HORIZONTAL);
         mHeaderRow.setGravity(Gravity.CENTER_VERTICAL);
+        mHeaderRow.setMinimumHeight(AcidTheme.dp(context, 40));
         mHeaderRow.setClickable(true);
 
         mNavTitleBox = new LinearLayout(context);
@@ -198,7 +247,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mTitleView = new TextView(context);
         mTitleView.setText("");
         mTitleView.setTextColor(AcidTheme.LIGHT_TEXT);
-        mTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H1_SHEET);
+        mTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_SHEET_TITLE);
         mTitleView.setTypeface(Typeface.DEFAULT_BOLD);
         mTitleView.setSingleLine(true);
         mTitleView.setEllipsize(TextUtils.TruncateAt.END);
@@ -215,7 +264,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
 
         mCloseBox = new LinearLayout(context);
         mCloseBox.setGravity(Gravity.CENTER);
-        int closeSize = AcidTheme.dp(context, 34);
+        int closeSize = AcidTheme.dp(context, 40);
         LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(closeSize, closeSize);
         closeLp.leftMargin = AcidTheme.dp(context, 6);
         mCloseBox.setLayoutParams(closeLp);
@@ -226,8 +275,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mCloseBox.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
-                AcidTheme.hideKeyboard(AcidBottomSheetView.this);
-                dismiss();
+                closeEntireModalFlow();
             }
         });
         mHeaderRow.addView(mCloseBox);
@@ -238,7 +286,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         LinearLayout.LayoutParams divLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, AcidTheme.dp(context, 1))
         );
-        divLp.topMargin = AcidTheme.dp(context, 8);
+        divLp.topMargin = AcidTheme.dp(context, 6);
         divLp.bottomMargin = AcidTheme.dp(context, 4);
         mCardLayout.addView(mHeaderDivider, divLp);
 
@@ -254,7 +302,6 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         // Adaptive ScrollView & Content Container
         mScrollView = new AdaptiveScrollView(context);
         mScrollView.setVerticalScrollBarEnabled(false);
-        updateScrollCeiling();
 
         mContentContainer = new LinearLayout(context);
         mContentContainer.setOrientation(LinearLayout.VERTICAL);
@@ -268,12 +315,26 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         );
         mCardLayout.addView(mScrollView, sLp);
 
+        // Pinned Footer Container (below ScrollView, hidden when empty)
+        mPinnedFooterContainer = new LinearLayout(context);
+        mPinnedFooterContainer.setOrientation(LinearLayout.VERTICAL);
+        mPinnedFooterContainer.setVisibility(View.GONE);
+        mPinnedFooterContainer.setPadding(0, AcidTheme.dp(context, 10), 0, 0);
+        mCardLayout.addView(mPinnedFooterContainer, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
         FrameLayout.LayoutParams cLp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM
         );
         addView(mCardLayout, cLp);
 
+        updateScrollCeiling();
         applyTheme(false);
+    }
+
+    public boolean isDarkMode() {
+        return mIsDarkMode;
     }
 
     @Override
@@ -290,13 +351,17 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
             DisplayMetrics dm = getResources().getDisplayMetrics();
             hostH = dm.heightPixels;
         }
-        int chromeReserve = AcidTheme.dp(getContext(), 92);
+        int chromeReserve = AcidTheme.dp(getContext(), HEADER_CHROME_RESERVE_DP);
         if (mPinnedHeaderContainer != null && mPinnedHeaderContainer.getVisibility() == View.VISIBLE) {
-            int measuredPinned = mPinnedHeaderContainer.getMeasuredHeight();
-            chromeReserve += measuredPinned > 0 ? measuredPinned : AcidTheme.dp(getContext(), 56);
+            int measured = mPinnedHeaderContainer.getMeasuredHeight();
+            chromeReserve += measured > 0 ? measured : AcidTheme.dp(getContext(), FALLBACK_SLOT_RESERVE_DP);
+        }
+        if (mPinnedFooterContainer != null && mPinnedFooterContainer.getVisibility() == View.VISIBLE) {
+            int measured = mPinnedFooterContainer.getMeasuredHeight();
+            chromeReserve += measured > 0 ? measured : AcidTheme.dp(getContext(), FALLBACK_SLOT_RESERVE_DP);
         }
         int maxTotal = Math.round(hostH * mMaxHeightRatio);
-        int maxScroll = Math.max(AcidTheme.dp(getContext(), 180), maxTotal - chromeReserve);
+        int maxScroll = Math.max(AcidTheme.dp(getContext(), MIN_SCROLL_CEILING_DP), maxTotal - chromeReserve);
         mScrollView.setMaxHeightPx(maxScroll);
     }
 
@@ -305,9 +370,6 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         updateScrollCeiling();
     }
 
-    /**
-     * Stabilizes height for sheets with live search filters so typing never shrinks/jumps the sheet.
-     */
     public void setMinContentHeightDp(float minDp) {
         mScrollView.setMinContentHeightPx(minDp > 0 ? AcidTheme.dp(getContext(), minDp) : 0);
     }
@@ -324,6 +386,15 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         if (observer != null && !mObservers.contains(observer)) {
             mObservers.add(observer);
         }
+    }
+
+    /**
+     * Configured by {@link OverlayStackManager} when this sheet is pushed on top of a parent
+     * modal so the header renders {@code [← Title]} and Back returns to the parent modal.
+     */
+    void setParentBackHandler(Runnable parentBackHandler) {
+        mParentBackHandler = parentBackHandler;
+        refreshHeaderNavigationState();
     }
 
     public void setTitle(String title) {
@@ -348,10 +419,41 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         }
     }
 
+    private void refreshHeaderNavigationState() {
+        if (mPageStack.size() > 1) {
+            setHeaderNavigation(true, new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    popPage();
+                }
+            });
+        } else if (mParentBackHandler != null) {
+            setHeaderNavigation(true, new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    AcidTheme.hideKeyboard(AcidBottomSheetView.this);
+                    if (mParentBackHandler != null) {
+                        mParentBackHandler.run();
+                    }
+                }
+            });
+        } else {
+            setHeaderNavigation(false, null);
+        }
+    }
+
     public void setAction(int iconId, String text, int color, OnClickListener listener) {
         mBtnAction.setVisibility(View.VISIBLE);
-        mBtnAction.update(iconId, text, color);
+        int resolvedColor = resolveDynamicAccentColor(color);
+        mBtnAction.update(iconId, text, resolvedColor);
         mBtnAction.setOnClickListener(listener);
+    }
+
+    private int resolveDynamicAccentColor(int color) {
+        if (color == 0 || color == AcidTheme.LIGHT_ACCENT || color == AcidTheme.DARK_ACCENT) {
+            return AcidTheme.accent(mIsDarkMode);
+        }
+        return color;
     }
 
     public void hideAction() {
@@ -369,6 +471,16 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mPinnedHeaderContainer.setVisibility(View.GONE);
     }
 
+    public LinearLayout getPinnedFooterContainer() {
+        mPinnedFooterContainer.setVisibility(View.VISIBLE);
+        return mPinnedFooterContainer;
+    }
+
+    public void clearPinnedFooter() {
+        mPinnedFooterContainer.removeAllViews();
+        mPinnedFooterContainer.setVisibility(View.GONE);
+    }
+
     public LinearLayout getContentContainer() {
         return mContentContainer;
     }
@@ -382,6 +494,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     // =====================================================================
 
     public void setRootPage(SheetPage rootPage) {
+        notifyTopPagePaused();
         mPageStack.clear();
         if (rootPage != null) {
             mPageStack.add(rootPage);
@@ -392,7 +505,11 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     public void pushPage(SheetPage subPage) {
         if (subPage == null) return;
         if (!mPageStack.isEmpty()) {
-            mPageStack.get(mPageStack.size() - 1).savedScrollY = mScrollView.getScrollY();
+            SheetPage prev = mPageStack.get(mPageStack.size() - 1);
+            prev.savedScrollY = mScrollView.getScrollY();
+            if (prev.onPauseListener != null) {
+                prev.onPauseListener.run();
+            }
         }
         AcidTheme.hideKeyboard(this);
         mPageStack.add(subPage);
@@ -402,7 +519,10 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     public boolean popPage() {
         if (mPageStack.size() <= 1) return false;
         AcidTheme.hideKeyboard(this);
-        mPageStack.remove(mPageStack.size() - 1);
+        SheetPage popped = mPageStack.remove(mPageStack.size() - 1);
+        if (popped.onPauseListener != null) {
+            popped.onPauseListener.run();
+        }
         renderActivePage(true);
         return true;
     }
@@ -411,8 +531,18 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         return mPageStack.size();
     }
 
+    private void notifyTopPagePaused() {
+        if (!mPageStack.isEmpty()) {
+            SheetPage top = mPageStack.get(mPageStack.size() - 1);
+            if (top.onPauseListener != null) {
+                top.onPauseListener.run();
+            }
+        }
+    }
+
     public void refreshActivePage() {
         if (!mPageStack.isEmpty()) {
+            notifyTopPagePaused();
             final int scrollY = mScrollView.getScrollY();
             renderActivePage(false);
             if (scrollY > 0) {
@@ -423,6 +553,8 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
                     }
                 });
             }
+        } else {
+            refreshHeaderNavigationState();
         }
     }
 
@@ -430,31 +562,30 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         if (mPageStack.isEmpty()) return;
         final SheetPage top = mPageStack.get(mPageStack.size() - 1);
         setTitle(top.title);
-
-        if (mPageStack.size() > 1) {
-            setHeaderNavigation(true, new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    popPage();
-                }
-            });
-        } else {
-            setHeaderNavigation(false, null);
-        }
+        refreshHeaderNavigationState();
 
         if (top.actionText != null && !top.actionText.isEmpty()) {
-            int col = top.actionColor != 0 ? top.actionColor : AcidTheme.accent(mIsDarkMode);
-            setAction(top.actionIconId, top.actionText, col, top.actionListener);
+            setAction(top.actionIconId, top.actionText, top.actionColor, top.actionListener);
         } else {
             hideAction();
         }
 
+        if (top.minContentHeightDp > 0) {
+            setMinContentHeightDp(top.minContentHeightDp);
+        } else {
+            setWrapContentHeight();
+        }
+
         clearPinnedHeader();
+        clearPinnedFooter();
         mContentContainer.removeAllViews();
-        if (top.renderer != null) {
-            top.renderer.render(mPinnedHeaderContainer, mContentContainer);
+        if (top.fullRenderer != null) {
+            top.fullRenderer.render(mPinnedHeaderContainer, mContentContainer, mPinnedFooterContainer);
             if (mPinnedHeaderContainer.getChildCount() > 0) {
                 mPinnedHeaderContainer.setVisibility(View.VISIBLE);
+            }
+            if (mPinnedFooterContainer.getChildCount() > 0) {
+                mPinnedFooterContainer.setVisibility(View.VISIBLE);
             }
         }
         updateScrollCeiling();
@@ -482,6 +613,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
 
     @Override
     public void show() {
+        refreshHeaderNavigationState();
         updateScrollCeiling();
         bringToFront();
         setVisibility(View.VISIBLE);
@@ -493,6 +625,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     @Override
     public void dismiss() {
         if (getVisibility() == View.VISIBLE) {
+            notifyTopPagePaused();
             AcidTheme.hideKeyboard(this);
             setVisibility(View.GONE);
             if (mDismissListener != null) {
@@ -504,10 +637,29 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         }
     }
 
+    /**
+     * Invoked when the user taps {@code [✕]} or the background scrim: closes the entire
+     * modal flow (including any suspended parent sheet) rather than popping one level.
+     */
+    public void closeEntireModalFlow() {
+        AcidTheme.hideKeyboard(this);
+        if (!mObservers.isEmpty()) {
+            for (LifecycleObserver obs : mObservers) {
+                obs.onSheetCloseAllRequested(this);
+            }
+        } else {
+            dismiss();
+        }
+    }
+
     @Override
     public boolean handleBackPressed() {
         if (!isShowing()) return false;
         if (popPage()) {
+            return true;
+        }
+        if (mParentBackHandler != null) {
+            mParentBackHandler.run();
             return true;
         }
         dismiss();
