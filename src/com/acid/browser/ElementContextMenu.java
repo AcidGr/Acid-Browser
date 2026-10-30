@@ -45,7 +45,7 @@ public final class ElementContextMenu {
                     try {
                         context.startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse(linkUrl)));
                     } catch (Exception e) {
-                        Toast.makeText(context, "无法拨打电话", Toast.LENGTH_SHORT).show();
+                        AcidFeedback.warn(context, "无法拨打电话");
                     }
                 }
             }));
@@ -64,7 +64,7 @@ public final class ElementContextMenu {
                     try {
                         context.startActivity(new Intent(Intent.ACTION_SENDTO, Uri.parse(linkUrl)));
                     } catch (Exception e) {
-                        Toast.makeText(context, "无法发送邮件", Toast.LENGTH_SHORT).show();
+                        AcidFeedback.warn(context, "无法发送邮件");
                     }
                 }
             }));
@@ -80,7 +80,7 @@ public final class ElementContextMenu {
                     @Override
                     public void run() {
                         controller.createNewTab(linkUrl, false);
-                        Toast.makeText(context, "已在后台打开新标签", Toast.LENGTH_SHORT).show();
+                        AcidFeedback.info(context, "已在后台打开新标签");
                     }
                 }));
                 items.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_TABS, "新标签页打开", new Runnable() {
@@ -142,10 +142,10 @@ public final class ElementContextMenu {
             ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) {
                 cm.setPrimaryClip(ClipData.newPlainText("text", text));
-                Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show();
+                AcidFeedback.ok(context, toastMsg);
             }
         } catch (Exception e) {
-            Toast.makeText(context, "复制失败", Toast.LENGTH_SHORT).show();
+            AcidFeedback.error(context, "复制失败");
         }
     }
 
@@ -156,7 +156,7 @@ public final class ElementContextMenu {
             intent.putExtra(Intent.EXTRA_TEXT, text);
             context.startActivity(Intent.createChooser(intent, "分享"));
         } catch (Exception e) {
-            Toast.makeText(context, "无法发起分享", Toast.LENGTH_SHORT).show();
+            AcidFeedback.warn(context, "无法发起分享");
         }
     }
 }

@@ -61,7 +61,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         mTopBar = new LinearLayout(context);
         mTopBar.setOrientation(LinearLayout.HORIZONTAL);
         mTopBar.setGravity(Gravity.CENTER_VERTICAL);
-        mTopBar.setBackgroundColor(Color.WHITE);
+        mTopBar.setBackgroundColor(AcidTheme.bar(false));
         int padH = AcidTheme.dp(context, 16);
         int padV = AcidTheme.dp(context, 8);
         mTopBar.setPadding(padH, padV, padH, padV);
@@ -69,7 +69,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         mTvTabsCountTitle = new TextView(context);
         mTvTabsCountTitle.setText("标签页 (1)");
         mTvTabsCountTitle.setTextColor(AcidTheme.LIGHT_TEXT);
-        mTvTabsCountTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H1_SHEET);
+        mTvTabsCountTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_SHEET_TITLE);
         mTvTabsCountTitle.setTypeface(Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         mTopBar.addView(mTvTabsCountTitle, tLp);
@@ -81,7 +81,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
                 if (mController != null) {
                     mController.createNewTab(mController.getHomeUrl(), true);
                 }
-                close();
+                dismiss();
             }
         });
         mBtnNewIcon = (AcidIcons.SvgIconView) newBox.getChildAt(0);
@@ -101,7 +101,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         LinearLayout closeBox = AcidIcons.createToolbarIconBtn(context, AcidIcons.ICON_CLOSE, AcidTheme.LIGHT_MUTED, new OnClickListener() {
             @Override
             public void onClick(View v) {
-                close();
+                dismiss();
             }
         });
         mBtnCloseIcon = (AcidIcons.SvgIconView) closeBox.getChildAt(0);
@@ -133,7 +133,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
     public void toggle() {
         if (isShowing()) {
-            close();
+            dismiss();
         } else {
             show();
         }
@@ -147,25 +147,25 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         if (mController == null || mController.getActiveTab() == null) return;
         int others = mController.getTabs().size() - 1;
         if (others <= 0) {
-            Toast.makeText(getContext(), "当前没有其他标签页可关闭", Toast.LENGTH_SHORT).show();
+            AcidFeedback.info(getContext(), "当前没有其他标签页可关闭");
             return;
         }
-        new AcidDialog(getContext(), mIsDarkMode)
-            .setTitle("关闭其他标签页")
-            .setMessage("确定关闭除当前页以外的其余 " + others + " 个标签页吗？")
-            .setDangerButton("全部关闭", new AcidDialog.OnActionListener() {
+        AcidDialogs.confirmDanger(
+            getContext(), mIsDarkMode,
+            "关闭其他标签页",
+            "确定关闭除当前页以外的其余 " + others + " 个标签页吗？",
+            "全部关闭",
+            new Runnable() {
                 @Override
-                public boolean onAction(android.app.Dialog dialog) {
+                public void run() {
                     if (mController.getActiveTab() != null) {
                         mController.closeOtherTabs(mController.getActiveTab().id);
                         renderTabsGrid();
-                        Toast.makeText(getContext(), "已关闭其余标签页", Toast.LENGTH_SHORT).show();
+                        AcidFeedback.info(getContext(), "已关闭其余标签页");
                     }
-                    return true;
                 }
-            })
-            .setNegativeButton("取消", null)
-            .show();
+            }
+        );
     }
 
     @Override
@@ -180,10 +180,6 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         if (mListener != null) {
             mListener.onOverviewShown();
         }
-    }
-
-    public void close() {
-        dismiss();
     }
 
     @Override
@@ -292,15 +288,15 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
         final boolean isAgentDriving = (mController != null && mController.isTabDrivenByAgent(tab.id));
 
-        int cardBg = mIsDarkMode ? AcidTheme.DARK_BAR : Color.WHITE;
-        int borderCol = isActive ? AcidTheme.COLOR_TAB_ACTIVE_BORDER : (mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER);
-        card.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, 0, 0, 14));
+        int cardBg = AcidTheme.bar(mIsDarkMode);
+        int borderCol = isActive ? AcidTheme.COLOR_TAB_ACTIVE_BORDER : AcidTheme.border(mIsDarkMode);
+        card.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, 0, 0, AcidTheme.RADIUS_CARD));
         card.setClipToOutline(true);
 
         if (isAgentDriving) {
-            card.setForeground(new AgentCardBorderDrawable(AcidTheme.dp(ctx, 14), AcidTheme.dp(ctx, 3)));
+            card.setForeground(new AgentCardBorderDrawable(AcidTheme.dp(ctx, AcidTheme.RADIUS_CARD), AcidTheme.dp(ctx, 3)));
         } else {
-            card.setForeground(AcidTheme.cardBorderBg(ctx, Color.TRANSPARENT, borderCol, isActive ? 3 : 1, 14));
+            card.setForeground(AcidTheme.cardBorderBg(ctx, Color.TRANSPARENT, borderCol, isActive ? 3 : 1, AcidTheme.RADIUS_CARD));
         }
         card.setClickable(true);
         card.setFocusable(true);
@@ -313,7 +309,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
         GradientDrawable headGd = new GradientDrawable();
         headGd.setColor(AcidTheme.overviewHeaderBg(mIsDarkMode));
-        float r = AcidTheme.dp(ctx, 14);
+        float r = AcidTheme.dp(ctx, AcidTheme.RADIUS_CARD);
         headGd.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
         head.setBackground(headGd);
 
@@ -324,7 +320,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         TextView title = new TextView(ctx);
         title.setText(tab.title);
         title.setTextColor(AcidTheme.text(mIsDarkMode));
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_LABEL);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_FIELD_LABEL);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
@@ -334,14 +330,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         head.addView(title, tLp);
 
         if (isAgentDriving) {
-            TextView aiBadge = new TextView(ctx);
-            aiBadge.setText("● AI操作中");
-            aiBadge.setTextColor(AcidTheme.DARK_ACCENT);
-            aiBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
-            aiBadge.setTypeface(Typeface.DEFAULT_BOLD);
-            aiBadge.setPadding(AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 1), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 1));
-            aiBadge.setBackground(AcidTheme.pillBg(ctx, Color.argb(45, 16, 185, 129), 0, 4));
-            head.addView(aiBadge);
+            head.addView(AcidWidgets.statusTag(ctx, mIsDarkMode, "● AI操作中", AcidTheme.DARK_ACCENT));
         }
 
         LinearLayout closeBtn = new LinearLayout(ctx);
@@ -357,14 +346,13 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
             public void onClick(View v) {
                 if (mController == null) return;
                 if (isAgentDriving) {
-                    Toast.makeText(getContext(), "该标签页正在被Agent使用，无法关闭。", Toast.LENGTH_SHORT).show();
+                    AcidFeedback.warn(getContext(), "该标签页正在被 Agent 使用，无法关闭。");
                     return;
                 }
                 boolean wasLastTab = mController.getTabs().size() <= 1;
                 mController.closeTab(tab.id);
                 if (wasLastTab) {
-                    // Last tab closed: leave the overview; the controller already created a fresh Home tab.
-                    close();
+                    dismiss();
                 } else {
                     renderTabsGrid();
                 }
@@ -411,7 +399,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
                 if (mController != null) {
                     mController.switchToTab(tab.id);
                 }
-                close();
+                dismiss();
             }
         });
 
