@@ -355,6 +355,8 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         // 2. Bottom rounded card
         mMenuCard = new LinearLayout(context);
         mMenuCard.setOrientation(LinearLayout.VERTICAL);
+        mMenuCard.setClickable(true);
+        mMenuCard.setFocusable(true);
         int padH = AcidTheme.dp(context, 14);
         int padTop = AcidTheme.dp(context, 10);
         int padBottom = AcidTheme.dp(context, 12);
@@ -372,6 +374,7 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         LinearLayout titleRow = new LinearLayout(context);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        titleRow.setClickable(true);
 
         mMenuTitle = new TextView(context);
         mMenuTitle.setText("功能");

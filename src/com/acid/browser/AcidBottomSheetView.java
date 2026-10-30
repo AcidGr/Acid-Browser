@@ -24,7 +24,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     private final View mScrim;
     private final LinearLayout mCardLayout;
     private final View mHandle;
-    private final LinearLayout mBtnBackBox;
+    private final LinearLayout mNavTitleBox;
     private final AcidIcons.SvgIconView mBtnBackIcon;
     private final TextView mTitleView;
     private final AcidIcons.BadgeButton mBtnAction;
@@ -53,6 +53,8 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         // 2. Bottom Card Layout
         mCardLayout = new LinearLayout(context);
         mCardLayout.setOrientation(LinearLayout.VERTICAL);
+        mCardLayout.setClickable(true);
+        mCardLayout.setFocusable(true);
         int padH = AcidTheme.dp(context, 16);
         int padTop = AcidTheme.dp(context, 10);
         int padBottom = AcidTheme.dp(context, 16);
@@ -66,29 +68,34 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         hLp.bottomMargin = AcidTheme.dp(context, 10);
         mCardLayout.addView(mHandle, hLp);
 
-        // Header Row: [Back Button] [Title] ... [Action Button] [Close Button]
+        // Header Row: [NavTitleBox: < Title] ... [Action Button] [Close Button]
         LinearLayout head = new LinearLayout(context);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setClickable(true);
 
-        mBtnBackBox = new LinearLayout(context);
-        mBtnBackBox.setGravity(Gravity.CENTER);
-        int padBack = AcidTheme.dp(context, 4);
-        mBtnBackBox.setPadding(padBack, padBack, padBack, padBack);
+        mNavTitleBox = new LinearLayout(context);
+        mNavTitleBox.setOrientation(LinearLayout.HORIZONTAL);
+        mNavTitleBox.setGravity(Gravity.CENTER_VERTICAL);
+        int padNavH = AcidTheme.dp(context, 4);
+        int padNavV = AcidTheme.dp(context, 6);
+        mNavTitleBox.setPadding(padNavH, padNavV, padNavH, padNavV);
+
         mBtnBackIcon = new AcidIcons.SvgIconView(context, AcidIcons.ICON_BACK, AcidTheme.LIGHT_MUTED, 18);
-        mBtnBackBox.addView(mBtnBackIcon);
-        mBtnBackBox.setVisibility(View.GONE);
+        mBtnBackIcon.setVisibility(View.GONE);
         LinearLayout.LayoutParams backLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         backLp.rightMargin = AcidTheme.dp(context, 8);
-        head.addView(mBtnBackBox, backLp);
+        mNavTitleBox.addView(mBtnBackIcon, backLp);
 
         mTitleView = new TextView(context);
         mTitleView.setText("");
         mTitleView.setTextColor(AcidTheme.LIGHT_TEXT);
         mTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
         mTitleView.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        head.addView(mTitleView, titleLp);
+        mNavTitleBox.addView(mTitleView);
+
+        LinearLayout.LayoutParams navLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        head.addView(mNavTitleBox, navLp);
 
         mBtnAction = new AcidIcons.BadgeButton(context, AcidIcons.ICON_PLUS, "", AcidTheme.LIGHT_ACCENT, null);
         mBtnAction.setVisibility(View.GONE);
@@ -96,8 +103,10 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
 
         LinearLayout closeBox = new LinearLayout(context);
         closeBox.setGravity(Gravity.CENTER);
-        int padClose = AcidTheme.dp(context, 6);
+        int padClose = AcidTheme.dp(context, 8);
         closeBox.setPadding(padClose, padClose, padClose, padClose);
+        closeBox.setClickable(true);
+        closeBox.setFocusable(true);
         mBtnCloseIcon = new AcidIcons.SvgIconView(context, AcidIcons.ICON_CLOSE, AcidTheme.LIGHT_MUTED, 18);
         closeBox.addView(mBtnCloseIcon);
         closeBox.setOnClickListener(new OnClickListener() {
@@ -145,11 +154,15 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
 
     public void setHeaderNavigation(boolean showBack, OnClickListener backListener) {
         if (showBack) {
-            mBtnBackBox.setVisibility(View.VISIBLE);
-            mBtnBackBox.setOnClickListener(backListener);
+            mBtnBackIcon.setVisibility(View.VISIBLE);
+            mNavTitleBox.setClickable(true);
+            mNavTitleBox.setFocusable(true);
+            mNavTitleBox.setOnClickListener(backListener);
         } else {
-            mBtnBackBox.setVisibility(View.GONE);
-            mBtnBackBox.setOnClickListener(null);
+            mBtnBackIcon.setVisibility(View.GONE);
+            mNavTitleBox.setClickable(false);
+            mNavTitleBox.setFocusable(false);
+            mNavTitleBox.setOnClickListener(null);
         }
     }
 
