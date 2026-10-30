@@ -88,6 +88,8 @@ public class BrowserDataStore {
     }
 
     private final Context mContext;
+    private final SharedPreferences mPrimaryPrefsOverride;
+    private final SharedPreferences mLegacyPrefsOverride;
     private File mSettingsJsonFile = null;
     private OnSettingsChangedListener mSettingsChangedListener = null;
     private FileObserver mFileObserver = null;
@@ -95,6 +97,27 @@ public class BrowserDataStore {
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
+        mPrimaryPrefsOverride = null;
+        mLegacyPrefsOverride = null;
+    }
+
+    BrowserDataStore(SharedPreferences primary, SharedPreferences legacy, File settingsJsonFile) {
+        mContext = null;
+        mPrimaryPrefsOverride = primary;
+        mLegacyPrefsOverride = legacy;
+        mSettingsJsonFile = settingsJsonFile;
+    }
+
+    SharedPreferences prefs() {
+        return mPrimaryPrefsOverride != null
+            ? mPrimaryPrefsOverride
+            : prefs();
+    }
+
+    SharedPreferences legacyPrefs() {
+        return mLegacyPrefsOverride != null
+            ? mLegacyPrefsOverride
+            : mContext.getSharedPreferences(LEGACY_PREF_ACTIVITY, Context.MODE_PRIVATE);
     }
 
     public void setWorkspaceDir(File workspaceDir) {
@@ -237,7 +260,7 @@ public class BrowserDataStore {
             String content = new String(baos.toByteArray(), StandardCharsets.UTF_8);
             JSONObject o = new JSONObject(content);
 
-            SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+            SharedPreferences.Editor ed = prefs().edit();
             if (o.has("search_engine")) {
                 Object se = o.get("search_engine");
                 if (se instanceof Number) {
@@ -294,70 +317,70 @@ public class BrowserDataStore {
     }
 
     public boolean isDarkMode() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getBoolean(PREF_DARK_MODE, false);
     }
 
     public void setDarkMode(boolean dark) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putBoolean(PREF_DARK_MODE, dark);
         ed.apply();
         saveToJsonFile();
     }
 
     public boolean isAdBlockEnabled() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getBoolean(PREF_ADBLOCK_ENABLED, true);
     }
 
     public void setAdBlockEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putBoolean(PREF_ADBLOCK_ENABLED, enabled);
         ed.apply();
         saveToJsonFile();
     }
 
     public int getAdBlockBlockedCount() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getInt(PREF_ADBLOCK_BLOCKED_COUNT, 0);
     }
 
     public void setAdBlockBlockedCount(int count) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putInt(PREF_ADBLOCK_BLOCKED_COUNT, count);
         ed.apply();
     }
 
     public String getAdBlockSubscriptionUrl() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getString(PREF_ADBLOCK_SUBSCRIPTION_URL, "https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/master/anti-ad-easylist.txt");
     }
 
     public void setAdBlockSubscriptionUrl(String url) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putString(PREF_ADBLOCK_SUBSCRIPTION_URL, url != null ? url.trim() : "");
         ed.apply();
     }
 
     public int getSearchEngineIndex() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getInt(PREF_SEARCH_ENGINE, SEARCH_GOOGLE);
     }
 
     public void setSearchEngineIndex(int index) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putInt(PREF_SEARCH_ENGINE, index);
         ed.apply();
         saveToJsonFile();
     }
 
     public String getCustomSearchEngineUrl() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getString(PREF_SEARCH_ENGINE_CUSTOM, "");
     }
 
     public void setCustomSearchEngineUrl(String url) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putString(PREF_SEARCH_ENGINE_CUSTOM, url != null ? url.trim() : "");
         ed.apply();
         saveToJsonFile();
@@ -392,24 +415,24 @@ public class BrowserDataStore {
     }
 
     public int getHomeType() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getInt(PREF_HOME_TYPE, HOME_ACID);
     }
 
     public void setHomeType(int type) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putInt(PREF_HOME_TYPE, type);
         ed.apply();
         saveToJsonFile();
     }
 
     public String getCustomHomeUrl() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getString(PREF_HOME_CUSTOM_URL, "");
     }
 
     public void setCustomHomeUrl(String url) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putString(PREF_HOME_CUSTOM_URL, url != null ? url.trim() : "");
         ed.apply();
         saveToJsonFile();
@@ -434,66 +457,66 @@ public class BrowserDataStore {
     }
 
     public boolean isClearOnExit() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getBoolean(PREF_CLEAR_ON_EXIT, false);
     }
 
     public void setClearOnExit(boolean val) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putBoolean(PREF_CLEAR_ON_EXIT, val);
         ed.apply();
         saveToJsonFile();
     }
 
     public boolean isWebDebuggingEnabled() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getBoolean(PREF_WEB_DEBUGGING, false);
     }
 
     public void setWebDebuggingEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putBoolean(PREF_WEB_DEBUGGING, enabled);
         ed.apply();
         saveToJsonFile();
     }
 
     public boolean isDoNotTrackEnabled() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getBoolean(PREF_DO_NOT_TRACK, false);
     }
 
     public void setDoNotTrackEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putBoolean(PREF_DO_NOT_TRACK, enabled);
         ed.apply();
         saveToJsonFile();
     }
 
     public boolean isBlockImagesEnabled() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         return prefs.getBoolean(PREF_BLOCK_IMAGES, false);
     }
 
     public void setBlockImagesEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putBoolean(PREF_BLOCK_IMAGES, enabled);
         ed.apply();
         saveToJsonFile();
     }
 
     public boolean isMcpServerEnabled() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         if (prefs.contains(PREF_MCP_ENABLED)) {
             return prefs.getBoolean(PREF_MCP_ENABLED, true);
         }
-        SharedPreferences legacy = mContext.getSharedPreferences(LEGACY_PREF_ACTIVITY, Context.MODE_PRIVATE);
+        SharedPreferences legacy = legacyPrefs();
         boolean migrated = legacy.getBoolean(PREF_MCP_ENABLED, true);
         prefs.edit().putBoolean(PREF_MCP_ENABLED, migrated).apply();
         return migrated;
     }
 
     public void setMcpServerEnabled(boolean enabled) {
-        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        SharedPreferences.Editor ed = prefs().edit();
         ed.putBoolean(PREF_MCP_ENABLED, enabled);
         ed.apply();
         saveToJsonFile();
@@ -623,7 +646,7 @@ public class BrowserDataStore {
     }
 
     public List<EntryItem> loadBookmarks() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         String raw = prefs.getString(PREF_BOOKMARKS, null);
         List<EntryItem> list = new ArrayList<EntryItem>();
         // "readable" means the stored blob was absent (first run) or decoded successfully.
@@ -673,7 +696,7 @@ public class BrowserDataStore {
                 arr.put(o);
             }
         }
-        mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        prefs()
             .edit()
             .putString(PREF_BOOKMARKS, arr.toString())
             .apply();
@@ -711,7 +734,7 @@ public class BrowserDataStore {
     }
 
     public List<EntryItem> loadHistory() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         String raw = prefs.getString(PREF_HISTORY, null);
         List<EntryItem> list = new ArrayList<EntryItem>();
         if (raw == null) return list;
@@ -728,7 +751,7 @@ public class BrowserDataStore {
     }
 
     public void clearHistory() {
-        mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        prefs()
             .edit()
             .putString(PREF_HISTORY, "[]")
             .apply();
@@ -737,7 +760,7 @@ public class BrowserDataStore {
     public void recordHistory(String url, String title, boolean incognitoMode) {
         if (incognitoMode) return;
         if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)) return;
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         String raw = prefs.getString(PREF_HISTORY, "[]");
         JSONArray next = new JSONArray();
         try {
@@ -774,7 +797,7 @@ public class BrowserDataStore {
     }
 
     public List<BrowserController.DownloadItem> loadDownloads() {
-        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        SharedPreferences prefs = prefs();
         String raw = prefs.getString(PREF_DOWNLOADS, null);
         List<BrowserController.DownloadItem> list = new ArrayList<BrowserController.DownloadItem>();
         if (raw == null) return list;
@@ -825,14 +848,14 @@ public class BrowserDataStore {
                 arr.put(o);
             }
         }
-        mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        prefs()
             .edit()
             .putString(PREF_DOWNLOADS, arr.toString())
             .apply();
     }
 
     public void clearDownloads() {
-        mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        prefs()
             .edit()
             .putString(PREF_DOWNLOADS, "[]")
             .apply();

@@ -331,7 +331,7 @@ public final class AcidTheme {
     }
 
     public static String appVersionName(Context context) {
-        if (context == null) return "0.4.4";
+        if (context == null) return BuildInfo.VERSION_NAME;
         try {
             PackageInfo pi = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
             if (pi != null && pi.versionName != null && !pi.versionName.isEmpty()) {
@@ -340,7 +340,7 @@ public final class AcidTheme {
         } catch (Exception e) {
             Log.w(TAG, "Failed to read package versionName", e);
         }
-        return "0.4.4";
+        return BuildInfo.VERSION_NAME;
     }
 
     public static void hideKeyboard(View anyView) {
