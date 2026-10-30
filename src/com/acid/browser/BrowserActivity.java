@@ -446,8 +446,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
 
             @Override
-            public void onClearDataRequested(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage) {
-                clearBrowsingData(clearCache, clearCookies, clearHistory, clearStorage);
+            public void onClearDataRequested(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage, boolean clearWorkspace) {
+                clearBrowsingData(clearCache, clearCookies, clearHistory, clearStorage, clearWorkspace);
+            }
+
+            @Override
+            public void onClearWorkspaceOnlyRequested() {
+                int cleaned = clearWorkspaceTempFiles();
+                Toast.makeText(BrowserActivity.this, "已清理 AI 工作区 (" + cleaned + " 个临时项，settings.json 已安全保留)", Toast.LENGTH_SHORT).show();
             }
 
             @Override
@@ -1927,7 +1933,36 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         dir.delete();
     }
 
-    private void clearBrowsingData(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage) {
+    private int clearWorkspaceTempFiles() {
+        if (mController == null) return 0;
+        File ws = mController.getWorkspaceDir();
+        if (ws == null || !ws.exists()) return 0;
+        File[] files = ws.listFiles();
+        if (files == null) return 0;
+
+        int deletedCount = 0;
+        for (File f : files) {
+            String name = f.getName();
+            // Strictly protect settings.json, userscripts, adblock, and skills
+            if ("settings.json".equals(name) ||
+                "userscripts".equals(name) ||
+                "adblock".equals(name) ||
+                "skills".equals(name)) {
+                continue;
+            }
+            if (f.isDirectory()) {
+                deleteDirRecursively(f);
+                deletedCount++;
+            } else {
+                if (f.delete()) {
+                    deletedCount++;
+                }
+            }
+        }
+        return deletedCount;
+    }
+
+    private void clearBrowsingData(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage, boolean clearWorkspace) {
         int count = 0;
         if (clearCache) {
             if (mController != null) {
@@ -1939,6 +1974,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     File codeCache = getCodeCacheDir();
                     if (codeCache != null) deleteDirRecursively(codeCache);
                 }
+                android.webkit.WebViewDatabase.getInstance(this).clearFormData();
+                android.webkit.WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword();
             } catch (Exception e) {
                 Log.w(TAG, "Failed to clear disk cache", e);
             }
@@ -1965,21 +2002,31 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (clearStorage) {
             try {
                 android.webkit.WebStorage.getInstance().deleteAllData();
+                android.webkit.GeolocationPermissions.getInstance().clearAll();
                 count++;
             } catch (Exception e) {
                 Log.w(TAG, "Failed to clear web storage", e);
             }
         }
+        if (clearWorkspace) {
+            int wsDeleted = clearWorkspaceTempFiles();
+            if (wsDeleted > 0) {
+                count++;
+            }
+        }
         if (mSettingsSheet != null) {
             mSettingsSheet.refresh();
         }
-        Toast.makeText(this, "已清除所选浏览数据 (" + count + " 项)", Toast.LENGTH_SHORT).show();
+        String msg = clearWorkspace ?
+            "已清除所选数据 (" + count + " 项，settings.json 已安全保留)" :
+            "已清除所选浏览数据 (" + count + " 项)";
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
     }
 
     @Override
     protected void onDestroy() {
         if (mDataStore != null && mDataStore.isClearOnExit()) {
-            clearBrowsingData(true, true, false, true);
+            clearBrowsingData(true, true, false, true, false);
         }
         if (mDownloadReceiver != null) {
             try {

@@ -42,7 +42,8 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         void onOpenAdBlock();
         void onOpenUserscripts();
         void onOpenAbout();
-        void onClearDataRequested(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage);
+        void onClearDataRequested(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage, boolean clearWorkspace);
+        void onClearWorkspaceOnlyRequested();
         void onSearchEngineChanged(int index, String customUrl);
         void onHomeUrlChanged(int type, String customUrl);
         void onWebDebuggingChanged(boolean enabled);
@@ -362,6 +363,15 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
             public void onClick(View v) {
                 dismiss();
                 if (mListener != null) mListener.onOpenAgentFloatingWindow();
+            }
+        });
+        addDivider(cardAgent, divider);
+
+        // 清理 AI 工作区
+        addClickableItem(cardAgent, AcidIcons.ICON_TRASH, "清理工作区临时文件", "清理 AI 报告与抓取数据，保护 settings.json 与脚本", textColor, mutedColor, new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showClearWorkspaceConfirmDialog();
             }
         });
         container.addView(cardAgent);
@@ -763,15 +773,33 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         builder.show();
     }
 
+    private void showClearWorkspaceConfirmDialog() {
+        Context ctx = getContext();
+        AlertDialog.Builder builder = new AlertDialog.Builder(ctx);
+        builder.setTitle("清理 AI 工作区");
+        builder.setMessage("将清理 Agent 生成的历史报告、抓取数据与临时脚本。\n\n安全保护：不会删除 settings.json 配置文件、用户脚本 (userscripts) 与广告拦截规则 (adblock)。");
+        builder.setPositiveButton("立即清理", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                if (mListener != null) {
+                    mListener.onClearWorkspaceOnlyRequested();
+                }
+            }
+        });
+        builder.setNegativeButton("取消", null);
+        builder.show();
+    }
+
     private void showClearDataDialog() {
         Context ctx = getContext();
         final String[] options = new String[] {
             "网页缓存 (Cache)",
             "Cookies 与登录状态",
             "历史浏览记录",
-            "网页本地存储 (WebStorage)"
+            "网页本地存储 (WebStorage)",
+            "AI 工作区文件 (保留设置与脚本)"
         };
-        final boolean[] checked = new boolean[] { true, false, true, false };
+        final boolean[] checked = new boolean[] { true, false, true, false, false };
 
         AlertDialog.Builder builder = new AlertDialog.Builder(ctx);
         builder.setTitle("选择要清除的浏览数据");
@@ -785,7 +813,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
             @Override
             public void onClick(DialogInterface dialog, int which) {
                 if (mListener != null) {
-                    mListener.onClearDataRequested(checked[0], checked[1], checked[2], checked[3]);
+                    mListener.onClearDataRequested(checked[0], checked[1], checked[2], checked[3], checked[4]);
                 }
             }
         });
