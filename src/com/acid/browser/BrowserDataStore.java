@@ -90,6 +90,10 @@ public class BrowserDataStore {
         void onSettingsChanged();
     }
 
+    public interface OnBookmarksChangedListener {
+        void onBookmarksChanged();
+    }
+
     public interface CallbackDispatcher {
         void dispatch(Runnable action);
     }
@@ -102,10 +106,13 @@ public class BrowserDataStore {
     private final Map<AcidSettings.BoolKey, StateSource.BoolState> mBoolStateCache =
         new ConcurrentHashMap<AcidSettings.BoolKey, StateSource.BoolState>();
     private File mSettingsJsonFile = null;
+    private File mBookmarksJsonFile = null;
     private OnSettingsChangedListener mSettingsChangedListener = null;
+    private OnBookmarksChangedListener mBookmarksChangedListener = null;
     private CallbackDispatcher mDispatcher = null;
     private FileObserver mFileObserver = null;
     private volatile long mLastSelfSaveTime = 0;
+    private volatile long mLastBookmarksSelfSaveTime = 0;
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
@@ -114,10 +121,15 @@ public class BrowserDataStore {
     }
 
     BrowserDataStore(SharedPreferences primary, SharedPreferences legacy, File settingsJsonFile) {
+        this(primary, legacy, settingsJsonFile, null);
+    }
+
+    BrowserDataStore(SharedPreferences primary, SharedPreferences legacy, File settingsJsonFile, File bookmarksJsonFile) {
         mContext = null;
         mPrimaryPrefsOverride = primary;
         mLegacyPrefsOverride = legacy;
         mSettingsJsonFile = settingsJsonFile;
+        mBookmarksJsonFile = bookmarksJsonFile;
     }
 
     SharedPreferences prefs() {
@@ -135,41 +147,55 @@ public class BrowserDataStore {
     public void setWorkspaceDir(File workspaceDir) {
         if (workspaceDir != null) {
             mSettingsJsonFile = new File(workspaceDir, "settings.json");
+            mBookmarksJsonFile = new File(workspaceDir, "bookmarks.json");
             syncSettingsJsonFile();
+            syncBookmarksJsonFile();
             startWatchingSettingsFile();
         }
     }
 
     public void startWatchingSettingsFile() {
-        if (mSettingsJsonFile == null) return;
+        if (mSettingsJsonFile == null && mBookmarksJsonFile == null) return;
         if (mFileObserver != null) {
             try { mFileObserver.stopWatching(); } catch (Exception e) {}
             mFileObserver = null;
         }
         try {
-            File parent = mSettingsJsonFile.getParentFile();
+            File targetFile = mSettingsJsonFile != null ? mSettingsJsonFile : mBookmarksJsonFile;
+            File parent = targetFile.getParentFile();
             if (parent != null && parent.exists()) {
                 mFileObserver = new FileObserver(parent.getAbsolutePath(), FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO) {
                     @Override
                     public void onEvent(int event, String path) {
-                        if (path != null && path.endsWith("settings.json")) {
+                        if (path == null) return;
+                        if (path.endsWith("settings.json")) {
                             if (System.currentTimeMillis() - mLastSelfSaveTime < 800) {
                                 return; // Ignore own writes
                             }
                             mLastSelfSaveTime = System.currentTimeMillis();
                             reloadFromJsonFile();
+                        } else if (path.endsWith("bookmarks.json")) {
+                            if (System.currentTimeMillis() - mLastBookmarksSelfSaveTime < 800) {
+                                return; // Ignore own writes
+                            }
+                            mLastBookmarksSelfSaveTime = System.currentTimeMillis();
+                            reloadBookmarksFromJsonFile();
                         }
                     }
                 };
                 mFileObserver.startWatching();
             }
         } catch (Exception e) {
-            Log.w(TAG, "Could not start FileObserver on settings directory", e);
+            Log.w(TAG, "Could not start FileObserver on workspace directory", e);
         }
     }
 
     public void setOnSettingsChangedListener(OnSettingsChangedListener l) {
         mSettingsChangedListener = l;
+    }
+
+    public void setOnBookmarksChangedListener(OnBookmarksChangedListener l) {
+        mBookmarksChangedListener = l;
     }
 
     public void setCallbackDispatcher(CallbackDispatcher dispatcher) {
@@ -188,12 +214,25 @@ public class BrowserDataStore {
         return mSettingsJsonFile;
     }
 
+    public File getBookmarksJsonFile() {
+        return mBookmarksJsonFile;
+    }
+
     public void syncSettingsJsonFile() {
         if (mSettingsJsonFile == null) return;
         if (mSettingsJsonFile.exists()) {
             reloadFromJsonFile();
         } else {
             saveToJsonFile();
+        }
+    }
+
+    public void syncBookmarksJsonFile() {
+        if (mBookmarksJsonFile == null) return;
+        if (mBookmarksJsonFile.exists()) {
+            reloadBookmarksFromJsonFile();
+        } else {
+            saveBookmarksToJsonFile();
         }
     }
 
@@ -577,6 +616,8 @@ public class BrowserDataStore {
         for (File f : files) {
             String name = f.getName();
             if ("settings.json".equals(name) ||
+                "bookmarks.json".equals(name) ||
+                "homepage".equals(name) ||
                 "userscripts".equals(name) ||
                 "adblock".equals(name) ||
                 "skills".equals(name)) {
@@ -704,6 +745,10 @@ public class BrowserDataStore {
     }
 
     public void saveBookmarks(List<EntryItem> list) {
+        saveBookmarks(list, true);
+    }
+
+    public synchronized void saveBookmarks(List<EntryItem> list, boolean syncFile) {
         JSONArray arr = new JSONArray();
         if (list != null) {
             for (EntryItem item : list) {
@@ -725,6 +770,82 @@ public class BrowserDataStore {
             .edit()
             .putString(PREF_BOOKMARKS, arr.toString())
             .apply();
+
+        if (syncFile && mBookmarksJsonFile != null) {
+            saveBookmarksToJsonFile();
+        }
+    }
+
+    public synchronized boolean saveBookmarksToJsonFile() {
+        if (mBookmarksJsonFile == null) return false;
+        try {
+            List<EntryItem> list = loadBookmarks();
+            JSONArray arr = new JSONArray();
+            for (EntryItem item : list) {
+                if (item == null) continue;
+                JSONObject o = new JSONObject();
+                o.put("title", item.title);
+                o.put("url", item.url);
+                arr.put(o);
+            }
+            File parent = mBookmarksJsonFile.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            mLastBookmarksSelfSaveTime = System.currentTimeMillis();
+            FileOutputStream fos = new FileOutputStream(mBookmarksJsonFile);
+            byte[] bytes;
+            try {
+                bytes = arr.toString(2).getBytes(StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                bytes = arr.toString().getBytes(StandardCharsets.UTF_8);
+            }
+            fos.write(bytes);
+            fos.flush();
+            fos.close();
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to save bookmarks to " + mBookmarksJsonFile, e);
+            return false;
+        }
+    }
+
+    public synchronized boolean reloadBookmarksFromJsonFile() {
+        if (mBookmarksJsonFile == null || !mBookmarksJsonFile.exists()) return false;
+        try {
+            FileInputStream fis = new FileInputStream(mBookmarksJsonFile);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            byte[] buf = new byte[2048];
+            int n;
+            while ((n = fis.read(buf)) != -1) {
+                baos.write(buf, 0, n);
+            }
+            fis.close();
+            String jsonStr = new String(baos.toByteArray(), StandardCharsets.UTF_8).trim();
+            if (jsonStr.isEmpty()) return false;
+
+            JSONArray arr = new JSONArray(jsonStr);
+            List<EntryItem> list = new ArrayList<EntryItem>();
+            for (int i = 0; i < arr.length(); i++) {
+                EntryItem item = decodeEntry(arr.optJSONObject(i), i, "bookmark");
+                if (item != null) list.add(item);
+            }
+
+            saveBookmarks(list, false);
+
+            dispatchCallback(new Runnable() {
+                @Override
+                public void run() {
+                    if (mBookmarksChangedListener != null) {
+                        mBookmarksChangedListener.onBookmarksChanged();
+                    }
+                }
+            });
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to reload bookmarks from " + mBookmarksJsonFile + ": " + e.getMessage(), e);
+            return false;
+        }
     }
 
     public void addBookmark(String title, String url) {

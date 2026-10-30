@@ -445,7 +445,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         AcidDialogs.confirmDanger(
             getContext(), mIsDarkMode,
             "清理 AI 工作区",
-            "将清除 Agent 在沙盒中生成的历史报告、抓取数据与临时文件。\n\n安全保护：不会删除 settings.json 配置文件、用户脚本 (userscripts) 与广告拦截规则 (adblock)。",
+            "将清除 Agent 在沙盒中生成的历史报告、抓取数据与临时文件。\n\n安全保护：不会删除 settings.json 配置文件、bookmarks.json 书签、自定义主页 (homepage)、用户脚本 (userscripts) 与广告拦截规则 (adblock)。",
             "立即清理",
             new Runnable() {
                 @Override

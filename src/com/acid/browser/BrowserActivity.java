@@ -135,6 +135,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 syncFromHotReloadedSettings();
             }
         });
+        mDataStore.setOnBookmarksChangedListener(new BrowserDataStore.OnBookmarksChangedListener() {
+            @Override
+            public void onBookmarksChanged() {
+                if (mBookmarksHistorySheet != null && mBookmarksHistorySheet.isShowing()) {
+                    mBookmarksHistorySheet.refreshActivePage();
+                }
+            }
+        });
 
         if (Build.VERSION.SDK_INT >= 23) {
             if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
