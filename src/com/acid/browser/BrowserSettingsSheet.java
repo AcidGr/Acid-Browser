@@ -259,60 +259,50 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
     }
 
     // =========================================================================
-    // LEVEL 2: 二级设置详情页
+    // LEVEL 2: 二级设置详情页 (纯净标题 + 图标，无多余解释)
     // =========================================================================
 
-    // --- 2.1 通用设置 ---
+    // --- 2.1 通用 ---
     private void renderLevel2General(LinearLayout container, Context ctx,
                                      int textColor, int mutedColor, int accentColor,
                                      int cardBg, int border, int divider) {
-        addSectionHeader(container, "浏览与检索", mutedColor);
-        LinearLayout cardSearch = createCardLayout(ctx, cardBg, border);
+        LinearLayout card = createCardLayout(ctx, cardBg, border);
 
         // 搜索引擎
         int seIdx = mDataStore.getSearchEngineIndex();
         String seName = (seIdx >= 0 && seIdx < BrowserDataStore.SEARCH_ENGINE_NAMES.length) ?
             BrowserDataStore.SEARCH_ENGINE_NAMES[seIdx] : "Google";
-        if (seIdx == BrowserDataStore.SEARCH_CUSTOM && !TextUtils.isEmpty(mDataStore.getCustomSearchEngineUrl())) {
-            seName = "自定义 (" + mDataStore.getCustomSearchEngineUrl() + ")";
-        }
-        addClickableItem(cardSearch, AcidIcons.ICON_SEARCH, "搜索引擎", seName, textColor, mutedColor, new OnClickListener() {
+        addClickableItem(card, AcidIcons.ICON_SEARCH, "搜索引擎", seName, textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 showSearchEngineDialog();
             }
         });
-        addDivider(cardSearch, divider);
+        addDivider(card, divider);
 
         // 主页设置
         int homeType = mDataStore.getHomeType();
-        String homeDesc = (homeType >= 0 && homeType < BrowserDataStore.HOME_TYPE_NAMES.length) ?
-            BrowserDataStore.HOME_TYPE_NAMES[homeType] : "Acid 默认首页";
-        if (homeType == BrowserDataStore.HOME_CUSTOM && !TextUtils.isEmpty(mDataStore.getCustomHomeUrl())) {
-            homeDesc = "自定义 (" + mDataStore.getCustomHomeUrl() + ")";
-        }
-        addClickableItem(cardSearch, AcidIcons.ICON_GLOBE, "主页设置", homeDesc, textColor, mutedColor, new OnClickListener() {
+        String homeName = (homeType >= 0 && homeType < BrowserDataStore.HOME_TYPE_NAMES.length) ?
+            BrowserDataStore.HOME_TYPE_NAMES[homeType] : "默认";
+        addClickableItem(card, AcidIcons.ICON_GLOBE, "主页", homeName, textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 showHomepageDialog();
             }
         });
-        container.addView(cardSearch);
-
-        addSectionHeader(container, "数据与隐私维护", mutedColor);
-        LinearLayout cardData = createCardLayout(ctx, cardBg, border);
+        addDivider(card, divider);
 
         // 清除浏览数据
-        addClickableItem(cardData, AcidIcons.ICON_TRASH, "清除浏览数据", "清理网络缓存、Cookies、历史与本地存储", textColor, mutedColor, new OnClickListener() {
+        addClickableItem(card, AcidIcons.ICON_TRASH, "清除浏览数据", null, textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 showClearDataDialog();
             }
         });
-        addDivider(cardData, divider);
+        addDivider(card, divider);
 
         // 退出时自动清理
-        addSwitchItem(cardData, AcidIcons.ICON_SHIELD, "退出时自动清理", "退出浏览器时自动清理缓存与 Cookie",
+        addSwitchItem(card, AcidIcons.ICON_SHIELD, "退出时自动清理",
             mDataStore.isClearOnExit(), textColor, mutedColor, accentColor,
             new CompoundButton.OnCheckedChangeListener() {
                 @Override
@@ -321,32 +311,27 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 }
             }
         );
-        container.addView(cardData);
+        container.addView(card);
     }
 
-    // --- 2.2 AI 与自动化 ---
+    // --- 2.2 AI ---
     private void renderLevel2Ai(LinearLayout container, Context ctx,
                                 int textColor, int mutedColor, int accentColor,
                                 int cardBg, int border, int divider) {
-        addSectionHeader(container, "大模型与推理引擎", mutedColor);
-        LinearLayout cardModel = createCardLayout(ctx, cardBg, border);
+        LinearLayout card = createCardLayout(ctx, cardBg, border);
 
-        // 大模型配置
-        addClickableItem(cardModel, AcidIcons.ICON_MODEL, "模型服务商与 API", "配置 DeepSeek、OpenAI、Claude 等", textColor, mutedColor, new OnClickListener() {
+        // 大模型服务商
+        addClickableItem(card, AcidIcons.ICON_MODEL, "模型服务商", null, textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 dismiss();
                 if (mListener != null) mListener.onOpenModelConfig();
             }
         });
-        container.addView(cardModel);
+        addDivider(card, divider);
 
-        addSectionHeader(container, "自动化能力与外部交互", mutedColor);
-        LinearLayout cardAgent = createCardLayout(ctx, cardBg, border);
-
-        // MCP 远程控制服务
-        addSwitchItem(cardAgent, AcidIcons.ICON_TERMINAL, "MCP 远程自动化服务",
-            mIsMcpRunning ? "服务运行中 (HTTP 8765)" : "服务已停止",
+        // MCP 服务
+        addSwitchItem(card, AcidIcons.ICON_TERMINAL, "MCP 服务",
             mIsMcpRunning, textColor, mutedColor, accentColor,
             new CompoundButton.OnCheckedChangeListener() {
                 @Override
@@ -355,68 +340,63 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 }
             }
         );
-        addDivider(cardAgent, divider);
+        addDivider(card, divider);
 
-        // Agent 悬浮助手窗口
-        addClickableItem(cardAgent, AcidIcons.ICON_AGENT, "Acid Agent 悬浮助手", "悬浮呼出 AI 网页助手与多轮对话", textColor, mutedColor, new OnClickListener() {
+        // Agent 悬浮窗
+        addClickableItem(card, AcidIcons.ICON_AGENT, "Agent 悬浮窗", null, textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 dismiss();
                 if (mListener != null) mListener.onOpenAgentFloatingWindow();
             }
         });
-        addDivider(cardAgent, divider);
+        addDivider(card, divider);
 
-        // 清理 AI 工作区
-        addClickableItem(cardAgent, AcidIcons.ICON_TRASH, "清理工作区临时文件", "清理 AI 报告与抓取数据，保护 settings.json 与脚本", textColor, mutedColor, new OnClickListener() {
+        // 清理工作区文件
+        addClickableItem(card, AcidIcons.ICON_TRASH, "清理工作区文件", null, textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 showClearWorkspaceConfirmDialog();
             }
         });
-        container.addView(cardAgent);
+        container.addView(card);
     }
 
-    // --- 2.3 防护与扩展 ---
+    // --- 2.3 防护 ---
     private void renderLevel2Protection(LinearLayout container, Context ctx,
                                         int textColor, int mutedColor, int accentColor,
                                         int cardBg, int border, int divider) {
-        addSectionHeader(container, "广告与干扰元素防护", mutedColor);
-        LinearLayout cardAd = createCardLayout(ctx, cardBg, border);
+        LinearLayout card = createCardLayout(ctx, cardBg, border);
 
-        boolean adEnabled = mDataStore.isAdBlockEnabled();
-        int blockedCount = mDataStore.getAdBlockBlockedCount();
-        String adSub = (adEnabled ? "已开启防护" : "防护已暂停") + " · 已累计拦截 " + blockedCount + " 次广告";
-        addClickableItem(cardAd, AcidIcons.ICON_ADBLOCK, "广告与隐私追踪拦截", adSub, textColor, mutedColor, new OnClickListener() {
+        // 广告拦截
+        addClickableItem(card, AcidIcons.ICON_ADBLOCK, "广告拦截", null, textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 dismiss();
                 if (mListener != null) mListener.onOpenAdBlock();
             }
         });
-        container.addView(cardAd);
+        addDivider(card, divider);
 
-        addSectionHeader(container, "网页脚本与插件扩展", mutedColor);
-        LinearLayout cardScript = createCardLayout(ctx, cardBg, border);
-
-        addClickableItem(cardScript, AcidIcons.ICON_FILE, "脚本管理 (Userscripts)", "自定义扩展与特定网页脚本增强", textColor, mutedColor, new OnClickListener() {
+        // 脚本管理
+        addClickableItem(card, AcidIcons.ICON_FILE, "脚本管理", null, textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 dismiss();
                 if (mListener != null) mListener.onOpenUserscripts();
             }
         });
-        container.addView(cardScript);
+        container.addView(card);
     }
 
-    // --- 2.4 隐私与高级 ---
+    // --- 2.4 高级 ---
     private void renderLevel2Advanced(LinearLayout container, Context ctx,
                                       int textColor, int mutedColor, int accentColor,
                                       int cardBg, int border, int divider) {
-        addSectionHeader(container, "开发者与调试", mutedColor);
-        LinearLayout cardDev = createCardLayout(ctx, cardBg, border);
+        LinearLayout card = createCardLayout(ctx, cardBg, border);
 
-        addSwitchItem(cardDev, AcidIcons.ICON_TERMINAL, "允许网页开发者调试", "支持 Chrome DevTools 远程审查移动端网页",
+        // 网页调试
+        addSwitchItem(card, AcidIcons.ICON_TERMINAL, "网页调试",
             mDataStore.isWebDebuggingEnabled(), textColor, mutedColor, accentColor,
             new CompoundButton.OnCheckedChangeListener() {
                 @Override
@@ -426,12 +406,10 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 }
             }
         );
-        container.addView(cardDev);
+        addDivider(card, divider);
 
-        addSectionHeader(container, "隐私偏好与省流", mutedColor);
-        LinearLayout cardPrivacy = createCardLayout(ctx, cardBg, border);
-
-        addSwitchItem(cardPrivacy, AcidIcons.ICON_INCOGNITO, "发送「不跟踪」请求 (DNT)", "向所有访问网站请求保护隐私",
+        // 不跟踪 (DNT)
+        addSwitchItem(card, AcidIcons.ICON_INCOGNITO, "不跟踪 (DNT)",
             mDataStore.isDoNotTrackEnabled(), textColor, mutedColor, accentColor,
             new CompoundButton.OnCheckedChangeListener() {
                 @Override
@@ -441,9 +419,10 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 }
             }
         );
-        addDivider(cardPrivacy, divider);
+        addDivider(card, divider);
 
-        addSwitchItem(cardPrivacy, AcidIcons.ICON_FILE_IMAGE, "无图省流模式", "不自动加载图片以节省网络流量",
+        // 无图模式
+        addSwitchItem(card, AcidIcons.ICON_FILE_IMAGE, "无图模式",
             mDataStore.isBlockImagesEnabled(), textColor, mutedColor, accentColor,
             new CompoundButton.OnCheckedChangeListener() {
                 @Override
@@ -453,57 +432,38 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 }
             }
         );
-        container.addView(cardPrivacy);
+        container.addView(card);
     }
 
-    // --- 2.5 关于与系统 ---
+    // --- 2.5 关于 ---
     private void renderLevel2About(LinearLayout container, Context ctx,
                                    int textColor, int mutedColor, int accentColor,
                                    int cardBg, int border, int divider) {
-        addSectionHeader(container, "应用信息", mutedColor);
-        LinearLayout cardAbout = createCardLayout(ctx, cardBg, border);
+        LinearLayout card = createCardLayout(ctx, cardBg, border);
 
-        addClickableItem(cardAbout, AcidIcons.ICON_INFO, "关于 Acid Browser", "版本 0.4.3 (build 223) · 检查 OTA 更新",
-            textColor, mutedColor, new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenAbout();
-                }
-            });
-        container.addView(cardAbout);
+        // 关于 Acid Browser
+        addClickableItem(card, AcidIcons.ICON_INFO, "关于 Acid Browser", "v0.4.3", textColor, mutedColor, accentColor, new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dismiss();
+                if (mListener != null) mListener.onOpenAbout();
+            }
+        });
+        addDivider(card, divider);
 
-        addSectionHeader(container, "配置文件与 Agent 热重载", mutedColor);
-        LinearLayout cardCfg = createCardLayout(ctx, cardBg, border);
-        addClickableItem(cardCfg, AcidIcons.ICON_FILE, "设置文件 (settings.json)", "位于工作区，支持 AI Agent 直接修改并实时热重载",
-            textColor, mutedColor, new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    Toast.makeText(getContext(), "配置文件已就绪: settings.json (支持热重载)", Toast.LENGTH_SHORT).show();
-                }
-            });
-        container.addView(cardCfg);
+        // 设置文件
+        addClickableItem(card, AcidIcons.ICON_FILE, "设置文件 (settings.json)", null, textColor, mutedColor, accentColor, new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Toast.makeText(getContext(), "配置文件: settings.json", Toast.LENGTH_SHORT).show();
+            }
+        });
+        container.addView(card);
     }
 
     // =========================================================================
     // UI Helpers
     // =========================================================================
-
-    private void addSectionHeader(LinearLayout container, String title, int color) {
-        Context ctx = getContext();
-        TextView tv = new TextView(ctx);
-        tv.setText(title);
-        tv.setTextColor(color);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        lp.topMargin = AcidTheme.dp(ctx, 10);
-        lp.bottomMargin = AcidTheme.dp(ctx, 6);
-        lp.leftMargin = AcidTheme.dp(ctx, 4);
-        container.addView(tv, lp);
-    }
 
     private LinearLayout createCardLayout(Context ctx, int cardBg, int border) {
         LinearLayout card = new LinearLayout(ctx);
@@ -525,52 +485,55 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 1
         );
-        lp.leftMargin = AcidTheme.dp(ctx, 44);
-        lp.rightMargin = AcidTheme.dp(ctx, 14);
+        lp.leftMargin = AcidTheme.dp(ctx, 48);
+        lp.rightMargin = AcidTheme.dp(ctx, 16);
         parent.addView(div, lp);
     }
 
-    private void addClickableItem(ViewGroup card, int iconId, String title, String subtitle,
-                                  int textColor, int mutedColor, OnClickListener listener) {
+    private void addClickableItem(ViewGroup card, int iconId, String title, String valueText,
+                                  int textColor, int mutedColor, int accentColor, OnClickListener listener) {
         Context ctx = getContext();
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        int padH = AcidTheme.dp(ctx, 14);
-        int padV = AcidTheme.dp(ctx, 10);
+        int padH = AcidTheme.dp(ctx, 16);
+        int padV = AcidTheme.dp(ctx, 14);
         row.setPadding(padH, padV, padH, padV);
         row.setClickable(true);
         row.setFocusable(true);
 
-        AcidIcons.SvgIconView iconView = new AcidIcons.SvgIconView(ctx, iconId, mutedColor, 20);
-        row.addView(iconView);
+        // Icon Box with pill background
+        LinearLayout iconBox = new LinearLayout(ctx);
+        iconBox.setGravity(Gravity.CENTER);
+        int boxSize = AcidTheme.dp(ctx, 32);
+        iconBox.setLayoutParams(new LinearLayout.LayoutParams(boxSize, boxSize));
+        int iconBg = AcidTheme.cardItemBg(mIsDarkMode);
+        iconBox.setBackground(AcidTheme.pillBg(ctx, iconBg, 0, 8));
 
-        LinearLayout textCol = new LinearLayout(ctx);
-        textCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        tLp.leftMargin = AcidTheme.dp(ctx, 12);
+        AcidIcons.SvgIconView iconView = new AcidIcons.SvgIconView(ctx, iconId, accentColor, 18);
+        iconBox.addView(iconView);
+        row.addView(iconBox);
 
         TextView tvTitle = new TextView(ctx);
         tvTitle.setText(title);
         tvTitle.setTextColor(textColor);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        textCol.addView(tvTitle);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tLp.leftMargin = AcidTheme.dp(ctx, 14);
+        row.addView(tvTitle, tLp);
 
-        if (!TextUtils.isEmpty(subtitle)) {
-            TextView tvSub = new TextView(ctx);
-            tvSub.setText(subtitle);
-            tvSub.setTextColor(mutedColor);
-            tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            tvSub.setSingleLine(true);
-            tvSub.setEllipsize(TextUtils.TruncateAt.END);
-            LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
+        if (!TextUtils.isEmpty(valueText)) {
+            TextView tvVal = new TextView(ctx);
+            tvVal.setText(valueText);
+            tvVal.setTextColor(mutedColor);
+            tvVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            LinearLayout.LayoutParams vLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             );
-            subLp.topMargin = AcidTheme.dp(ctx, 2);
-            textCol.addView(tvSub, subLp);
+            vLp.rightMargin = AcidTheme.dp(ctx, 8);
+            row.addView(tvVal, vLp);
         }
-        row.addView(textCol, tLp);
 
         AcidIcons.SvgIconView arrow = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_FORWARD, mutedColor, 14);
         row.addView(arrow);
@@ -581,46 +544,37 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         card.addView(row);
     }
 
-    private void addSwitchItem(ViewGroup card, int iconId, String title, String subtitle,
+    private void addSwitchItem(ViewGroup card, int iconId, String title,
                                boolean isChecked, int textColor, int mutedColor, int accentColor,
                                final CompoundButton.OnCheckedChangeListener listener) {
         Context ctx = getContext();
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        int padH = AcidTheme.dp(ctx, 14);
-        int padV = AcidTheme.dp(ctx, 10);
+        int padH = AcidTheme.dp(ctx, 16);
+        int padV = AcidTheme.dp(ctx, 14);
         row.setPadding(padH, padV, padH, padV);
 
-        AcidIcons.SvgIconView iconView = new AcidIcons.SvgIconView(ctx, iconId, mutedColor, 20);
-        row.addView(iconView);
+        // Icon Box with pill background
+        LinearLayout iconBox = new LinearLayout(ctx);
+        iconBox.setGravity(Gravity.CENTER);
+        int boxSize = AcidTheme.dp(ctx, 32);
+        iconBox.setLayoutParams(new LinearLayout.LayoutParams(boxSize, boxSize));
+        int iconBg = AcidTheme.cardItemBg(mIsDarkMode);
+        iconBox.setBackground(AcidTheme.pillBg(ctx, iconBg, 0, 8));
 
-        LinearLayout textCol = new LinearLayout(ctx);
-        textCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        tLp.leftMargin = AcidTheme.dp(ctx, 12);
+        AcidIcons.SvgIconView iconView = new AcidIcons.SvgIconView(ctx, iconId, accentColor, 18);
+        iconBox.addView(iconView);
+        row.addView(iconBox);
 
         TextView tvTitle = new TextView(ctx);
         tvTitle.setText(title);
         tvTitle.setTextColor(textColor);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        textCol.addView(tvTitle);
-
-        if (!TextUtils.isEmpty(subtitle)) {
-            TextView tvSub = new TextView(ctx);
-            tvSub.setText(subtitle);
-            tvSub.setTextColor(mutedColor);
-            tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            tvSub.setSingleLine(true);
-            tvSub.setEllipsize(TextUtils.TruncateAt.END);
-            LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            subLp.topMargin = AcidTheme.dp(ctx, 2);
-            textCol.addView(tvSub, subLp);
-        }
-        row.addView(textCol, tLp);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tLp.leftMargin = AcidTheme.dp(ctx, 14);
+        row.addView(tvTitle, tLp);
 
         final Switch sw = new Switch(ctx);
         sw.setChecked(isChecked);
