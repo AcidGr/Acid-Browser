@@ -1,19 +1,15 @@
 package com.acid.browser;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
-
-import org.json.JSONObject;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
@@ -26,23 +22,17 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
-
 /**
- * Modern Clean White Browser Edition (Phase 3.2 Modular Architecture):
- * - Thin orchestrator activity managing lifecycle, navigation bars, and top-level modals
- * - Pure SVG Path vector icons via AcidIcons
- * - Classic 5-button bottom toolbar: [Back] [Forward] [Home (Center)] [Tabs] [Menu (Right)]
- * - Full modularization: Views and Dialogs encapsulated in independent components
+ * Thin Browser Activity Orchestrator:
+ * - Manages Android lifecycle, top address bar, takeover banner, and 5-button bottom toolbar
+ * - Coordinates all Tier-0 viewport overlays and Tier-1/2 modal sheets via {@link OverlayStackManager}
+ * - Delegates all modal UI rendering, storage persistence, and script/OTA I/O to dedicated components
  */
 public class BrowserActivity extends Activity implements BrowserController.BrowserStateListener {
 
@@ -52,6 +42,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private BrowserController mController;
     private HttpControlServer mHttpServer;
     private AcidAgentLoop mAgentLoop;
+    private final OverlayStackManager mOverlayStack = new OverlayStackManager();
 
     private boolean mIsDarkMode = false;
     private boolean mIncognitoMode = false;
@@ -63,10 +54,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     // Top Bar
     private LinearLayout mTopBar;
     private View mTopBarDivider;
+    private LinearLayout mShieldBox;
     private AcidIcons.SvgIconView mBtnShield;
     private LinearLayout mSearchContainer;
     private AcidIcons.SvgIconView mSearchIcon;
     private EditText mEtUrl;
+    private LinearLayout mReloadBox;
     private AcidIcons.SvgIconView mBtnReload;
     private FrameLayout mBtnTopAgent;
     private AcidIcons.SvgIconView mIconTopAgent;
@@ -98,27 +91,24 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private LinearLayout mBtnMenu;
     private AcidIcons.SvgIconView mIconMenu;
 
-    // Modular Sub-Components
+    // Tier-0 Viewport Overlays
     private TabsOverviewView mTabsOverview;
     private AgentFloatingView mAgentFloatingView;
-    private AgentSessionsSheet mSessionsSheet;
+
+    // Tier-1 / Tier-2 Modal Sheets
     private BrowserMenuSheet mMenuSheet;
-    private BrowserListsSheet mListsSheet;
+    private BookmarksHistorySheet mBookmarksHistorySheet;
+    private DownloadsSheet mDownloadsSheet;
+    private AgentSessionsSheet mSessionsSheet;
     private AgentModelSelectorSheet mModelSelectorSheet;
     private ModelProviderConfigSheet mProviderConfigSheet;
-    private AcidBottomSheetView mAboutSheet;
-    private AcidBottomSheetView mDownloadConfirmSheet;
     private UserscriptSheet mUserscriptSheet;
     private AdBlockSheet mAdBlockSheet;
     private BrowserSettingsSheet mSettingsSheet;
-    private BroadcastReceiver mDownloadReceiver;
+    private AboutSheet mAboutSheet;
+    private DownloadConfirmSheet mDownloadConfirmSheet;
 
-    /**
-     * Every full-screen overlay, in registration order. Theme propagation, back handling
-     * and "close whatever is open" all iterate this list, so adding an overlay no longer
-     * means editing three separate if-chains.
-     */
-    private final List<AcidOverlay> mOverlays = new ArrayList<AcidOverlay>();
+    private BroadcastReceiver mDownloadReceiver;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -129,8 +119,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mIsDarkMode = mDataStore.isDarkMode();
         getWindow().setBackgroundDrawable(new ColorDrawable(AcidTheme.bg(mIsDarkMode)));
 
-        View root = buildContentView();
-        setContentView(root);
+        setContentView(buildContentView());
 
         mController = new BrowserController(this, mWebViewContainer, mOverlayView, this, mDataStore, mIsDarkMode);
         mDataStore.setOnSettingsChangedListener(new BrowserDataStore.OnSettingsChangedListener() {
@@ -139,16 +128,15 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        if (mController != null) {
-                            mController.applySettingsHotReload();
-                        }
+                        syncFromHotReloadedSettings();
                     }
                 });
             }
         });
 
         if (Build.VERSION.SDK_INT >= 23) {
-            if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{
                     android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
                     android.Manifest.permission.READ_EXTERNAL_STORAGE
@@ -156,13 +144,55 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         }
 
-        // 1. Initialize Tabs Overview View
+        initViewportOverlays();
+        initModalSheets();
+
+        mHttpServer = new HttpControlServer(mController, HttpControlServer.DEFAULT_PORT);
+        if (mDataStore.isMcpServerEnabled()) {
+            mHttpServer.start();
+        }
+
+        mDownloadReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) {
+                    long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                    if (mController != null) {
+                        mController.onDownloadCompleted(id);
+                    }
+                    if (mDownloadsSheet != null && mDownloadsSheet.isShowing()) {
+                        mDownloadsSheet.refreshDownloads();
+                    }
+                }
+            }
+        };
+        registerReceiver(mDownloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+
+        applyTheme(mIsDarkMode);
+        if (mAgentLoop != null && mAgentFloatingView != null) {
+            mAgentFloatingView.renderSessionChatStream(mAgentLoop.getActiveSession());
+        }
+        handleIncomingIntent(getIntent());
+    }
+
+    private void initViewportOverlays() {
+        // 1. Tabs Overview (Tier 0)
         mTabsOverview = new TabsOverviewView(this, mController);
+        mTabsOverview.setOnTabsOverviewListener(new TabsOverviewView.OnTabsOverviewListener() {
+            @Override
+            public void onOverviewShown() {
+                mOverlayStack.notifyViewportShown(mTabsOverview);
+            }
+
+            @Override
+            public void onOverviewClosed() {}
+        });
         mCenterFrame.addView(mTabsOverview, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
+        mOverlayStack.registerViewport(mTabsOverview);
 
-        // 2. Initialize Agent Loop & Agent Floating View
+        // 2. Agent Loop & Floating Drawer (Tier 0)
         mAgentLoop = new AcidAgentLoop(this, mController, new AcidAgentLoop.AgentLoopListener() {
             private boolean mWasRunning = false;
 
@@ -172,7 +202,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mAgentFloatingView.onLoopStateChanged(running, pausedForTakeover, step);
                 }
                 if (mWasRunning && !running && !pausedForTakeover) {
-                    // Agent loop completed naturally or halted by error
                     if (mAgentLoop != null && !mAgentLoop.isStopRequested()) {
                         if (mAgentFloatingView != null && !mAgentFloatingView.isShowing()) {
                             mAgentFloatingView.setHasUnread(true);
@@ -221,15 +250,20 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onOpenModelSelector() {
                 if (mModelSelectorSheet != null) {
-                    mModelSelectorSheet.showSelector();
+                    mOverlayStack.openRootModal(mModelSelectorSheet);
                 }
             }
 
             @Override
             public void onOpenSessionsSheet() {
                 if (mSessionsSheet != null) {
-                    mSessionsSheet.showSessions();
+                    mOverlayStack.openRootModal(mSessionsSheet);
                 }
+            }
+
+            @Override
+            public void onFloatingShown() {
+                mOverlayStack.notifyViewportShown(mAgentFloatingView);
             }
         });
         mAgentFloatingView.setHeightProvider(new AgentFloatingView.HeightProvider() {
@@ -241,8 +275,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mCenterFrame.addView(mAgentFloatingView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
+        mOverlayStack.registerViewport(mAgentFloatingView);
+    }
 
-        // 3. Initialize Top-Level Modal Sheets
+    private void initModalSheets() {
+        // 1. Agent Sessions
         mSessionsSheet = new AgentSessionsSheet(this, mAgentLoop, new AgentSessionsSheet.OnSessionActionListener() {
             @Override
             public void onSessionSwitched(String sessionId) {
@@ -258,9 +295,261 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
             }
         });
-        mRootContainer.addView(mSessionsSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
+        attachModalSheet(mSessionsSheet);
+
+        // 2. Bookmarks & History
+        mBookmarksHistorySheet = new BookmarksHistorySheet(
+            this, mDataStore, mController,
+            new BookmarksHistorySheet.OnNavigateListener() {
+                @Override
+                public void onNavigateUrl(String url) {
+                    mOverlayStack.dismissAllModals();
+                    mController.loadUrl(url);
+                }
+            }
+        );
+        attachModalSheet(mBookmarksHistorySheet);
+
+        // 3. Downloads Manager
+        mDownloadsSheet = new DownloadsSheet(this, mController);
+        attachModalSheet(mDownloadsSheet);
+
+        // 4. Download Confirmation
+        mDownloadConfirmSheet = new DownloadConfirmSheet(this, mController);
+        attachModalSheet(mDownloadConfirmSheet);
+
+        // 5. About & OTA Update
+        mAboutSheet = new AboutSheet(this, new AboutSheet.OnAboutActionListener() {
+            @Override
+            public void onNavigateToUrl(String url) {
+                mOverlayStack.dismissAllModals();
+                mController.loadUrl(url);
+            }
+
+            @Override
+            public void onStartApkDownload(String url, String fileName) {
+                mOverlayStack.dismissAllModals();
+                if (mController != null) {
+                    mController.startDownload(
+                        url, fileName, null, null,
+                        "application/vnd.android.package-archive", 0
+                    );
+                }
+            }
+        });
+        attachModalSheet(mAboutSheet);
+
+        // 6. Userscripts Manager & Installer
+        mUserscriptSheet = new UserscriptSheet(
+            this, mController.getUserscriptManager(),
+            new UserscriptSheet.OnScriptActionListener() {
+                @Override
+                public void onRunScript(UserscriptMeta meta) {
+                    if (mController != null) {
+                        boolean ok = mController.runUserscriptNow(meta);
+                        if (ok) {
+                            Toast.makeText(BrowserActivity.this, "已执行「" + meta.name + "」", Toast.LENGTH_SHORT).show();
+                        } else {
+                            Toast.makeText(
+                                BrowserActivity.this,
+                                "「" + meta.name + "」不适用于当前页面 (" + meta.describeScope() + ")",
+                                Toast.LENGTH_LONG
+                            ).show();
+                        }
+                    }
+                }
+
+                @Override
+                public void onScriptsChanged() {
+                    updateMenuSheetCards();
+                }
+            }
+        );
+        attachModalSheet(mUserscriptSheet);
+
+        // 7. AdBlock Engine
+        mAdBlockSheet = new AdBlockSheet(
+            this,
+            AdBlockManager.getInstance(this),
+            new AdBlockSheet.OnAdBlockStateChangeListener() {
+                @Override
+                public void onAdBlockStateChanged(boolean enabled) {
+                    updateShieldVisual();
+                    updateMenuSheetCards();
+                    if (mSettingsSheet != null) {
+                        mSettingsSheet.refresh();
+                    }
+                }
+            }
+        );
+        attachModalSheet(mAdBlockSheet);
+
+        // 8. Model Provider Configuration
+        mProviderConfigSheet = new ModelProviderConfigSheet(
+            this, mAgentLoop.getModelStore(),
+            new ModelProviderConfigSheet.OnConfigChangeListener() {
+                @Override
+                public void onProviderConfigChanged() {
+                    if (mAgentFloatingView != null) {
+                        mAgentFloatingView.refreshAgentStatusLabel();
+                    }
+                    updateMenuSheetCards();
+                }
+            }
+        );
+        attachModalSheet(mProviderConfigSheet);
+
+        // 9. Session Model & Reasoning Effort Selector
+        mModelSelectorSheet = new AgentModelSelectorSheet(
+            this, mAgentLoop.getModelStore(),
+            new AgentModelSelectorSheet.ModelSelectorListener() {
+                @Override
+                public void onOpenModelProviderConfig() {
+                    mProviderConfigSheet.showConfig();
+                    mOverlayStack.pushModal(mModelSelectorSheet, mProviderConfigSheet);
+                }
+
+                @Override
+                public void onModelConfigChanged() {
+                    if (mAgentFloatingView != null) {
+                        mAgentFloatingView.refreshAgentStatusLabel();
+                    }
+                    updateMenuSheetCards();
+                }
+            }
+        );
+        attachModalSheet(mModelSelectorSheet);
+
+        // 10. Settings Center (Hierarchical L1/L2)
+        mSettingsSheet = new BrowserSettingsSheet(
+            this, mDataStore,
+            new BrowserSettingsSheet.OnSettingsActionListener() {
+                @Override
+                public void onOpenModelConfig() {
+                    mProviderConfigSheet.showConfig();
+                    mOverlayStack.pushModal(mSettingsSheet, mProviderConfigSheet);
+                }
+
+                @Override
+                public void onToggleMcpServer() {
+                    toggleMcpServer();
+                    if (mSettingsSheet != null) {
+                        mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
+                        mSettingsSheet.refresh();
+                    }
+                }
+
+                @Override
+                public void onOpenAgentFloatingWindow() {
+                    mOverlayStack.dismissAllModals();
+                    mAgentFloatingView.show();
+                }
+
+                @Override
+                public void onOpenAdBlock() {
+                    mAdBlockSheet.renderContent();
+                    mOverlayStack.pushModal(mSettingsSheet, mAdBlockSheet);
+                }
+
+                @Override
+                public void onOpenUserscripts() {
+                    mUserscriptSheet.renderScripts();
+                    mOverlayStack.pushModal(mSettingsSheet, mUserscriptSheet);
+                }
+
+                @Override
+                public void onOpenAbout() {
+                    mAboutSheet.showAbout();
+                    mOverlayStack.pushModal(mSettingsSheet, mAboutSheet);
+                }
+
+                @Override
+                public void onClearDataRequested(
+                    boolean clearCache,
+                    boolean clearCookies,
+                    boolean clearHistory,
+                    boolean clearStorage,
+                    boolean clearWorkspace
+                ) {
+                    int wsDeleted = 0;
+                    if (clearWorkspace && mController != null) {
+                        wsDeleted = mDataStore.clearWorkspaceTempFiles(mController.getWorkspaceDir());
+                    }
+                    int cleaned = mDataStore.clearBrowsingData(
+                        mController, clearCache, clearCookies, clearHistory, clearStorage, false
+                    );
+                    if (clearWorkspace) {
+                        cleaned++;
+                    }
+                    if (mSettingsSheet != null) mSettingsSheet.refresh();
+                    String msg;
+                    if (clearWorkspace) {
+                        String wsDetail = wsDeleted > 0
+                            ? ("清理 " + wsDeleted + " 个工作区临时项")
+                            : "工作区无临时残留";
+                        msg = "已清除 " + cleaned + " 类数据 (" + wsDetail + "，配置与脚本已保留)";
+                    } else {
+                        msg = "已清除所选浏览数据 (" + cleaned + " 类)";
+                    }
+                    Toast.makeText(BrowserActivity.this, msg, Toast.LENGTH_SHORT).show();
+                }
+
+                @Override
+                public void onClearWorkspaceOnlyRequested() {
+                    int cleaned = mDataStore.clearWorkspaceTempFiles(mController.getWorkspaceDir());
+                    String msg = cleaned > 0
+                        ? ("已清理 AI 工作区 (" + cleaned + " 个临时项，settings.json 与脚本已保留)")
+                        : "AI 工作区当前无临时残留 (settings.json 与脚本已安全保留)";
+                    Toast.makeText(BrowserActivity.this, msg, Toast.LENGTH_SHORT).show();
+                }
+
+                @Override
+                public void onSearchEngineChanged(int index, String customUrl) {}
+
+                @Override
+                public void onHomeUrlChanged(int type, String customUrl) {
+                    if (mController != null) {
+                        mController.loadUrl(mController.getHomeUrl());
+                    }
+                }
+
+                @Override
+                public void onWebDebuggingChanged(boolean enabled) {
+                    if (mController != null) {
+                        mController.setWebDebuggingEnabled(enabled);
+                    }
+                    Toast.makeText(
+                        BrowserActivity.this,
+                        enabled ? "已开启网页远程调试 (Chrome DevTools)" : "已关闭网页远程调试",
+                        Toast.LENGTH_SHORT
+                    ).show();
+                }
+
+                @Override
+                public void onDoNotTrackChanged(boolean enabled) {
+                    Toast.makeText(
+                        BrowserActivity.this,
+                        enabled ? "已开启「不跟踪 (DNT)」请求" : "已关闭「不跟踪」请求",
+                        Toast.LENGTH_SHORT
+                    ).show();
+                }
+
+                @Override
+                public void onBlockImagesChanged(boolean enabled) {
+                    if (mController != null) {
+                        mController.setBlockImages(enabled);
+                    }
+                    Toast.makeText(
+                        BrowserActivity.this,
+                        enabled ? "已开启无图省流模式" : "已恢复正常图片加载",
+                        Toast.LENGTH_SHORT
+                    ).show();
+                }
+            }
+        );
+        attachModalSheet(mSettingsSheet);
+
+        // 11. Bottom Main Menu Sheet
         mMenuSheet = new BrowserMenuSheet(this, new BrowserMenuSheet.MenuActionListener() {
             @Override
             public void onToggleDarkMode() {
@@ -269,24 +558,27 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
             @Override
             public void onToggleIncognitoMode() {
-                mIncognitoMode = !mIncognitoMode;
-                updateMenuSheetCards();
-                Toast.makeText(
-                    BrowserActivity.this,
-                    mIncognitoMode ? "已开启无痕模式 (不记录浏览足迹与缓存)" : "已恢复正常浏览模式",
-                    Toast.LENGTH_SHORT
-                ).show();
+                toggleIncognitoMode();
             }
 
             @Override
             public void onOpenBookmarks() {
                 BrowserController.TabSession cur = mController.getActiveTab();
-                mListsSheet.showBookmarks(cur != null ? cur.title : "", cur != null ? cur.url : "");
+                mBookmarksHistorySheet.showBookmarks(
+                    cur != null ? cur.title : "",
+                    cur != null ? cur.url : ""
+                );
+                mOverlayStack.openRootModal(mBookmarksHistorySheet);
             }
 
             @Override
             public void onOpenHistory() {
-                mListsSheet.showHistory();
+                BrowserController.TabSession cur = mController.getActiveTab();
+                mBookmarksHistorySheet.showHistory(
+                    cur != null ? cur.title : "",
+                    cur != null ? cur.url : ""
+                );
+                mOverlayStack.openRootModal(mBookmarksHistorySheet);
             }
 
             @Override
@@ -296,14 +588,15 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 updateMenuSheetCards();
                 Toast.makeText(
                     BrowserActivity.this,
-                    nextDesktop ? "已切换为电脑端 (1280px 宽视口)" : "已切换为移动端",
+                    nextDesktop ? "已切换为电脑端视口 (1280px)" : "已切换为移动端视口",
                     Toast.LENGTH_SHORT
                 ).show();
             }
 
             @Override
             public void onOpenDownloads() {
-                mListsSheet.showDownloads();
+                mDownloadsSheet.showDownloads();
+                mOverlayStack.openRootModal(mDownloadsSheet);
             }
 
             @Override
@@ -314,11 +607,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onOpenModelProviderConfig() {
                 mProviderConfigSheet.showConfig();
+                mOverlayStack.openRootModal(mProviderConfigSheet);
             }
 
             @Override
             public void onOpenAbout() {
-                showAboutSheet();
+                mAboutSheet.showAbout();
+                mOverlayStack.openRootModal(mAboutSheet);
             }
 
             @Override
@@ -328,232 +623,31 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
             @Override
             public void onOpenUserscripts() {
-                if (mUserscriptSheet != null) {
-                    mUserscriptSheet.showScripts();
-                }
+                mUserscriptSheet.showScripts();
+                mOverlayStack.openRootModal(mUserscriptSheet);
             }
 
             @Override
             public void onOpenAdBlock() {
-                if (mAdBlockSheet != null) {
-                    mAdBlockSheet.showAdBlock();
-                }
+                mAdBlockSheet.showAdBlock();
+                mOverlayStack.openRootModal(mAdBlockSheet);
             }
 
             @Override
             public void onOpenSettings() {
-                if (mSettingsSheet != null) {
-                    mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
-                    mSettingsSheet.showSettings();
-                }
+                mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
+                mSettingsSheet.showSettings();
+                mOverlayStack.openRootModal(mSettingsSheet);
             }
         });
-        mRootContainer.addView(mMenuSheet, new FrameLayout.LayoutParams(
+        attachModalSheet(mMenuSheet);
+    }
+
+    private void attachModalSheet(AcidBottomSheetView sheet) {
+        mRootContainer.addView(sheet, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
-
-        mAboutSheet = new AcidBottomSheetView(this);
-        mAboutSheet.setTitle("关于");
-        mRootContainer.addView(mAboutSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        mDownloadConfirmSheet = new AcidBottomSheetView(this);
-        mDownloadConfirmSheet.setTitle("下载确认");
-        mRootContainer.addView(mDownloadConfirmSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        mListsSheet = new BrowserListsSheet(this, mDataStore, mController, new BrowserListsSheet.OnListActionListener() {
-            @Override
-            public void onNavigateUrl(String url) {
-                mController.loadUrl(url);
-            }
-        });
-        mRootContainer.addView(mListsSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        mUserscriptSheet = new UserscriptSheet(this, mController.getUserscriptManager(), new UserscriptSheet.OnScriptActionListener() {
-            @Override
-            public void onRunScript(UserscriptMeta meta) {
-                if (mController != null) {
-                    boolean ok = mController.runUserscriptNow(meta);
-                    if (ok) {
-                        Toast.makeText(BrowserActivity.this, "已执行「" + meta.name + "」", Toast.LENGTH_SHORT).show();
-                    } else {
-                        Toast.makeText(BrowserActivity.this, "「" + meta.name + "」不适用于当前页面 (" + meta.describeScope() + ")", Toast.LENGTH_LONG).show();
-                    }
-                }
-            }
-
-            @Override
-            public void onImportRequested() {
-                showImportScriptDialog();
-            }
-
-            @Override
-            public void onScriptToggle(UserscriptMeta meta, boolean enabled) {
-                updateMenuSheetCards();
-            }
-        });
-        mRootContainer.addView(mUserscriptSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        mAdBlockSheet = new AdBlockSheet(this, AdBlockManager.getInstance(this));
-        mRootContainer.addView(mAdBlockSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        mSettingsSheet = new BrowserSettingsSheet(this, mDataStore, new BrowserSettingsSheet.OnSettingsActionListener() {
-            @Override
-            public void onOpenModelConfig() {
-                mProviderConfigSheet.showConfig();
-            }
-
-            @Override
-            public void onToggleMcpServer() {
-                toggleMcpServer();
-                if (mSettingsSheet != null) {
-                    mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
-                    mSettingsSheet.refresh();
-                }
-            }
-
-            @Override
-            public void onOpenAgentFloatingWindow() {
-                mAgentFloatingView.toggle();
-            }
-
-            @Override
-            public void onOpenAdBlock() {
-                if (mAdBlockSheet != null) {
-                    mAdBlockSheet.showAdBlock();
-                }
-            }
-
-            @Override
-            public void onOpenUserscripts() {
-                if (mUserscriptSheet != null) {
-                    mUserscriptSheet.showScripts();
-                }
-            }
-
-            @Override
-            public void onOpenAbout() {
-                showAboutSheet();
-            }
-
-            @Override
-            public void onClearDataRequested(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage, boolean clearWorkspace) {
-                clearBrowsingData(clearCache, clearCookies, clearHistory, clearStorage, clearWorkspace);
-            }
-
-            @Override
-            public void onClearWorkspaceOnlyRequested() {
-                int cleaned = clearWorkspaceTempFiles();
-                Toast.makeText(BrowserActivity.this, "已清理 AI 工作区 (" + cleaned + " 个临时项，settings.json 已安全保留)", Toast.LENGTH_SHORT).show();
-            }
-
-            @Override
-            public void onSearchEngineChanged(int index, String customUrl) {
-                // Preferences saved in mDataStore
-            }
-
-            @Override
-            public void onHomeUrlChanged(int type, String customUrl) {
-                if (mController != null) {
-                    mController.loadUrl(mController.getHomeUrl());
-                }
-            }
-
-            @Override
-            public void onWebDebuggingChanged(boolean enabled) {
-                if (mController != null) {
-                    mController.setWebDebuggingEnabled(enabled);
-                }
-                Toast.makeText(BrowserActivity.this, enabled ? "已开启网页开发者调试 (Chrome DevTools)" : "已关闭网页开发者调试", Toast.LENGTH_SHORT).show();
-            }
-
-            @Override
-            public void onDoNotTrackChanged(boolean enabled) {
-                Toast.makeText(BrowserActivity.this, enabled ? "已开启「不跟踪 (DNT)」请求" : "已关闭「不跟踪」请求", Toast.LENGTH_SHORT).show();
-            }
-
-            @Override
-            public void onBlockImagesChanged(boolean enabled) {
-                if (mController != null) {
-                    mController.setBlockImages(enabled);
-                }
-                Toast.makeText(BrowserActivity.this, enabled ? "已开启无图省流模式" : "已恢复正常图片加载", Toast.LENGTH_SHORT).show();
-            }
-        });
-        mRootContainer.addView(mSettingsSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        mModelSelectorSheet = new AgentModelSelectorSheet(this, mAgentLoop.getModelStore(), new AgentModelSelectorSheet.ModelSelectorListener() {
-            @Override
-            public void onOpenModelProviderConfig() {
-                mProviderConfigSheet.showConfig();
-            }
-
-            @Override
-            public void onModelConfigChanged() {
-                if (mAgentFloatingView != null) {
-                    mAgentFloatingView.refreshAgentStatusLabel();
-                }
-                updateMenuSheetCards();
-            }
-        });
-        mRootContainer.addView(mModelSelectorSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        mProviderConfigSheet = new ModelProviderConfigSheet(this, mAgentLoop.getModelStore(), new ModelProviderConfigSheet.OnConfigChangeListener() {
-            @Override
-            public void onProviderConfigChanged() {
-                if (mAgentFloatingView != null) {
-                    mAgentFloatingView.refreshAgentStatusLabel();
-                }
-                updateMenuSheetCards();
-            }
-        });
-        mRootContainer.addView(mProviderConfigSheet, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-
-        registerOverlays();
-
-        mHttpServer = new HttpControlServer(mController, HttpControlServer.DEFAULT_PORT);
-        boolean mcpEnabled = getSharedPreferences("acid_browser_prefs", MODE_PRIVATE)
-            .getBoolean("mcp_server_enabled", true);
-        if (mcpEnabled) {
-            mHttpServer.start();
-        }
-
-        mDownloadReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if (DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) {
-                    long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
-                    if (mController != null) {
-                        mController.onDownloadCompleted(id);
-                    }
-                    if (mListsSheet != null && mListsSheet.isShowing()) {
-                        mListsSheet.refreshDownloads();
-                    }
-                }
-            }
-        };
-        registerReceiver(mDownloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
-
-        applyTheme(mIsDarkMode);
-        if (mAgentLoop != null && mAgentFloatingView != null) {
-            mAgentFloatingView.renderSessionChatStream(mAgentLoop.getActiveSession());
-        }
-        handleIncomingIntent(getIntent());
+        mOverlayStack.registerModal(sheet);
     }
 
     @Override
@@ -576,6 +670,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         return AcidTheme.dp(this, v);
     }
 
+    // =========================================================================
+    // Browser Chrome Construction (Top Bar, Viewport, Takeover Banner, Toolbar)
+    // =========================================================================
+
     private View buildContentView() {
         mRootContainer = new FrameLayout(this);
         mRootContainer.setLayoutParams(new ViewGroup.LayoutParams(
@@ -592,28 +690,28 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mTopBar.setGravity(Gravity.CENTER_VERTICAL);
         mTopBar.setPadding(dp(8), dp(6), dp(8), dp(6));
 
-        // Shield
-        LinearLayout shieldBox = new LinearLayout(this);
-        shieldBox.setGravity(Gravity.CENTER);
-        shieldBox.setPadding(dp(4), dp(4), dp(4), dp(4));
+        mShieldBox = new LinearLayout(this);
+        mShieldBox.setGravity(Gravity.CENTER);
+        mShieldBox.setPadding(dp(6), dp(6), dp(6), dp(6));
+        mShieldBox.setClickable(true);
+        mShieldBox.setFocusable(true);
         mBtnShield = new AcidIcons.SvgIconView(this, AcidIcons.ICON_SHIELD, AcidTheme.LIGHT_ACCENT, 18);
-        shieldBox.addView(mBtnShield);
-        shieldBox.setOnClickListener(new View.OnClickListener() {
+        mShieldBox.addView(mBtnShield);
+        mShieldBox.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (mAdBlockSheet != null) {
                     mAdBlockSheet.showAdBlock();
+                    mOverlayStack.openRootModal(mAdBlockSheet);
                 }
             }
         });
-        mTopBar.addView(shieldBox);
+        mTopBar.addView(mShieldBox);
 
-        // Search Container
         mSearchContainer = new LinearLayout(this);
         mSearchContainer.setOrientation(LinearLayout.HORIZONTAL);
         mSearchContainer.setGravity(Gravity.CENTER_VERTICAL);
-        mSearchContainer.setPadding(dp(8), dp(2), dp(8), dp(2));
-        mSearchContainer.setBackground(AcidTheme.pillBg(this, AcidTheme.LIGHT_SEARCH_BG, AcidTheme.LIGHT_SEARCH_BORDER, 18));
+        mSearchContainer.setPadding(dp(10), dp(2), dp(4), dp(2));
 
         mSearchIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_SEARCH, AcidTheme.LIGHT_MUTED, 14);
         mSearchContainer.addView(mSearchIcon);
@@ -621,27 +719,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mEtUrl = new EditText(this);
         mEtUrl.setSingleLine(true);
         mEtUrl.setHint("搜索或输入网址...");
-        mEtUrl.setHintTextColor(AcidTheme.LIGHT_MUTED);
-        mEtUrl.setTextColor(AcidTheme.LIGHT_TEXT);
-        mEtUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        mEtUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         mEtUrl.setBackgroundColor(Color.TRANSPARENT);
         mEtUrl.setPadding(dp(6), dp(4), dp(6), dp(4));
         mEtUrl.setImeOptions(EditorInfo.IME_ACTION_GO);
         mEtUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        // Tapping the address bar selects the whole URL so typing replaces it (Chrome/Via behaviour)
         mEtUrl.setSelectAllOnFocus(true);
         mEtUrl.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
                 if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE ||
                     (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN)) {
-                    hideKeyboard();
+                    AcidTheme.hideKeyboard(BrowserActivity.this);
                     if (mTabsOverview != null && mTabsOverview.isShowing()) {
                         mTabsOverview.close();
                     }
                     mController.loadUrl(mEtUrl.getText().toString());
-                    // Hand focus back to the page so the next tap on the bar re-triggers select-all
-                    // and onUrlChanged() can refresh the bar again.
                     BrowserController.TabSession tab = mController.getActiveTab();
                     if (tab != null && tab.webView != null) {
                         tab.webView.requestFocus();
@@ -653,16 +746,18 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 return false;
             }
         });
-        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        mSearchContainer.addView(mEtUrl, etLp);
+        mSearchContainer.addView(mEtUrl, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        ));
 
-        // Reload
-        LinearLayout reloadBox = new LinearLayout(this);
-        reloadBox.setGravity(Gravity.CENTER);
-        mBtnReload = new AcidIcons.SvgIconView(this, AcidIcons.ICON_RELOAD, AcidTheme.LIGHT_MUTED, 18);
-        mBtnReload.setStrokeWidthDp(1.5f); // 2/24 of the 18dp slot
-        reloadBox.addView(mBtnReload);
-        reloadBox.setOnClickListener(new View.OnClickListener() {
+        mReloadBox = new LinearLayout(this);
+        mReloadBox.setGravity(Gravity.CENTER);
+        mReloadBox.setClickable(true);
+        mReloadBox.setFocusable(true);
+        mBtnReload = new AcidIcons.SvgIconView(this, AcidIcons.ICON_RELOAD, AcidTheme.LIGHT_MUTED, 17);
+        mBtnReload.setStrokeWidthDp(1.5f);
+        mReloadBox.addView(mBtnReload);
+        mReloadBox.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 BrowserController.TabSession tab = mController.getActiveTab();
@@ -675,21 +770,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
             }
         });
-        mSearchContainer.addView(reloadBox, new LinearLayout.LayoutParams(dp(40), dp(36)));
+        mSearchContainer.addView(mReloadBox, new LinearLayout.LayoutParams(dp(36), dp(32)));
 
-        LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        searchLp.setMargins(dp(6), 0, dp(6), 0);
+        LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        );
+        searchLp.setMargins(dp(4), 0, dp(4), 0);
         mTopBar.addView(mSearchContainer, searchLp);
 
         // Agent Trigger Button
         mBtnTopAgent = new FrameLayout(this);
-        int btnW = dp(34);
-        int btnH = dp(34);
-        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(btnW, btnH);
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(dp(34), dp(34));
         btnLp.gravity = Gravity.CENTER_VERTICAL;
         btnLp.leftMargin = dp(2);
-        btnLp.rightMargin = dp(2);
         mBtnTopAgent.setLayoutParams(btnLp);
+        mBtnTopAgent.setClickable(true);
+        mBtnTopAgent.setFocusable(true);
 
         int iconSize = dp(19);
         mIconTopAgent = new AcidIcons.SvgIconView(this, AcidIcons.ICON_AGENT, AcidTheme.LIGHT_ICON, 19);
@@ -698,13 +794,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mAgentUnreadBadge = new TextView(this);
         mAgentUnreadBadge.setText("!");
         mAgentUnreadBadge.setTextColor(Color.WHITE);
-        mAgentUnreadBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8f);
+        mAgentUnreadBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
         mAgentUnreadBadge.setTypeface(Typeface.DEFAULT_BOLD);
         mAgentUnreadBadge.setGravity(Gravity.CENTER);
         int badgeSize = dp(13);
         mAgentUnreadBadge.setBackground(AcidTheme.pillBg(this, AcidTheme.COLOR_RED, Color.WHITE, 6.5f));
-        FrameLayout.LayoutParams badgeLp = new FrameLayout.LayoutParams(badgeSize, badgeSize, Gravity.TOP | Gravity.END);
-        mAgentUnreadBadge.setLayoutParams(badgeLp);
+        mAgentUnreadBadge.setLayoutParams(new FrameLayout.LayoutParams(
+            badgeSize, badgeSize, Gravity.TOP | Gravity.END
+        ));
         mAgentUnreadBadge.setVisibility(View.GONE);
         mBtnTopAgent.addView(mAgentUnreadBadge);
 
@@ -718,28 +815,37 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
         mTopBar.addView(mBtnTopAgent);
 
-        mMainContentLayout.addView(mTopBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        mMainContentLayout.addView(mTopBar, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
 
         mTopBarDivider = new View(this);
-        mTopBarDivider.setBackgroundColor(AcidTheme.LIGHT_BORDER);
-        mMainContentLayout.addView(mTopBarDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        mMainContentLayout.addView(mTopBarDivider, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
+        ));
 
         mProgressBar = new View(this);
-        mProgressBar.setBackgroundColor(AcidTheme.LIGHT_ACCENT);
-        mMainContentLayout.addView(mProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+        mProgressBar.setVisibility(View.INVISIBLE);
+        mMainContentLayout.addView(mProgressBar, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(2)
+        ));
 
         mTakeoverBar = buildTakeoverBanner();
         mTakeoverBar.setVisibility(View.GONE);
-        mMainContentLayout.addView(mTakeoverBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        mMainContentLayout.addView(mTakeoverBar, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
 
         // --- Center Viewport ---
         mCenterFrame = new FrameLayout(this);
-        mCenterFrame.setBackgroundColor(AcidTheme.bg(mIsDarkMode));
         mWebViewContainer = new FrameLayout(this);
-        mWebViewContainer.setBackgroundColor(AcidTheme.bg(mIsDarkMode));
         mOverlayView = new AgentOverlayView(this);
-        mCenterFrame.addView(mWebViewContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        mCenterFrame.addView(mOverlayView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        mCenterFrame.addView(mWebViewContainer, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        mCenterFrame.addView(mOverlayView, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
 
         mCenterFrame.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
             @Override
@@ -753,18 +859,24 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         });
 
-        mMainContentLayout.addView(mCenterFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        mMainContentLayout.addView(mCenterFrame, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ));
 
         // --- Bottom 5-Button Toolbar ---
         mBottomDivider = new View(this);
-        mBottomDivider.setBackgroundColor(AcidTheme.LIGHT_BORDER);
-        mMainContentLayout.addView(mBottomDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        mMainContentLayout.addView(mBottomDivider, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
+        ));
 
         mBottomBar = buildBottomToolbar();
-        mMainContentLayout.addView(mBottomBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        mMainContentLayout.addView(mBottomBar, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
+        ));
 
-        mRootContainer.addView(mMainContentLayout, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
+        mRootContainer.addView(mMainContentLayout, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
         return mRootContainer;
     }
 
@@ -772,7 +884,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(AcidTheme.TAKEOVER_BG);
         bar.setPadding(dp(10), dp(6), dp(10), dp(6));
 
         mTakeoverIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_HUMAN, AcidTheme.COLOR_AMBER, 16);
@@ -781,10 +892,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mTvTakeoverStatus = new TextView(this);
         mTvTakeoverStatus.setText("AI 请求接管");
         mTvTakeoverStatus.setTextColor(AcidTheme.COLOR_AMBER);
-        mTvTakeoverStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        mTvTakeoverStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         mTvTakeoverStatus.setSingleLine(true);
         mTvTakeoverStatus.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        );
         tvLp.leftMargin = dp(6);
         bar.addView(mTvTakeoverStatus, tvLp);
 
@@ -801,7 +914,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         });
         bar.addView(mBtnTakeoverAction);
-
         return bar;
     }
 
@@ -809,9 +921,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(AcidTheme.LIGHT_BAR);
 
-        // 1. Back
         mBtnBack = createBottomTabItem();
         mIconBack = new AcidIcons.SvgIconView(this, AcidIcons.ICON_BACK, AcidTheme.LIGHT_ICON_DISABLED, 20);
         mBtnBack.addView(mIconBack);
@@ -830,7 +940,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
         bar.addView(mBtnBack, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        // 2. Forward
         mBtnForward = createBottomTabItem();
         mIconForward = new AcidIcons.SvgIconView(this, AcidIcons.ICON_FORWARD, AcidTheme.LIGHT_ICON_DISABLED, 20);
         mBtnForward.addView(mIconForward);
@@ -849,7 +958,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
         bar.addView(mBtnForward, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        // 3. Home
         mBtnHome = createBottomTabItem();
         mIconHome = new AcidIcons.SvgIconView(this, AcidIcons.ICON_HOME, AcidTheme.LIGHT_ICON, 21);
         mBtnHome.addView(mIconHome);
@@ -864,7 +972,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
         bar.addView(mBtnHome, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        // 4. Tabs
         mBtnTabs = createBottomTabItem();
         mIconTabs = new AcidIcons.TabBoxView(this, AcidTheme.LIGHT_ICON, 18);
         mBtnTabs.addView(mIconTabs);
@@ -878,7 +985,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
         bar.addView(mBtnTabs, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        // 5. Menu
         mBtnMenu = createBottomTabItem();
         mIconMenu = new AcidIcons.SvgIconView(this, AcidIcons.ICON_MENU, AcidTheme.LIGHT_ICON, 20);
         mBtnMenu.addView(mIconMenu);
@@ -886,8 +992,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onClick(View v) {
                 if (mMenuSheet != null) {
-                    updateMenuSheetCards();
-                    mMenuSheet.toggle();
+                    if (mMenuSheet.isShowing()) {
+                        mMenuSheet.dismiss();
+                    } else {
+                        updateMenuSheetCards();
+                        mOverlayStack.openRootModal(mMenuSheet);
+                    }
                 }
             }
         });
@@ -902,6 +1012,76 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         item.setClickable(true);
         item.setFocusable(true);
         return item;
+    }
+
+    // =========================================================================
+    // Mode Switches & Theme Propagation
+    // =========================================================================
+
+    private void syncFromHotReloadedSettings() {
+        if (mController != null) {
+            mController.applySettingsHotReload();
+        }
+        boolean storeDark = mDataStore.isDarkMode();
+        if (mIsDarkMode != storeDark) {
+            mIsDarkMode = storeDark;
+            applyTheme(mIsDarkMode);
+        }
+        if (mHttpServer != null) {
+            boolean wantMcp = mDataStore.isMcpServerEnabled();
+            if (wantMcp && !mHttpServer.isRunning()) {
+                mHttpServer.start();
+            } else if (!wantMcp && mHttpServer.isRunning()) {
+                mHttpServer.stop();
+            }
+        }
+        updateShieldVisual();
+        updateMenuSheetCards();
+        if (mSettingsSheet != null) {
+            mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
+            mSettingsSheet.refresh();
+        }
+    }
+
+    private void toggleDarkMode() {
+        mIsDarkMode = !mIsDarkMode;
+        mDataStore.setDarkMode(mIsDarkMode);
+        if (mController != null) {
+            mController.setDarkMode(mIsDarkMode);
+        }
+        applyTheme(mIsDarkMode);
+        updateMenuSheetCards();
+    }
+
+    private void toggleIncognitoMode() {
+        mIncognitoMode = !mIncognitoMode;
+        if (mController != null) {
+            mController.setIncognitoMode(mIncognitoMode);
+        }
+        updateAddressBarVisual();
+        updateMenuSheetCards();
+        Toast.makeText(
+            this,
+            mIncognitoMode
+                ? "已开启无痕模式 (禁用历史记录、表单保存与磁盘缓存)"
+                : "已退出无痕模式 (已自动清理临时缓存与会话 Cookie)",
+            Toast.LENGTH_SHORT
+        ).show();
+    }
+
+    private void toggleMcpServer() {
+        if (mHttpServer == null) return;
+        boolean currentlyRunning = mHttpServer.isRunning();
+        if (currentlyRunning) {
+            mHttpServer.stop();
+            mDataStore.setMcpServerEnabled(false);
+            Toast.makeText(this, "MCP 服务已停止 (3090 端口已释放)", Toast.LENGTH_SHORT).show();
+        } else {
+            mHttpServer.start();
+            mDataStore.setMcpServerEnabled(true);
+            Toast.makeText(this, "MCP 服务已启动 (127.0.0.1:3090)", Toast.LENGTH_SHORT).show();
+        }
+        updateMenuSheetCards();
     }
 
     private void updateMenuSheetCards() {
@@ -920,83 +1100,35 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mMenuSheet.updateMcpState(mHttpServer != null && mHttpServer.isRunning());
     }
 
-    private void toggleMcpServer() {
-        if (mHttpServer == null) return;
-        boolean currentlyRunning = mHttpServer.isRunning();
-        if (currentlyRunning) {
-            mHttpServer.stop();
-            getSharedPreferences("acid_browser_prefs", MODE_PRIVATE)
-                .edit().putBoolean("mcp_server_enabled", false).apply();
-            Toast.makeText(this, "MCP 服务已停止 (3090 端口已释放)", Toast.LENGTH_SHORT).show();
-        } else {
-            mHttpServer.start();
-            getSharedPreferences("acid_browser_prefs", MODE_PRIVATE)
-                .edit().putBoolean("mcp_server_enabled", true).apply();
-            Toast.makeText(this, "MCP 服务已启动 (127.0.0.1:3090)", Toast.LENGTH_SHORT).show();
-        }
-        updateMenuSheetCards();
+    private void updateShieldVisual() {
+        if (mBtnShield == null) return;
+        boolean adBlockEnabled = AdBlockManager.getInstance(this).isEnabled();
+        mBtnShield.setColor(adBlockEnabled ? AcidTheme.accent(mIsDarkMode) : AcidTheme.muted(mIsDarkMode));
     }
 
-    private void toggleDarkMode() {
-        mIsDarkMode = !mIsDarkMode;
-        mDataStore.setDarkMode(mIsDarkMode);
-
-        if (mController != null) {
-            mController.setDarkMode(mIsDarkMode);
-        }
-        applyTheme(mIsDarkMode);
-        updateMenuSheetCards();
-    }
-
-    // =========================================================================
-    // Overlay registry
-    // =========================================================================
-
-    /**
-     * Registers every overlay once. Each implementation raises itself in {@code show()},
-     * so no ordering logic is needed here.
-     */
-    private void registerOverlays() {
-        mOverlays.clear();
-        addOverlay(mAgentFloatingView);
-        addOverlay(mTabsOverview);
-        addOverlay(mMenuSheet);
-        addOverlay(mListsSheet);
-        addOverlay(mSessionsSheet);
-        addOverlay(mModelSelectorSheet);
-        addOverlay(mProviderConfigSheet);
-        addOverlay(mAboutSheet);
-        addOverlay(mDownloadConfirmSheet);
-        addOverlay(mUserscriptSheet);
-        addOverlay(mAdBlockSheet);
-        addOverlay(mSettingsSheet);
-    }
-
-    private void addOverlay(AcidOverlay overlay) {
-        if (overlay != null && !mOverlays.contains(overlay)) {
-            mOverlays.add(overlay);
-        }
-    }
-
-    /** Propagates the palette to every registered overlay. */
-    private void applyThemeToOverlays(boolean dark) {
-        for (AcidOverlay overlay : mOverlays) {
-            overlay.applyTheme(dark);
-        }
+    private void updateAddressBarVisual() {
+        if (mSearchContainer == null || mSearchIcon == null || mEtUrl == null) return;
+        int searchBg = AcidTheme.searchBg(mIsDarkMode);
+        int searchBorder = mIncognitoMode
+            ? AcidTheme.COLOR_PURPLE
+            : AcidTheme.searchBorder(mIsDarkMode);
+        mSearchContainer.setBackground(AcidTheme.pillBg(this, searchBg, searchBorder, 18));
+        mSearchIcon.setIcon(mIncognitoMode ? AcidIcons.ICON_INCOGNITO : AcidIcons.ICON_SEARCH);
+        mSearchIcon.setColor(mIncognitoMode ? AcidTheme.COLOR_PURPLE : AcidTheme.muted(mIsDarkMode));
+        mEtUrl.setHint(mIncognitoMode ? "无痕模式 · 搜索或输入网址..." : "搜索或输入网址...");
+        mEtUrl.setTextColor(AcidTheme.text(mIsDarkMode));
+        mEtUrl.setHintTextColor(AcidTheme.muted(mIsDarkMode));
     }
 
     private void applyTheme(boolean dark) {
         int bg = AcidTheme.bg(dark);
         int bar = AcidTheme.bar(dark);
         int border = AcidTheme.border(dark);
-        int searchBg = AcidTheme.searchBg(dark);
-        int searchBorder = AcidTheme.searchBorder(dark);
-        int text = AcidTheme.text(dark);
         int muted = AcidTheme.muted(dark);
         int icon = AcidTheme.icon(dark);
         int accent = AcidTheme.accent(dark);
+        int pressed = AcidTheme.rowPressed(dark);
 
-        // System Status & Nav Bar
         if (Build.VERSION.SDK_INT >= 21) {
             Window window = getWindow();
             window.setStatusBarColor(bar);
@@ -1028,25 +1160,32 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mTopBarDivider.setBackgroundColor(border);
         mBottomBar.setBackgroundColor(bar);
         mBottomDivider.setBackgroundColor(border);
+        mTakeoverBar.setBackgroundColor(AcidTheme.takeoverBg(dark));
 
-        mSearchContainer.setBackground(AcidTheme.pillBg(this, searchBg, searchBorder, 18));
-        mSearchIcon.setColor(muted);
-        mEtUrl.setTextColor(text);
-        mEtUrl.setHintTextColor(muted);
+        mShieldBox.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, AcidTheme.RADIUS_CONTROL));
+        mReloadBox.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, 14));
         mBtnReload.setColor(muted);
 
+        updateAddressBarVisual();
+        updateShieldVisual();
         mProgressBar.setBackgroundColor(accent);
-        mBtnShield.setColor(accent);
+
+        View[] bottomBtns = new View[]{mBtnBack, mBtnForward, mBtnHome, mBtnTabs, mBtnMenu};
+        for (View b : bottomBtns) {
+            b.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, AcidTheme.RADIUS_CONTROL));
+        }
 
         updateNavButtons();
         mIconHome.setColor(icon);
         mIconTabs.setColor(icon);
         mIconMenu.setColor(icon);
 
-        updateTopAgentButton(mAgentLoop != null && mAgentLoop.isRunning(), mAgentLoop != null && mAgentLoop.isPausedForTakeover());
+        updateTopAgentButton(
+            mAgentLoop != null && mAgentLoop.isRunning(),
+            mAgentLoop != null && mAgentLoop.isPausedForTakeover()
+        );
 
-        // Propagate theme to modular sub-components
-        applyThemeToOverlays(dark);
+        mOverlayStack.applyTheme(dark);
     }
 
     private void updateTopAgentButton(boolean running, boolean pausedForTakeover) {
@@ -1054,17 +1193,20 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (running) {
             int yellow = AcidTheme.COLOR_AMBER;
             mIconTopAgent.setColor(yellow);
-            int bg = Color.argb(32, 245, 158, 11);
-            mBtnTopAgent.setBackground(AcidTheme.pillBg(this, bg, yellow, 12));
+            mBtnTopAgent.setBackground(AcidTheme.interactiveBg(
+                this, AcidTheme.softTint(yellow, 32), AcidTheme.softTint(yellow, 64), yellow, 12
+            ));
         } else if (pausedForTakeover) {
             int orange = AcidTheme.COLOR_ORANGE;
             mIconTopAgent.setColor(orange);
-            int bg = Color.argb(32, 249, 115, 22);
-            mBtnTopAgent.setBackground(AcidTheme.pillBg(this, bg, orange, 12));
+            mBtnTopAgent.setBackground(AcidTheme.interactiveBg(
+                this, AcidTheme.softTint(orange, 32), AcidTheme.softTint(orange, 64), orange, 12
+            ));
         } else {
-            int iconCol = AcidTheme.icon(mIsDarkMode);
-            mIconTopAgent.setColor(iconCol);
-            mBtnTopAgent.setBackground(null);
+            mIconTopAgent.setColor(AcidTheme.icon(mIsDarkMode));
+            mBtnTopAgent.setBackground(AcidTheme.interactiveBg(
+                this, Color.TRANSPARENT, AcidTheme.rowPressed(mIsDarkMode), 0, AcidTheme.RADIUS_CONTROL
+            ));
         }
 
         if (mAgentUnreadBadge != null) {
@@ -1082,527 +1224,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         int disabledIcon = AcidTheme.iconDisabled(mIsDarkMode);
         mIconBack.setColor(canBack ? activeIcon : disabledIcon);
         mIconForward.setColor(canForward ? activeIcon : disabledIcon);
-    }
-
-    private void showAboutSheet() {
-        if (mAboutSheet == null) return;
-        mAboutSheet.setTitle("关于 Acid Browser");
-        mAboutSheet.hideAction();
-        LinearLayout container = mAboutSheet.getContentContainer();
-        container.removeAllViews();
-
-        int accent = AcidTheme.accent(mIsDarkMode);
-        int text = AcidTheme.text(mIsDarkMode);
-        int muted = AcidTheme.muted(mIsDarkMode);
-        int cardBg = AcidTheme.cardItemBg(mIsDarkMode);
-        int border = AcidTheme.border(mIsDarkMode);
-        int blue = AcidTheme.COLOR_BLUE;
-
-        // Hero Card: Logo + App Name + Version Badge
-        LinearLayout hero = new LinearLayout(this);
-        hero.setOrientation(LinearLayout.VERTICAL);
-        hero.setGravity(Gravity.CENTER);
-        hero.setPadding(dp(16), dp(16), dp(16), dp(16));
-        hero.setBackground(AcidTheme.cardBorderBg(this, cardBg, border, 1, 14));
-        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        hLp.bottomMargin = dp(10);
-        hero.setLayoutParams(hLp);
-
-        AcidIcons.SvgIconView logo = new AcidIcons.SvgIconView(this, AcidIcons.ICON_LOGO, accent, 42);
-        hero.addView(logo);
-
-        TextView tvName = new TextView(this);
-        tvName.setText("Acid Browser");
-        tvName.setTextColor(text);
-        tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f);
-        tvName.setTypeface(Typeface.DEFAULT_BOLD);
-        tvName.setPadding(0, dp(8), 0, dp(2));
-        hero.addView(tvName);
-
-        // Version Row with Version badge and [检查更新] button
-        LinearLayout versionRow = new LinearLayout(this);
-        versionRow.setOrientation(LinearLayout.HORIZONTAL);
-        versionRow.setGravity(Gravity.CENTER_VERTICAL);
-        versionRow.setPadding(0, dp(4), 0, 0);
-
-        String curVer = "v?";
-        try {
-            android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
-            curVer = "v" + pi.versionName;
-        } catch (Exception e) {
-            Log.w(TAG, "Could not read the installed package version", e);
-        }
-
-        TextView tvVersion = new TextView(this);
-        tvVersion.setText("版本: " + curVer);
-        tvVersion.setTextColor(accent);
-        tvVersion.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        tvVersion.setTypeface(Typeface.DEFAULT_BOLD);
-        tvVersion.setPadding(dp(8), dp(3), dp(8), dp(3));
-        tvVersion.setBackground(AcidTheme.pillBg(this, Color.argb(26, Color.red(accent), Color.green(accent), Color.blue(accent)), 0, 6));
-        versionRow.addView(tvVersion);
-
-        final TextView btnCheckUpdate = new TextView(this);
-        btnCheckUpdate.setText("检查更新");
-        btnCheckUpdate.setTextColor(AcidTheme.COLOR_BLUE);
-        btnCheckUpdate.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        btnCheckUpdate.setTypeface(Typeface.DEFAULT_BOLD);
-        btnCheckUpdate.setBackground(AcidTheme.pillBg(this, cardBg, AcidTheme.searchBorder(mIsDarkMode), 6));
-        btnCheckUpdate.setPadding(dp(8), dp(3), dp(8), dp(3));
-        LinearLayout.LayoutParams cuLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cuLp.leftMargin = dp(8);
-        btnCheckUpdate.setLayoutParams(cuLp);
-        btnCheckUpdate.setClickable(true);
-        btnCheckUpdate.setFocusable(true);
-        btnCheckUpdate.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                checkAppUpdate(btnCheckUpdate);
-            }
-        });
-        versionRow.addView(btnCheckUpdate);
-        hero.addView(versionRow);
-
-        container.addView(hero);
-
-        // Author & GitHub Info Card
-        LinearLayout infoCard = new LinearLayout(this);
-        infoCard.setOrientation(LinearLayout.VERTICAL);
-        infoCard.setPadding(dp(14), dp(12), dp(14), dp(12));
-        infoCard.setBackground(AcidTheme.cardBorderBg(this, cardBg, border, 1, 12));
-        LinearLayout.LayoutParams acLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        acLp.bottomMargin = dp(10);
-        infoCard.setLayoutParams(acLp);
-
-        TextView lblAuthor = new TextView(this);
-        lblAuthor.setText("作者 / 开发者");
-        lblAuthor.setTextColor(muted);
-        lblAuthor.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        infoCard.addView(lblAuthor);
-
-        TextView tvAuthor = new TextView(this);
-        tvAuthor.setText("酸小明");
-        tvAuthor.setTextColor(text);
-        tvAuthor.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f);
-        tvAuthor.setTypeface(Typeface.DEFAULT_BOLD);
-        tvAuthor.setPadding(0, dp(2), 0, dp(8));
-        infoCard.addView(tvAuthor);
-
-        TextView lblGh = new TextView(this);
-        lblGh.setText("GitHub 主页");
-        lblGh.setTextColor(muted);
-        lblGh.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        infoCard.addView(lblGh);
-
-        TextView tvGh = new TextView(this);
-        tvGh.setText("https://github.com/AcidGr");
-        tvGh.setTextColor(blue);
-        tvGh.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        tvGh.setPadding(0, dp(2), 0, dp(10));
-        infoCard.addView(tvGh);
-
-        TextView btnVisit = new TextView(this);
-        btnVisit.setText("访问作者 GitHub 主页");
-        btnVisit.setTextColor(Color.WHITE);
-        btnVisit.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        btnVisit.setTypeface(Typeface.DEFAULT_BOLD);
-        btnVisit.setGravity(Gravity.CENTER);
-        btnVisit.setPadding(dp(12), dp(9), dp(12), dp(9));
-        btnVisit.setBackground(AcidTheme.pillBg(this, blue, blue, 8));
-        btnVisit.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                mAboutSheet.dismiss();
-                mController.loadUrl("https://github.com/AcidGr");
-            }
-        });
-        infoCard.addView(btnVisit);
-
-        container.addView(infoCard);
-
-        // Features Description
-        LinearLayout descCard = new LinearLayout(this);
-        descCard.setOrientation(LinearLayout.VERTICAL);
-        descCard.setPadding(dp(14), dp(10), dp(14), dp(10));
-        descCard.setBackground(AcidTheme.cardBorderBg(this, cardBg, border, 1, 12));
-
-        TextView tvDesc = new TextView(this);
-        tvDesc.setText("Acid Browser 是一款超轻量 (~197 KB)、零敏感权限、原生支持 Agent Loop 与多端视口自由切换的现代 AI 浏览器内核。");
-        tvDesc.setTextColor(muted);
-        tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        tvDesc.setLineSpacing(dp(3), 1f);
-        descCard.addView(tvDesc);
-
-        container.addView(descCard);
-
-        mAboutSheet.show();
-    }
-
-    public static final String UPDATE_PROBE_URL = "https://api.github.com/repos/AcidGr/Acid-Browser/releases/latest";
-
-    private void checkAppUpdate(final TextView triggerBtn) {
-        if (triggerBtn != null) {
-            triggerBtn.setText("正在检查...");
-            triggerBtn.setEnabled(false);
-        }
-        Toast.makeText(this, "正在检查更新...", Toast.LENGTH_SHORT).show();
-
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                String jsonStr = null;
-                try {
-                    java.net.URL u = new java.net.URL(UPDATE_PROBE_URL);
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
-                    conn.setConnectTimeout(5000);
-                    conn.setReadTimeout(5000);
-                    conn.setRequestMethod("GET");
-                    if (conn.getResponseCode() == 200) {
-                        java.io.InputStream in = conn.getInputStream();
-                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                        byte[] buf = new byte[1024];
-                        int len;
-                        while ((len = in.read(buf)) != -1) {
-                            bos.write(buf, 0, len);
-                        }
-                        in.close();
-                        jsonStr = new String(bos.toByteArray(), "UTF-8");
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "Update probe failed: " + UPDATE_PROBE_URL, e);
-                }
-
-                final String resultJson = jsonStr;
-
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (triggerBtn != null) {
-                            triggerBtn.setText("检查更新");
-                            triggerBtn.setEnabled(true);
-                        }
-
-                        if (resultJson == null) {
-                            Toast.makeText(BrowserActivity.this, "检查更新失败", Toast.LENGTH_SHORT).show();
-                            return;
-                        }
-
-                        try {
-                            JSONObject obj = new JSONObject(resultJson);
-                            int remoteCode = obj.optInt("versionCode", 0);
-                            String remoteName = obj.optString("versionName", "");
-                            String downloadUrl = obj.optString("downloadUrl", "");
-                            String apkSize = obj.optString("apkSize", "");
-                            String changelog = obj.optString("changelog", "");
-
-                            int currentCode = 0;
-                            String currentName = "?";
-                            try {
-                                android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
-                                currentCode = pi.versionCode;
-                                currentName = pi.versionName;
-                            } catch (Exception e) {
-                                Log.w(TAG, "Could not read the installed package version while comparing updates", e);
-                            }
-
-                            if (remoteCode > currentCode) {
-                                showUpdateDialog(remoteName, remoteCode, apkSize, changelog, downloadUrl);
-                            } else {
-                                Toast.makeText(BrowserActivity.this, "当前已是最新版本 (v" + currentName + ")", Toast.LENGTH_SHORT).show();
-                            }
-                        } catch (Exception e) {
-                            Toast.makeText(BrowserActivity.this, "检查更新失败", Toast.LENGTH_SHORT).show();
-                        }
-                    }
-                });
-            }
-        }).start();
-    }
-
-    private void showUpdateDialog(
-        final String remoteName,
-        final int remoteCode,
-        final String apkSize,
-        final String changelog,
-        final String downloadUrl
-    ) {
-        AlertDialog.Builder builder = AcidTheme.dialogBuilder(this, mIsDarkMode);
-        builder.setTitle("发现新版本 v" + remoteName);
-
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(20);
-        content.setPadding(pad, dp(12), pad, dp(4));
-
-        TextView tvSize = new TextView(this);
-        tvSize.setText("安装包大小: " + (apkSize.isEmpty() ? "未知" : apkSize));
-        tvSize.setTextColor(AcidTheme.text(mIsDarkMode));
-        tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        tvSize.setTypeface(Typeface.DEFAULT_BOLD);
-        content.addView(tvSize);
-
-        TextView tvLogTitle = new TextView(this);
-        tvLogTitle.setText("更新日志:");
-        tvLogTitle.setTextColor(AcidTheme.accent(mIsDarkMode));
-        tvLogTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        tvLogTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        tvLogTitle.setPadding(0, dp(10), 0, dp(4));
-        content.addView(tvLogTitle);
-
-        TextView tvLog = new TextView(this);
-        tvLog.setText(changelog.isEmpty() ? "修复已知问题，提升性能" : changelog);
-        tvLog.setTextColor(AcidTheme.muted(mIsDarkMode));
-        tvLog.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        tvLog.setLineSpacing(dp(3), 1f);
-        content.addView(tvLog);
-
-        builder.setView(content);
-
-        builder.setPositiveButton("立即更新", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-                if (mController != null) {
-                    mController.startDownload(
-                        downloadUrl,
-                        "Acid-browser-v" + remoteName + ".apk",
-                        null,
-                        null,
-                        "application/vnd.android.package-archive",
-                        0
-                    );
-                }
-            }
-        });
-        builder.setNegativeButton("稍后再说", null);
-        builder.show();
-    }
-
-    private void showDownloadConfirmDialog(
-        final String url,
-        final String fileName,
-        final String userAgent,
-        final String contentDisposition,
-        final String mimeType,
-        final long contentLength
-    ) {
-        if (mDownloadConfirmSheet == null) return;
-        mDownloadConfirmSheet.setTitle("下载确认");
-        mDownloadConfirmSheet.hideAction();
-        mDownloadConfirmSheet.setWrapContentHeight();
-
-        LinearLayout container = mDownloadConfirmSheet.getContentContainer();
-        container.removeAllViews();
-
-        int accent = AcidTheme.accent(mIsDarkMode);
-        int text = AcidTheme.text(mIsDarkMode);
-        int muted = AcidTheme.muted(mIsDarkMode);
-        int cardBg = AcidTheme.cardItemBg(mIsDarkMode);
-        int border = AcidTheme.border(mIsDarkMode);
-        int searchBg = AcidTheme.searchBg(mIsDarkMode);
-        int searchBorder = AcidTheme.searchBorder(mIsDarkMode);
-        int itemBg = AcidTheme.menuItemBg(mIsDarkMode);
-
-        // Main Card
-        LinearLayout infoCard = new LinearLayout(this);
-        infoCard.setOrientation(LinearLayout.VERTICAL);
-        infoCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-        infoCard.setBackground(AcidTheme.cardBorderBg(this, cardBg, border, 1, 14));
-        LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        iLp.bottomMargin = dp(14);
-        infoCard.setLayoutParams(iLp);
-
-        // Header inside card: Download icon + Title
-        LinearLayout titleRow = new LinearLayout(this);
-        titleRow.setOrientation(LinearLayout.HORIZONTAL);
-        titleRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        AcidIcons.SvgIconView dlIcon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_DOWNLOAD, accent, 24);
-        titleRow.addView(dlIcon);
-
-        TextView tvCardTitle = new TextView(this);
-        tvCardTitle.setText("新建下载任务");
-        tvCardTitle.setTextColor(text);
-        tvCardTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvCardTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        tvCardTitle.setPadding(dp(10), 0, 0, 0);
-        titleRow.addView(tvCardTitle);
-        infoCard.addView(titleRow);
-
-        // Editable File Name Field
-        TextView lblName = new TextView(this);
-        lblName.setText("文件名 (可自定义修改)");
-        lblName.setTextColor(muted);
-        lblName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        lblName.setTypeface(Typeface.DEFAULT_BOLD);
-        lblName.setPadding(0, dp(12), 0, dp(6));
-        infoCard.addView(lblName);
-
-        final EditText etFileName = new EditText(this);
-        etFileName.setText(fileName);
-        etFileName.setTextColor(text);
-        etFileName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
-        etFileName.setSingleLine(true);
-        etFileName.setPadding(dp(12), dp(10), dp(12), dp(10));
-        etFileName.setBackground(AcidTheme.pillBg(this, searchBg, searchBorder, 8));
-        infoCard.addView(etFileName);
-
-        // Details Block
-        LinearLayout details = new LinearLayout(this);
-        details.setOrientation(LinearLayout.VERTICAL);
-        details.setPadding(0, dp(12), 0, 0);
-
-        // 1. File size line
-        TextView tvSize = new TextView(this);
-        tvSize.setText("预估大小: " + BrowserController.DownloadItem.formatSize(contentLength) + (mimeType != null && !mimeType.isEmpty() ? " (" + mimeType + ")" : ""));
-        tvSize.setTextColor(muted);
-        tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        details.addView(tvSize);
-
-        // 2. Storage Directory with [浏览目录] button
-        LinearLayout pathRow = new LinearLayout(this);
-        pathRow.setOrientation(LinearLayout.HORIZONTAL);
-        pathRow.setGravity(Gravity.CENTER_VERTICAL);
-        pathRow.setPadding(0, dp(8), 0, 0);
-
-        TextView tvPath = new TextView(this);
-        tvPath.setText("存储位置: /storage/emulated/0/Download/");
-        tvPath.setTextColor(muted);
-        tvPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        pathRow.addView(tvPath, pLp);
-
-        TextView btnBrowseDir = new TextView(this);
-        btnBrowseDir.setText("浏览目录");
-        btnBrowseDir.setTextColor(AcidTheme.COLOR_BLUE);
-        btnBrowseDir.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        btnBrowseDir.setTypeface(Typeface.DEFAULT_BOLD);
-        btnBrowseDir.setBackground(AcidTheme.pillBg(this, itemBg, searchBorder, 6));
-        btnBrowseDir.setPadding(dp(8), dp(4), dp(8), dp(4));
-        btnBrowseDir.setClickable(true);
-        btnBrowseDir.setFocusable(true);
-        btnBrowseDir.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mController != null) {
-                    mController.openDownloadFolder();
-                }
-            }
-        });
-        pathRow.addView(btnBrowseDir);
-        details.addView(pathRow);
-
-        // 3. Source URL with [复制链接] button
-        LinearLayout urlRow = new LinearLayout(this);
-        urlRow.setOrientation(LinearLayout.HORIZONTAL);
-        urlRow.setGravity(Gravity.CENTER_VERTICAL);
-        urlRow.setPadding(0, dp(8), 0, 0);
-
-        TextView tvUrl = new TextView(this);
-        tvUrl.setText("来源网址: " + url);
-        tvUrl.setTextColor(muted);
-        tvUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        tvUrl.setSingleLine(true);
-        tvUrl.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        uLp.rightMargin = dp(8);
-        urlRow.addView(tvUrl, uLp);
-
-        TextView btnCopyUrl = new TextView(this);
-        btnCopyUrl.setText("复制链接");
-        btnCopyUrl.setTextColor(accent);
-        btnCopyUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        btnCopyUrl.setTypeface(Typeface.DEFAULT_BOLD);
-        btnCopyUrl.setBackground(AcidTheme.pillBg(this, itemBg, searchBorder, 6));
-        btnCopyUrl.setPadding(dp(8), dp(4), dp(8), dp(4));
-        btnCopyUrl.setClickable(true);
-        btnCopyUrl.setFocusable(true);
-        btnCopyUrl.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mController != null) {
-                    mController.copyToClipboard(url);
-                }
-            }
-        });
-        urlRow.addView(btnCopyUrl);
-        details.addView(urlRow);
-
-        infoCard.addView(details);
-        container.addView(infoCard);
-
-        // Action Buttons Row (Cancel / Download)
-        LinearLayout btnRow = new LinearLayout(this);
-        btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setGravity(Gravity.CENTER);
-        btnRow.setPadding(0, dp(2), 0, dp(2));
-
-        TextView btnCancel = new TextView(this);
-        btnCancel.setText("取消");
-        btnCancel.setTextColor(muted);
-        btnCancel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
-        btnCancel.setTypeface(Typeface.DEFAULT_BOLD);
-        btnCancel.setGravity(Gravity.CENTER);
-        btnCancel.setBackground(AcidTheme.pillBg(this, itemBg, 0, 10));
-        btnCancel.setPadding(0, dp(12), 0, dp(12));
-        btnCancel.setClickable(true);
-        btnCancel.setFocusable(true);
-        btnCancel.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                mDownloadConfirmSheet.dismiss();
-            }
-        });
-
-        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        cancelLp.rightMargin = dp(8);
-        btnRow.addView(btnCancel, cancelLp);
-
-        TextView btnConfirm = new TextView(this);
-        btnConfirm.setText("立即下载");
-        btnConfirm.setTextColor(Color.WHITE);
-        btnConfirm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
-        btnConfirm.setTypeface(Typeface.DEFAULT_BOLD);
-        btnConfirm.setGravity(Gravity.CENTER);
-        btnConfirm.setBackground(AcidTheme.pillBg(this, accent, 0, 10));
-        btnConfirm.setPadding(0, dp(12), 0, dp(12));
-        btnConfirm.setClickable(true);
-        btnConfirm.setFocusable(true);
-        btnConfirm.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                mDownloadConfirmSheet.dismiss();
-                if (mController != null) {
-                    String customName = etFileName.getText() != null ? etFileName.getText().toString().trim() : "";
-                    if (customName.isEmpty()) customName = fileName;
-                    mController.startDownload(url, customName, userAgent, contentDisposition, mimeType, contentLength);
-                }
-            }
-        });
-
-        LinearLayout.LayoutParams confirmLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        confirmLp.leftMargin = dp(8);
-        btnRow.addView(btnConfirm, confirmLp);
-
-        container.addView(btnRow);
-        // bringToFront() inside show() lifts this above the download list it was opened from.
-        mDownloadConfirmSheet.show();
-    }
-
-    private void hideKeyboard() {
-        try {
-            InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-            if (imm != null && getCurrentFocus() != null) {
-                imm.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), 0);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to hide the soft keyboard", e);
-        }
     }
 
     // =========================================================================
@@ -1655,11 +1276,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mTakeoverIcon.setIcon(AcidIcons.ICON_AGENT);
                     mTakeoverIcon.setColor(accent);
                     boolean isDrivingCurrent = mController.isAgentDrivingCurrentTab();
-                    if (isDrivingCurrent) {
-                        mTvTakeoverStatus.setText("AI 自动驾驶中 (当前页已锁) | 拦跳: " + blocked);
-                    } else {
-                        mTvTakeoverStatus.setText("AI 正在后台标签页执行自动化 (当前页可自由使用)");
-                    }
+                    mTvTakeoverStatus.setText(isDrivingCurrent
+                        ? ("AI 自动驾驶中 (当前页已锁) | 拦跳: " + blocked)
+                        : "AI 正在后台标签页执行自动化 (当前页可自由浏览)");
                     mTvTakeoverStatus.setTextColor(accent);
                     mBtnTakeoverAction.update(AcidIcons.ICON_HUMAN, "点此接管", AcidTheme.COLOR_AMBER);
                 } else if (controlMode == AgentOverlayView.MODE_TAKEOVER_REQUESTED) {
@@ -1667,7 +1286,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     String reason = mController.getTakeoverReason();
                     mTakeoverIcon.setIcon(AcidIcons.ICON_HUMAN);
                     mTakeoverIcon.setColor(AcidTheme.COLOR_AMBER);
-                    mTvTakeoverStatus.setText("请人类协助: " + (reason.isEmpty() ? "请完成页面操作" : reason));
+                    mTvTakeoverStatus.setText("请人工协助: " + (reason.isEmpty() ? "请完成页面操作" : reason));
                     mTvTakeoverStatus.setTextColor(AcidTheme.COLOR_AMBER);
                     mBtnTakeoverAction.update(AcidIcons.ICON_AGENT, "交还AI", accent);
                 } else {
@@ -1684,7 +1303,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void run() {
                 mBtnShield.setColor(AcidTheme.COLOR_AMBER);
-                Toast.makeText(BrowserActivity.this, "已拦截 App 唤醒 (共 " + totalBlocked + " 次)", Toast.LENGTH_SHORT).show();
+                Toast.makeText(BrowserActivity.this, "已拦截 App 唤端跳转 (共 " + totalBlocked + " 次)", Toast.LENGTH_SHORT).show();
             }
         });
     }
@@ -1707,9 +1326,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
-    public void onAgentActionLog(final String logLine) {
-        // Internal agent log handled directly by listener
-    }
+    public void onAgentActionLog(final String logLine) {}
 
     @Override
     public void onDownloadRequested(
@@ -1723,181 +1340,41 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                showDownloadConfirmDialog(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
+                if (mDownloadConfirmSheet != null) {
+                    mDownloadConfirmSheet.showConfirm(
+                        url, fileName, userAgent, contentDisposition, mimeType, contentLength
+                    );
+                }
             }
         });
     }
 
     @Override
     public void onUserscriptInstallRequested(final String url, final String fileName) {
-        Toast.makeText(this, "正在获取脚本: " + fileName + "...", Toast.LENGTH_SHORT).show();
-        new Thread(new Runnable() {
+        runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                String fetchedContent = null;
-                try {
-                    java.net.URL u = new java.net.URL(url);
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
-                    conn.setConnectTimeout(8000);
-                    conn.setReadTimeout(12000);
-                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.4.4");
-                    if (conn.getResponseCode() == 200) {
-                        java.io.InputStream in = conn.getInputStream();
-                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                        byte[] buf = new byte[2048];
-                        int len;
-                        while ((len = in.read(buf)) != -1) {
-                            if (bos.size() > 20 * 1024 * 1024) break;
-                            bos.write(buf, 0, len);
-                        }
-                        in.close();
-                        fetchedContent = new String(bos.toByteArray(), "UTF-8");
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to download userscript from " + url, e);
-                }
-
-                final String scriptContent = fetchedContent;
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (scriptContent == null || scriptContent.trim().isEmpty()) {
-                            Toast.makeText(BrowserActivity.this, "获取脚本失败，请检查网络链接", Toast.LENGTH_SHORT).show();
-                            return;
-                        }
-                        showUserscriptInstallDialog(url, fileName, scriptContent);
-                    }
-                });
-            }
-        }).start();
-    }
-
-    private void showUserscriptInstallDialog(final String url, final String fileName, final String content) {
-        final UserscriptMeta meta = UserscriptMeta.parse(fileName, content);
-        AlertDialog.Builder b = AcidTheme.dialogBuilder(this, mIsDarkMode);
-        b.setTitle("安装用户脚本");
-
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        int padH = dp(20);
-        int padV = dp(14);
-        box.setPadding(padH, padV, padH, padV);
-
-        TextView tvName = new TextView(this);
-        tvName.setText(meta.name + (!TextUtils.isEmpty(meta.version) ? " v" + meta.version : ""));
-        tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvName.setTypeface(Typeface.DEFAULT_BOLD);
-        tvName.setTextColor(AcidTheme.text(mIsDarkMode));
-        box.addView(tvName);
-
-        if (!TextUtils.isEmpty(meta.description)) {
-            TextView tvDesc = new TextView(this);
-            tvDesc.setText(meta.description);
-            tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-            tvDesc.setTextColor(AcidTheme.text(mIsDarkMode));
-            tvDesc.setPadding(0, dp(4), 0, 0);
-            box.addView(tvDesc);
-        }
-
-        TextView tvScope = new TextView(this);
-        tvScope.setText("生效范围: " + meta.describeScope() + "\n时机: " + meta.runAt + "\n来源: " + url);
-        tvScope.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        tvScope.setTextColor(AcidTheme.muted(mIsDarkMode));
-        tvScope.setPadding(0, dp(8), 0, 0);
-        box.addView(tvScope);
-
-        TextView tvCode = new TextView(this);
-        String preview = content;
-        if (preview.length() > 350) preview = preview.substring(0, 350) + "\n…";
-        tvCode.setText(preview);
-        tvCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
-        tvCode.setTypeface(Typeface.MONOSPACE);
-        tvCode.setTextColor(AcidTheme.DARK_CODE_TEXT);
-        tvCode.setPadding(dp(8), dp(8), dp(8), dp(8));
-        tvCode.setBackground(AcidTheme.pillBg(this, AcidTheme.codeBlockBg(mIsDarkMode), 0, 6));
-        LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cLp.topMargin = dp(10);
-        box.addView(tvCode, cLp);
-
-        b.setView(box);
-        b.setPositiveButton("安装", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-                if (mController != null) {
-                    String err = mController.installUserscript(fileName, content);
-                    if (err == null) {
-                        Toast.makeText(BrowserActivity.this, "已成功安装脚本「" + meta.name + "」", Toast.LENGTH_SHORT).show();
-                        if (mUserscriptSheet != null && mUserscriptSheet.isShowing()) {
-                            mUserscriptSheet.renderScripts();
-                        }
-                        updateMenuSheetCards();
-                    } else {
-                        Toast.makeText(BrowserActivity.this, "安装失败: " + err, Toast.LENGTH_LONG).show();
-                    }
+                if (mUserscriptSheet != null) {
+                    mUserscriptSheet.requestInstallFromUrl(url, fileName);
                 }
             }
         });
-        b.setNegativeButton("取消", null);
-        b.show();
     }
 
-    private void showImportScriptDialog() {
-        AlertDialog.Builder b = AcidTheme.dialogBuilder(this, mIsDarkMode);
-        b.setTitle("导入用户脚本");
-
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        int padH = dp(20);
-        int padV = dp(14);
-        box.setPadding(padH, padV, padH, padV);
-
-        TextView tvHint = new TextView(this);
-        tvHint.setText("输入脚本的在线 URL (.user.js) 或直接粘贴脚本代码：");
-        tvHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        tvHint.setTextColor(AcidTheme.text(mIsDarkMode));
-        box.addView(tvHint);
-
-        final EditText etInput = new EditText(this);
-        etInput.setHint("https://.../script.user.js 或 // ==UserScript==...");
-        etInput.setHintTextColor(AcidTheme.muted(mIsDarkMode));
-        etInput.setTextColor(AcidTheme.text(mIsDarkMode));
-        etInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        etInput.setBackground(AcidTheme.pillBg(this, AcidTheme.searchBg(mIsDarkMode), AcidTheme.searchBorder(mIsDarkMode), 8));
-        etInput.setPadding(dp(10), dp(10), dp(10), dp(10));
-        etInput.setMinLines(3);
-        etInput.setMaxLines(8);
-        LinearLayout.LayoutParams iLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        iLp.topMargin = dp(10);
-        box.addView(etInput, iLp);
-
-        b.setView(box);
-        b.setPositiveButton("解析并安装", new DialogInterface.OnClickListener() {
+    @Override
+    public void onSettingsReloaded() {
+        runOnUiThread(new Runnable() {
             @Override
-            public void onClick(DialogInterface dialog, int which) {
-                String input = etInput.getText() != null ? etInput.getText().toString().trim() : "";
-                if (input.isEmpty()) return;
-                if (input.startsWith("http://") || input.startsWith("https://")) {
-                    onUserscriptInstallRequested(input, "script.user.js");
-                } else if (input.contains("==UserScript==")) {
-                    showUserscriptInstallDialog("手动导入", "custom.user.js", input);
-                } else {
-                    Toast.makeText(BrowserActivity.this, "未检测到有效 URL 或 ==UserScript== 元数据", Toast.LENGTH_SHORT).show();
-                }
+            public void run() {
+                syncFromHotReloadedSettings();
             }
         });
-        b.setNegativeButton("取消", null);
-        b.show();
     }
 
     @Override
     public void onBackPressed() {
-        // Every overlay owns its own back semantics; walk them from the top of the stack.
-        for (int i = mOverlays.size() - 1; i >= 0; i--) {
-            if (mOverlays.get(i).handleBackPressed()) {
-                return;
-            }
+        if (mOverlayStack.handleBackPressed()) {
+            return;
         }
         BrowserController.TabSession tab = mController != null ? mController.getActiveTab() : null;
         if (tab != null && tab.webView.canGoBack()) {
@@ -1908,131 +1385,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
-    public void onSettingsReloaded() {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                updateMenuSheetCards();
-                if (mSettingsSheet != null) {
-                    mSettingsSheet.refresh();
-                }
-            }
-        });
-    }
-
-    private void deleteDirRecursively(File dir) {
-        if (dir == null || !dir.exists()) return;
-        if (dir.isDirectory()) {
-            File[] children = dir.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    deleteDirRecursively(child);
-                }
-            }
-        }
-        dir.delete();
-    }
-
-    private int clearWorkspaceTempFiles() {
-        if (mController == null) return 0;
-        File ws = mController.getWorkspaceDir();
-        if (ws == null || !ws.exists()) return 0;
-        File[] files = ws.listFiles();
-        if (files == null) return 0;
-
-        int deletedCount = 0;
-        for (File f : files) {
-            String name = f.getName();
-            // Strictly protect settings.json, userscripts, adblock, and skills
-            if ("settings.json".equals(name) ||
-                "userscripts".equals(name) ||
-                "adblock".equals(name) ||
-                "skills".equals(name)) {
-                continue;
-            }
-            if (f.isDirectory()) {
-                deleteDirRecursively(f);
-                deletedCount++;
-            } else {
-                if (f.delete()) {
-                    deletedCount++;
-                }
-            }
-        }
-        return deletedCount;
-    }
-
-    private void clearBrowsingData(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage, boolean clearWorkspace) {
-        int count = 0;
-        if (clearCache) {
-            if (mController != null) {
-                mController.clearAllCache();
-            }
-            try {
-                deleteDirRecursively(getCacheDir());
-                if (Build.VERSION.SDK_INT >= 21) {
-                    File codeCache = getCodeCacheDir();
-                    if (codeCache != null) deleteDirRecursively(codeCache);
-                }
-                android.webkit.WebViewDatabase.getInstance(this).clearFormData();
-                android.webkit.WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword();
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to clear disk cache", e);
-            }
-            count++;
-        }
-        if (clearCookies) {
-            try {
-                android.webkit.CookieManager.getInstance().removeAllCookies(null);
-                android.webkit.CookieManager.getInstance().flush();
-                count++;
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to clear cookies", e);
-            }
-        }
-        if (clearHistory) {
-            if (mDataStore != null) {
-                mDataStore.clearHistory();
-                count++;
-            }
-            if (mController != null) {
-                mController.clearAllHistory();
-            }
-        }
-        if (clearStorage) {
-            try {
-                android.webkit.WebStorage.getInstance().deleteAllData();
-                android.webkit.GeolocationPermissions.getInstance().clearAll();
-                count++;
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to clear web storage", e);
-            }
-        }
-        if (clearWorkspace) {
-            int wsDeleted = clearWorkspaceTempFiles();
-            if (wsDeleted > 0) {
-                count++;
-            }
-        }
-        if (mSettingsSheet != null) {
-            mSettingsSheet.refresh();
-        }
-        String msg = clearWorkspace ?
-            "已清除所选数据 (" + count + " 项，settings.json 已安全保留)" :
-            "已清除所选浏览数据 (" + count + " 项)";
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
-    }
-
-    @Override
     protected void onDestroy() {
         if (mDataStore != null && mDataStore.isClearOnExit()) {
-            clearBrowsingData(true, true, false, true, false);
+            mDataStore.clearBrowsingData(mController, true, true, false, true, false);
         }
         if (mDownloadReceiver != null) {
             try {
                 unregisterReceiver(mDownloadReceiver);
             } catch (Exception e) {
-                // Expected when the receiver was never registered (e.g. early crash during setup).
                 Log.w(TAG, "Download receiver was not registered at teardown", e);
             }
         }

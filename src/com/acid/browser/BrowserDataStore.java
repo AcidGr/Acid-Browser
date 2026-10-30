@@ -44,6 +44,8 @@ public class BrowserDataStore {
     public static final String PREF_WEB_DEBUGGING = "web_debugging";
     public static final String PREF_DO_NOT_TRACK = "do_not_track";
     public static final String PREF_BLOCK_IMAGES = "block_images";
+    public static final String PREF_MCP_ENABLED = "mcp_server_enabled";
+    private static final String LEGACY_PREF_ACTIVITY = "acid_browser_prefs";
 
     public static final int SEARCH_GOOGLE = 0;
     public static final int SEARCH_BAIDU = 1;
@@ -199,6 +201,7 @@ public class BrowserDataStore {
             o.put("clear_on_exit", isClearOnExit());
             o.put("dark_mode", isDarkMode());
             o.put("adblock_enabled", isAdBlockEnabled());
+            o.put("mcp_server_enabled", isMcpServerEnabled());
         } catch (Exception e) {
             Log.w(TAG, "Failed to export settings to JSON", e);
         }
@@ -274,6 +277,9 @@ public class BrowserDataStore {
             }
             if (o.has("adblock_enabled")) {
                 ed.putBoolean(PREF_ADBLOCK_ENABLED, o.getBoolean("adblock_enabled"));
+            }
+            if (o.has("mcp_server_enabled")) {
+                ed.putBoolean(PREF_MCP_ENABLED, o.getBoolean("mcp_server_enabled"));
             }
             ed.apply();
 
@@ -473,6 +479,130 @@ public class BrowserDataStore {
         ed.putBoolean(PREF_BLOCK_IMAGES, enabled);
         ed.apply();
         saveToJsonFile();
+    }
+
+    public boolean isMcpServerEnabled() {
+        SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        if (prefs.contains(PREF_MCP_ENABLED)) {
+            return prefs.getBoolean(PREF_MCP_ENABLED, true);
+        }
+        SharedPreferences legacy = mContext.getSharedPreferences(LEGACY_PREF_ACTIVITY, Context.MODE_PRIVATE);
+        boolean migrated = legacy.getBoolean(PREF_MCP_ENABLED, true);
+        prefs.edit().putBoolean(PREF_MCP_ENABLED, migrated).apply();
+        return migrated;
+    }
+
+    public void setMcpServerEnabled(boolean enabled) {
+        SharedPreferences.Editor ed = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit();
+        ed.putBoolean(PREF_MCP_ENABLED, enabled);
+        ed.apply();
+        saveToJsonFile();
+    }
+
+    // =========================================================================
+    // Workspace & Browsing Data Cleanup Service
+    // =========================================================================
+
+    private static void deleteDirRecursively(File dir) {
+        if (dir == null || !dir.exists()) return;
+        if (dir.isDirectory()) {
+            File[] children = dir.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteDirRecursively(child);
+                }
+            }
+        }
+        dir.delete();
+    }
+
+    /**
+     * Removes temporary workspace files while strictly preserving user configuration,
+     * userscripts, adblock rules, and bundled skills.
+     */
+    public int clearWorkspaceTempFiles(File workspaceDir) {
+        if (workspaceDir == null || !workspaceDir.exists()) return 0;
+        File[] files = workspaceDir.listFiles();
+        if (files == null) return 0;
+
+        int deletedCount = 0;
+        for (File f : files) {
+            String name = f.getName();
+            if ("settings.json".equals(name) ||
+                "userscripts".equals(name) ||
+                "adblock".equals(name) ||
+                "skills".equals(name)) {
+                continue;
+            }
+            if (f.isDirectory()) {
+                deleteDirRecursively(f);
+                deletedCount++;
+            } else if (f.delete()) {
+                deletedCount++;
+            }
+        }
+        return deletedCount;
+    }
+
+    /**
+     * Clears selected browser persistence categories and returns the number of categories purged.
+     */
+    public int clearBrowsingData(
+        BrowserController controller,
+        boolean clearCache,
+        boolean clearCookies,
+        boolean clearHistory,
+        boolean clearStorage,
+        boolean clearWorkspace
+    ) {
+        int count = 0;
+        if (clearCache) {
+            if (controller != null) {
+                controller.clearAllCache();
+            }
+            try {
+                deleteDirRecursively(mContext.getCacheDir());
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                    File codeCache = mContext.getCodeCacheDir();
+                    if (codeCache != null) deleteDirRecursively(codeCache);
+                }
+                android.webkit.WebViewDatabase.getInstance(mContext).clearFormData();
+                android.webkit.WebViewDatabase.getInstance(mContext).clearHttpAuthUsernamePassword();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to clear disk cache", e);
+            }
+            count++;
+        }
+        if (clearCookies) {
+            try {
+                android.webkit.CookieManager.getInstance().removeAllCookies(null);
+                android.webkit.CookieManager.getInstance().flush();
+                count++;
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to clear cookies", e);
+            }
+        }
+        if (clearHistory) {
+            clearHistory();
+            if (controller != null) {
+                controller.clearAllHistory();
+            }
+            count++;
+        }
+        if (clearStorage) {
+            try {
+                android.webkit.WebStorage.getInstance().deleteAllData();
+                android.webkit.GeolocationPermissions.getInstance().clearAll();
+                count++;
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to clear web storage", e);
+            }
+        }
+        if (clearWorkspace && controller != null) {
+            clearWorkspaceTempFiles(controller.getWorkspaceDir());
+            count++;
+        }
+        return count;
     }
 
     /**

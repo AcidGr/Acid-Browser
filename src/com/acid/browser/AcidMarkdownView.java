@@ -90,7 +90,7 @@ public class AcidMarkdownView extends LinearLayout {
                     flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
                 } else if (trimmed.startsWith("> ")) {
                     flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
-                    addQuoteView(ctx, container, trimmed.substring(2), mutedColor, inlineCodeBg, inlineCodeFg, d);
+                    addQuoteView(ctx, container, trimmed.substring(2), darkTheme, mutedColor, inlineCodeBg, inlineCodeFg, d);
                 } else if (isTableRow(trimmed) && i + 1 < rawLines.length && isTableDelimiterRow(rawLines[i + 1])) {
                     flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
                     List<String> tableLines = new ArrayList<>();
@@ -144,6 +144,7 @@ public class AcidMarkdownView extends LinearLayout {
         Context ctx,
         LinearLayout container,
         String quoteText,
+        boolean darkTheme,
         int mutedColor,
         int inlineCodeBg,
         int inlineCodeFg,
@@ -154,7 +155,7 @@ public class AcidMarkdownView extends LinearLayout {
         box.setPadding(Math.round(8 * d), Math.round(4 * d), Math.round(8 * d), Math.round(4 * d));
 
         GradientDrawable bar = new GradientDrawable();
-        bar.setColor(AcidTheme.LIGHT_ACCENT);
+        bar.setColor(AcidTheme.accent(darkTheme));
         bar.setCornerRadius(2 * d);
 
         TextView leftLine = new TextView(ctx);
@@ -313,12 +314,12 @@ public class AcidMarkdownView extends LinearLayout {
             }
         }
 
-        int tableBg = darkTheme ? 0xFF0F172A : 0xFFFFFFFF;
-        int borderColor = darkTheme ? 0xFF334155 : 0xFFE2E8F0;
-        int headerBg = darkTheme ? 0xFF1E293B : 0xFFF8FAFC;
-        int headerDivider = darkTheme ? 0xFF334155 : 0xFFCBD5E1;
-        int rowDividerColor = darkTheme ? 0x22334155 : 0x14000000;
-        int altRowBg = darkTheme ? 0x0AFFFFFF : 0x03000000;
+        int tableBg = AcidTheme.markdownTableBg(darkTheme);
+        int borderColor = AcidTheme.markdownTableBorder(darkTheme);
+        int headerBg = AcidTheme.markdownTableHeaderBg(darkTheme);
+        int headerDivider = AcidTheme.markdownTableBorder(darkTheme);
+        int rowDividerColor = AcidTheme.markdownTableRowDivider(darkTheme);
+        int altRowBg = AcidTheme.markdownTableAltRowBg(darkTheme);
 
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(VERTICAL);

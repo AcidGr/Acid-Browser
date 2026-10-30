@@ -9,6 +9,7 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -730,7 +731,7 @@ public class AcidIcons {
             mTextView = new TextView(context);
             mTextView.setText(text);
             mTextView.setTextColor(accentColor);
-            mTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.2f);
+            mTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             mTextView.setTypeface(Typeface.DEFAULT_BOLD);
             mTextView.setSingleLine(true);
             LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(
@@ -739,6 +740,8 @@ public class AcidIcons {
             tvLp.leftMargin = Math.round(4 * d);
             addView(mTextView, tvLp);
 
+            setClickable(true);
+            setFocusable(true);
             applyFrame(accentColor);
 
             LinearLayout.LayoutParams selfLp = new LinearLayout.LayoutParams(
@@ -754,12 +757,21 @@ public class AcidIcons {
 
         private void applyFrame(int accentColor) {
             float d = getResources().getDisplayMetrics().density;
-            GradientDrawable gd = new GradientDrawable();
-            int fill = Color.argb(30, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor));
-            gd.setColor(fill);
-            gd.setCornerRadius(6 * d);
-            gd.setStroke(Math.max(1, Math.round(1 * d)), accentColor);
-            setBackground(gd);
+            int stroke = Math.max(1, Math.round(1 * d));
+            GradientDrawable normal = new GradientDrawable();
+            normal.setColor(Color.argb(28, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor)));
+            normal.setCornerRadius(AcidTheme.RADIUS_BADGE * d);
+            normal.setStroke(stroke, accentColor);
+
+            GradientDrawable pressed = new GradientDrawable();
+            pressed.setColor(Color.argb(68, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor)));
+            pressed.setCornerRadius(AcidTheme.RADIUS_BADGE * d);
+            pressed.setStroke(stroke, accentColor);
+
+            StateListDrawable sld = new StateListDrawable();
+            sld.addState(new int[]{android.R.attr.state_pressed}, pressed);
+            sld.addState(new int[]{}, normal);
+            setBackground(sld);
         }
 
         public void update(int iconId, String text, int accentColor) {
@@ -781,6 +793,11 @@ public class AcidIcons {
         int padH = Math.round(7 * d);
         int padV = Math.round(5 * d);
         box.setPadding(padH, padV, padH, padV);
+        box.setClickable(true);
+        box.setFocusable(true);
+        box.setBackground(AcidTheme.interactiveBg(
+            context, Color.TRANSPARENT, Color.argb(32, 128, 128, 128), 0, AcidTheme.RADIUS_CONTROL
+        ));
         SvgIconView icon = new SvgIconView(context, iconId, color, 18);
         box.addView(icon);
         if (listener != null) {

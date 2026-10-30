@@ -1,10 +1,7 @@
 package com.acid.browser;
 
-import android.app.AlertDialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -13,23 +10,17 @@ import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
-import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.util.List;
-
 /**
- * Bottom Pop-up Menu Panel ("功能" - Modal Bottom Sheet).
- * Multi-page layout (8 tools per page, 4x2 grid).
- * Compact 2-line cards (Icon + Title, no description).
- * Distinct ON/OFF states:
- *  - Active: Accent Green (#00BA76/#00FF88) + Active Icon
- *  - Inactive: Muted Slate Gray + Inactive/Off Icon
+ * Bottom Pop-up Menu Panel ("功能") built directly on {@link AcidBottomSheetView}.
+ *
+ * <p>Inherits the standard scrim, drag handle, {@code H1 (16sp Bold)} header bar, and close
+ * target instead of maintaining a divergent hand-rolled sheet shell.
  */
-public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
+public class BrowserMenuSheet extends AcidBottomSheetView {
 
     public interface MenuActionListener {
         void onToggleDarkMode();
@@ -48,24 +39,29 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
     }
 
     /**
-     * Compact 2-line tool card: [Icon] then [Title].
+     * Compact 2-line tool tile: [Icon] + [Title] with immediate press-state highlight.
      */
     public static class MenuCardItem extends LinearLayout {
         public final AcidIcons.SvgIconView iconView;
         public final TextView titleView;
 
-        public MenuCardItem(Context context, int iconId, String title,
-                            int iconColor, int textColor, int cardBgColor,
-                            OnClickListener listener) {
+        public MenuCardItem(
+            Context context,
+            int iconId,
+            String title,
+            int iconColor,
+            int textColor,
+            boolean dark,
+            OnClickListener listener
+        ) {
             super(context);
             setOrientation(VERTICAL);
             setGravity(Gravity.CENTER);
-            float d = context.getResources().getDisplayMetrics().density;
-            int padH = Math.round(4 * d);
-            int padV = Math.round(9 * d);
+            int padH = AcidTheme.dp(context, 4);
+            int padV = AcidTheme.dp(context, 10);
             setPadding(padH, padV, padH, padV);
 
-            applyCardBg(cardBgColor);
+            applyCardBg(dark, false);
 
             iconView = new AcidIcons.SvgIconView(context, iconId, iconColor, 22);
             addView(iconView);
@@ -73,13 +69,15 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
             titleView = new TextView(context);
             titleView.setText(title);
             titleView.setTextColor(textColor);
-            titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             titleView.setTypeface(Typeface.DEFAULT_BOLD);
             titleView.setSingleLine(true);
             titleView.setEllipsize(TextUtils.TruncateAt.END);
             titleView.setGravity(Gravity.CENTER);
-            LayoutParams tLp = new LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            tLp.topMargin = Math.round(5 * d);
+            LayoutParams tLp = new LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            tLp.topMargin = AcidTheme.dp(context, 5);
             addView(titleView, tLp);
 
             setClickable(true);
@@ -89,61 +87,32 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
             }
         }
 
-        public MenuCardItem(Context context, String svgPath, String title,
-                            int iconColor, int textColor, int cardBgColor,
-                            OnClickListener listener) {
-            super(context);
-            setOrientation(VERTICAL);
-            setGravity(Gravity.CENTER);
-            float d = context.getResources().getDisplayMetrics().density;
-            int padH = Math.round(4 * d);
-            int padV = Math.round(9 * d);
-            setPadding(padH, padV, padH, padV);
-
-            applyCardBg(cardBgColor);
-
-            iconView = new AcidIcons.SvgIconView(context, svgPath, iconColor, 22);
-            addView(iconView);
-
-            titleView = new TextView(context);
-            titleView.setText(title);
-            titleView.setTextColor(textColor);
-            titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            titleView.setTypeface(Typeface.DEFAULT_BOLD);
-            titleView.setSingleLine(true);
-            titleView.setEllipsize(TextUtils.TruncateAt.END);
-            titleView.setGravity(Gravity.CENTER);
-            LayoutParams tLp = new LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            tLp.topMargin = Math.round(5 * d);
-            addView(titleView, tLp);
-
-            setClickable(true);
-            setFocusable(true);
-            if (listener != null) {
-                setOnClickListener(listener);
-            }
+        private void applyCardBg(boolean dark, boolean activeHighlight) {
+            Context ctx = getContext();
+            int accent = AcidTheme.accent(dark);
+            int fill = activeHighlight
+                ? AcidTheme.softTint(accent, dark ? 30 : 20)
+                : AcidTheme.menuItemBg(dark);
+            int stroke = activeHighlight ? AcidTheme.softTint(accent, 90) : AcidTheme.border(dark);
+            setBackground(AcidTheme.interactiveBg(
+                ctx, fill, AcidTheme.rowPressed(dark), stroke, AcidTheme.RADIUS_CONTROL
+            ));
         }
 
-        private void applyCardBg(int cardBgColor) {
-            float d = getContext().getResources().getDisplayMetrics().density;
-            GradientDrawable gd = new GradientDrawable();
-            gd.setColor(cardBgColor);
-            gd.setCornerRadius(10 * d);
-            setBackground(gd);
-        }
-
-        public void update(int iconId, String title, int iconColor, int textColor, int cardBgColor) {
+        public void update(int iconId, String title, boolean isActive, boolean dark) {
+            int accent = AcidTheme.accent(dark);
+            int iconCol = isActive ? accent : AcidTheme.icon(dark);
+            int textCol = isActive ? accent : AcidTheme.text(dark);
             iconView.setIcon(iconId);
-            iconView.setColor(iconColor);
+            iconView.setColor(iconCol);
             titleView.setText(title);
-            titleView.setTextColor(textColor);
-            applyCardBg(cardBgColor);
+            titleView.setTextColor(textCol);
+            applyCardBg(dark, isActive);
         }
     }
 
     /**
      * Paging HorizontalScrollView that snaps smoothly and symmetrically to page boundaries.
-     * Supports both fling flick gestures and distance-based threshold dragging.
      */
     public static class PagingHorizontalScrollView extends HorizontalScrollView {
         public interface OnPageChangeListener {
@@ -156,8 +125,8 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
 
         private VelocityTracker mVelocityTracker;
         private float mDownX;
-        private int mMinimumFlingVelocity;
-        private int mMaximumFlingVelocity;
+        private final int mMinimumFlingVelocity;
+        private final int mMaximumFlingVelocity;
 
         public PagingHorizontalScrollView(Context context) {
             super(context);
@@ -202,7 +171,7 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
 
         @Override
         public void fling(int velocityX) {
-            // Disable free unconstrained flings to prevent landing halfway between pages
+            // Disable unconstrained flings to snap cleanly on page boundaries
         }
 
         @Override
@@ -247,7 +216,6 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
             int pw = (mPageWidth > 0) ? mPageWidth : getWidth();
             if (pw <= 0) return;
 
-            // Total pages: dynamically query child container or default to 2
             int totalPages = 2;
             View child = getChildAt(0);
             if (child instanceof ViewGroup) {
@@ -257,7 +225,7 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
 
             int current = mCurrentPage;
             int scrollX = getScrollX();
-            int targetPage = current;
+            int targetPage;
 
             float xVelocity = 0;
             if (mVelocityTracker != null) {
@@ -265,56 +233,37 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
                 xVelocity = mVelocityTracker.getXVelocity();
             }
 
-            // Balanced thresholds:
-            // 1. Fling: responsive flick threshold
             float flingThreshold = Math.max(mMinimumFlingVelocity * 1.2f, 400f);
-            // 2. Drag: 20% of page width is sufficient to turn page
             float dragThreshold = pw * 0.20f;
 
             if (xVelocity < -flingThreshold) {
-                // Flick left -> next page
                 targetPage = current + 1;
             } else if (xVelocity > flingThreshold) {
-                // Flick right -> previous page
                 targetPage = current - 1;
             } else {
-                // Drag distance and position based snap
                 float pageOffset = (float) scrollX / (float) pw;
                 float deltaFromCurrent = pageOffset - (float) current;
-
                 if (deltaFromCurrent > 0.20f || deltaX < -dragThreshold) {
-                    // Clearly dragged towards next page
                     targetPage = current + 1;
                 } else if (deltaFromCurrent < -0.20f || deltaX > dragThreshold) {
-                    // Clearly dragged towards previous page
                     targetPage = current - 1;
                 } else {
-                    // Small perturbation: snap to nearest page (50% midpoint)
                     targetPage = Math.round(pageOffset);
                 }
             }
 
-            // Clamp within valid range
             targetPage = Math.max(0, Math.min(targetPage, totalPages - 1));
             goToPage(targetPage);
         }
     }
 
-    private final View mMenuScrim;
-    private final LinearLayout mMenuCard;
-    private final View mHandle;
-    private final TextView mMenuTitle;
-    private final AcidIcons.SvgIconView mBtnMenuClose;
-
     private final PagingHorizontalScrollView mHorizontalPager;
-    private final LinearLayout mPagesContainer;
-    private final LinearLayout page1;
-    private final LinearLayout page2;
-    private final LinearLayout mIndicatorBar;
+    private final LinearLayout mPage1;
+    private final LinearLayout mPage2;
     private final View mDot1;
     private final View mDot2;
 
-    // Page 1: 8 tools (4x2)
+    // Page 1 (4x2)
     private final MenuCardItem mMenuItemNight;
     private final MenuCardItem mMenuItemIncognito;
     private final MenuCardItem mMenuItemBookmark;
@@ -324,390 +273,134 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
     private final MenuCardItem mMenuItemAgent;
     private final MenuCardItem mMenuItemSettings;
 
-    // Page 2: 9th, 10th, 11th, 12th & 13th tools (ModelConfig, AdBlock, Userscripts, MCP Server, About)
+    // Page 2
     private final MenuCardItem mMenuItemModelConfig;
     private final MenuCardItem mMenuItemAdBlock;
     private final MenuCardItem mMenuItemScripts;
     private final MenuCardItem mMenuItemMcp;
     private final MenuCardItem mMenuItemAbout;
-    private boolean mIsMcpRunning = false;
 
     private final MenuActionListener mListener;
-    private boolean mIsDarkMode = false;
+    private boolean mIsIncognito = false;
+    private boolean mIsDesktop = false;
+    private boolean mIsMcpRunning = false;
     private int mCurrentPage = 0;
 
     public BrowserMenuSheet(Context context, MenuActionListener listener) {
         super(context);
         mListener = listener;
-        setVisibility(View.GONE);
+        setTitle("功能");
+        getScrollView().setVisibility(View.GONE);
 
-        // 1. Semi-transparent scrim
-        mMenuScrim = new View(context);
-        mMenuScrim.setBackgroundColor(AcidTheme.SCRIM);
-        mMenuScrim.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                dismiss();
-            }
-        });
-        addView(mMenuScrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout host = getPinnedHeaderContainer();
+        host.setPadding(0, AcidTheme.dp(context, 4), 0, 0);
 
-        // 2. Bottom rounded card
-        mMenuCard = new LinearLayout(context);
-        mMenuCard.setOrientation(LinearLayout.VERTICAL);
-        mMenuCard.setClickable(true);
-        mMenuCard.setFocusable(true);
-        int padH = AcidTheme.dp(context, 14);
-        int padTop = AcidTheme.dp(context, 10);
-        int padBottom = AcidTheme.dp(context, 12);
-        mMenuCard.setPadding(padH, padTop, padH, padBottom);
-
-        // Top drag handle
-        mHandle = new View(context);
-        mHandle.setBackground(AcidTheme.pillBg(context, AcidTheme.handle(false), 0, 2));
-        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(AcidTheme.dp(context, 36), AcidTheme.dp(context, 4));
-        hLp.gravity = Gravity.CENTER_HORIZONTAL;
-        hLp.bottomMargin = AcidTheme.dp(context, 8);
-        mMenuCard.addView(mHandle, hLp);
-
-        // Header row ("功能" + Close)
-        LinearLayout titleRow = new LinearLayout(context);
-        titleRow.setOrientation(LinearLayout.HORIZONTAL);
-        titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        titleRow.setClickable(true);
-
-        mMenuTitle = new TextView(context);
-        mMenuTitle.setText("功能");
-        mMenuTitle.setTextColor(AcidTheme.LIGHT_TEXT);
-        mMenuTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        mMenuTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        titleRow.addView(mMenuTitle, titleLp);
-
-        LinearLayout closeBox = new LinearLayout(context);
-        closeBox.setGravity(Gravity.CENTER);
-        int padClose = AcidTheme.dp(context, 4);
-        closeBox.setPadding(padClose, padClose, padClose, padClose);
-        mBtnMenuClose = new AcidIcons.SvgIconView(context, AcidIcons.ICON_CLOSE, AcidTheme.LIGHT_MUTED, 18);
-        closeBox.addView(mBtnMenuClose);
-        closeBox.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                dismiss();
-            }
-        });
-        titleRow.addView(closeBox);
-        mMenuCard.addView(titleRow);
-
-        // 3. Multi-page Horizontal Pager
         mHorizontalPager = new PagingHorizontalScrollView(context);
+        LinearLayout pagesContainer = new LinearLayout(context);
+        pagesContainer.setOrientation(LinearLayout.HORIZONTAL);
 
-        mPagesContainer = new LinearLayout(context);
-        mPagesContainer.setOrientation(LinearLayout.HORIZONTAL);
+        // --- PAGE 1 ---
+        mPage1 = new LinearLayout(context);
+        mPage1.setOrientation(LinearLayout.VERTICAL);
 
-        // --- PAGE 1 (8 tools, 4x2 grid) ---
-        page1 = new LinearLayout(context);
-        page1.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout row1 = createGridRow(context);
+        mMenuItemNight = createTile(context, AcidIcons.ICON_SUN, "夜间模式", false, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onToggleDarkMode(); }
+        });
+        mMenuItemIncognito = createTile(context, AcidIcons.ICON_INCOGNITO_OFF, "无痕模式", false, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onToggleIncognitoMode(); }
+        });
+        mMenuItemBookmark = createTile(context, AcidIcons.ICON_BOOKMARK, "书签收藏", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenBookmarks(); }
+        });
+        mMenuItemHistory = createTile(context, AcidIcons.ICON_HISTORY, "历史浏览", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenHistory(); }
+        });
+        addFourColumns(context, row1, mMenuItemNight, mMenuItemIncognito, mMenuItemBookmark, mMenuItemHistory);
+        mPage1.addView(row1);
 
-        // Row 1: Night, Incognito, Bookmarks, History
-        LinearLayout row1 = new LinearLayout(context);
-        row1.setOrientation(LinearLayout.HORIZONTAL);
-        row1.setPadding(0, AcidTheme.dp(context, 8), 0, AcidTheme.dp(context, 4));
+        LinearLayout row2 = createGridRow(context);
+        mMenuItemDesktop = createTile(context, AcidIcons.ICON_MOBILE, "手机模式", false, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onToggleDesktopMode(); }
+        });
+        mMenuItemDownload = createTile(context, AcidIcons.ICON_DOWNLOAD, "下载管理", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenDownloads(); }
+        });
+        mMenuItemAgent = createTile(context, AcidIcons.ICON_AGENT, "Acid Agent", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenAgentFloatingWindow(); }
+        });
+        mMenuItemSettings = createTile(context, AcidIcons.ICON_SETTINGS, "设置", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenSettings(); }
+        });
+        addFourColumns(context, row2, mMenuItemDesktop, mMenuItemDownload, mMenuItemAgent, mMenuItemSettings);
+        mPage1.addView(row2);
 
-        mMenuItemNight = new MenuCardItem(
-            context, AcidIcons.ICON_SUN, "夜间模式",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (mListener != null) mListener.onToggleDarkMode();
-                }
-            }
+        // --- PAGE 2 ---
+        mPage2 = new LinearLayout(context);
+        mPage2.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout p2Row1 = createGridRow(context);
+        mMenuItemModelConfig = createTile(context, AcidIcons.ICON_MODEL, "模型配置", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenModelProviderConfig(); }
+        });
+        mMenuItemAdBlock = createTile(context, AcidIcons.ICON_ADBLOCK, "广告拦截", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenAdBlock(); }
+        });
+        mMenuItemScripts = createTile(context, AcidIcons.ICON_FILE, "脚本管理", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenUserscripts(); }
+        });
+        mMenuItemMcp = createTile(context, AcidIcons.ICON_TERMINAL, "MCP 服务", false, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onToggleMcpServer(); }
+        });
+        addFourColumns(context, p2Row1, mMenuItemModelConfig, mMenuItemAdBlock, mMenuItemScripts, mMenuItemMcp);
+        mPage2.addView(p2Row1);
+
+        LinearLayout p2Row2 = createGridRow(context);
+        mMenuItemAbout = createTile(context, AcidIcons.ICON_INFO, "关于", true, new Runnable() {
+            @Override public void run() { if (mListener != null) mListener.onOpenAbout(); }
+        });
+        addFourColumns(
+            context, p2Row2,
+            mMenuItemAbout,
+            new android.widget.Space(context),
+            new android.widget.Space(context),
+            new android.widget.Space(context)
         );
-        LinearLayout.LayoutParams itemLp1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp1.rightMargin = AcidTheme.dp(context, 4);
-        row1.addView(mMenuItemNight, itemLp1);
+        mPage2.addView(p2Row2);
 
-        mMenuItemIncognito = new MenuCardItem(
-            context, AcidIcons.ICON_INCOGNITO_OFF, "无痕模式",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (mListener != null) mListener.onToggleIncognitoMode();
-                }
-            }
-        );
-        LinearLayout.LayoutParams itemLp2 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp2.leftMargin = AcidTheme.dp(context, 2);
-        itemLp2.rightMargin = AcidTheme.dp(context, 2);
-        row1.addView(mMenuItemIncognito, itemLp2);
+        pagesContainer.addView(mPage1);
+        pagesContainer.addView(mPage2);
 
-        mMenuItemBookmark = new MenuCardItem(
-            context, AcidIcons.ICON_BOOKMARK, "书签收藏",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenBookmarks();
-                }
-            }
-        );
-        LinearLayout.LayoutParams itemLp3 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp3.leftMargin = AcidTheme.dp(context, 2);
-        itemLp3.rightMargin = AcidTheme.dp(context, 2);
-        row1.addView(mMenuItemBookmark, itemLp3);
-
-        mMenuItemHistory = new MenuCardItem(
-            context, AcidIcons.ICON_HISTORY, "历史浏览",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenHistory();
-                }
-            }
-        );
-        LinearLayout.LayoutParams itemLp4 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp4.leftMargin = AcidTheme.dp(context, 4);
-        row1.addView(mMenuItemHistory, itemLp4);
-        page1.addView(row1);
-
-        // Row 2: Desktop, Downloads, Agent, Model Config
-        LinearLayout row2 = new LinearLayout(context);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.setPadding(0, AcidTheme.dp(context, 4), 0, AcidTheme.dp(context, 4));
-
-        mMenuItemDesktop = new MenuCardItem(
-            context, AcidIcons.ICON_MOBILE, "电脑模式",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (mListener != null) mListener.onToggleDesktopMode();
-                }
-            }
-        );
-        LinearLayout.LayoutParams itemLp5 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp5.rightMargin = AcidTheme.dp(context, 4);
-        row2.addView(mMenuItemDesktop, itemLp5);
-
-        mMenuItemDownload = new MenuCardItem(
-            context, AcidIcons.ICON_DOWNLOAD, "下载管理",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenDownloads();
-                }
-            }
-        );
-        LinearLayout.LayoutParams itemLp6 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp6.leftMargin = AcidTheme.dp(context, 2);
-        itemLp6.rightMargin = AcidTheme.dp(context, 2);
-        row2.addView(mMenuItemDownload, itemLp6);
-
-        mMenuItemAgent = new MenuCardItem(
-            context, AcidIcons.ICON_AGENT, "Acid Agent",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenAgentFloatingWindow();
-                }
-            }
-        );
-        LinearLayout.LayoutParams itemLp7 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp7.leftMargin = AcidTheme.dp(context, 2);
-        itemLp7.rightMargin = AcidTheme.dp(context, 2);
-        row2.addView(mMenuItemAgent, itemLp7);
-
-        mMenuItemSettings = new MenuCardItem(
-            context, AcidIcons.ICON_SETTINGS, "设置",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenSettings();
-                }
-            }
-        );
-        LinearLayout.LayoutParams itemLp8 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        itemLp8.leftMargin = AcidTheme.dp(context, 4);
-        row2.addView(mMenuItemSettings, itemLp8);
-        page1.addView(row2);
-
-        // --- PAGE 2 (5 tools: ModelConfig, AdBlock, Scripts, MCP, About) ---
-        page2 = new LinearLayout(context);
-        page2.setOrientation(LinearLayout.VERTICAL);
-
-        LinearLayout page2Row1 = new LinearLayout(context);
-        page2Row1.setOrientation(LinearLayout.HORIZONTAL);
-        page2Row1.setPadding(0, AcidTheme.dp(context, 8), 0, AcidTheme.dp(context, 4));
-
-        mMenuItemModelConfig = new MenuCardItem(
-            context, AcidIcons.ICON_MODEL, "模型配置",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenModelProviderConfig();
-                }
-            }
-        );
-        LinearLayout.LayoutParams modelLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        modelLp.rightMargin = AcidTheme.dp(context, 2);
-        page2Row1.addView(mMenuItemModelConfig, modelLp);
-
-        mMenuItemAdBlock = new MenuCardItem(
-            context, AcidIcons.ICON_ADBLOCK, "广告拦截",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenAdBlock();
-                }
-            }
-        );
-        LinearLayout.LayoutParams adBlockLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        adBlockLp.leftMargin = AcidTheme.dp(context, 2);
-        adBlockLp.rightMargin = AcidTheme.dp(context, 2);
-        page2Row1.addView(mMenuItemAdBlock, adBlockLp);
-
-        mMenuItemScripts = new MenuCardItem(
-            context, AcidIcons.ICON_FILE, "脚本管理",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenUserscripts();
-                }
-            }
-        );
-        LinearLayout.LayoutParams scriptsLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        scriptsLp.leftMargin = AcidTheme.dp(context, 2);
-        scriptsLp.rightMargin = AcidTheme.dp(context, 2);
-        page2Row1.addView(mMenuItemScripts, scriptsLp);
-
-        mMenuItemMcp = new MenuCardItem(
-            context, AcidIcons.ICON_TERMINAL, "MCP 服务",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (mListener != null) mListener.onToggleMcpServer();
-                }
-            }
-        );
-        LinearLayout.LayoutParams mcpLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        mcpLp.leftMargin = AcidTheme.dp(context, 2);
-        page2Row1.addView(mMenuItemMcp, mcpLp);
-        page2.addView(page2Row1);
-
-        // Row 2: About + 3 placeholders
-        LinearLayout page2Row2 = new LinearLayout(context);
-        page2Row2.setOrientation(LinearLayout.HORIZONTAL);
-        page2Row2.setPadding(0, AcidTheme.dp(context, 4), 0, AcidTheme.dp(context, 4));
-
-        mMenuItemAbout = new MenuCardItem(
-            context, AcidIcons.ICON_INFO, "关于",
-            AcidTheme.LIGHT_MUTED, AcidTheme.LIGHT_TEXT, AcidTheme.LIGHT_MENU_ITEM_BG,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    dismiss();
-                    if (mListener != null) mListener.onOpenAbout();
-                }
-            }
-        );
-        LinearLayout.LayoutParams aboutLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        aboutLp.rightMargin = AcidTheme.dp(context, 2);
-        page2Row2.addView(mMenuItemAbout, aboutLp);
-
-        for (int i = 0; i < 3; i++) {
-            View ph = new View(context);
-            LinearLayout.LayoutParams r2Lp = new LinearLayout.LayoutParams(0, AcidTheme.dp(context, 54), 1f);
-            r2Lp.leftMargin = AcidTheme.dp(context, 2);
-            page2Row2.addView(ph, r2Lp);
-        }
-        page2.addView(page2Row2);
-
-        mPagesContainer.addView(page1);
-        mPagesContainer.addView(page2);
-
-        // Exact measured height: 2 rows of cards (~142dp)
-        int pagerHeight = AcidTheme.dp(context, 142);
-        LinearLayout.LayoutParams pagerLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, pagerHeight
-        );
-        mHorizontalPager.addView(mPagesContainer, new HorizontalScrollView.LayoutParams(
+        mHorizontalPager.addView(pagesContainer, new HorizontalScrollView.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ));
-        mMenuCard.addView(mHorizontalPager, pagerLp);
+        host.addView(mHorizontalPager, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
 
-        // 4. Page Indicator Bar (● ○)
-        mIndicatorBar = new LinearLayout(context);
-        mIndicatorBar.setOrientation(LinearLayout.HORIZONTAL);
-        mIndicatorBar.setGravity(Gravity.CENTER);
-        mIndicatorBar.setPadding(0, AcidTheme.dp(context, 4), 0, AcidTheme.dp(context, 2));
+        // Page Indicator Dots
+        LinearLayout indicatorBar = new LinearLayout(context);
+        indicatorBar.setOrientation(LinearLayout.HORIZONTAL);
+        indicatorBar.setGravity(Gravity.CENTER);
+        indicatorBar.setPadding(0, AcidTheme.dp(context, 8), 0, AcidTheme.dp(context, 2));
 
         int dotSize = AcidTheme.dp(context, 7);
         mDot1 = new View(context);
-        mDot1.setBackground(AcidTheme.pillBg(context, AcidTheme.LIGHT_ACCENT, 0, 3.5f));
-        LinearLayout.LayoutParams dotLp1 = new LinearLayout.LayoutParams(dotSize, dotSize);
-        dotLp1.rightMargin = AcidTheme.dp(context, 6);
-        mDot1.setLayoutParams(dotLp1);
+        LinearLayout.LayoutParams dLp1 = new LinearLayout.LayoutParams(dotSize, dotSize);
+        dLp1.rightMargin = AcidTheme.dp(context, 6);
+        mDot1.setLayoutParams(dLp1);
         mDot1.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                switchPage(0);
-            }
+            @Override public void onClick(View v) { switchPage(0); }
         });
-        mIndicatorBar.addView(mDot1);
+        indicatorBar.addView(mDot1);
 
         mDot2 = new View(context);
-        mDot2.setBackground(AcidTheme.pillBg(context, AcidTheme.handle(false), 0, 3.5f));
-        LinearLayout.LayoutParams dotLp2 = new LinearLayout.LayoutParams(dotSize, dotSize);
-        mDot2.setLayoutParams(dotLp2);
+        mDot2.setLayoutParams(new LinearLayout.LayoutParams(dotSize, dotSize));
         mDot2.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                switchPage(1);
-            }
+            @Override public void onClick(View v) { switchPage(1); }
         });
-        mIndicatorBar.addView(mDot2);
-
-        mMenuCard.addView(mIndicatorBar);
-
-        // Track page width dynamically
-        addOnLayoutChangeListener(new OnLayoutChangeListener() {
-            @Override
-            public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
-                int padCard = AcidTheme.dp(getContext(), 14) * 2;
-                int contentW = getWidth() - padCard;
-                if (contentW > 0) {
-                    mHorizontalPager.setPageWidth(contentW);
-                    ViewGroup.LayoutParams p1Lp = page1.getLayoutParams();
-                    if (p1Lp != null && p1Lp.width != contentW) {
-                        p1Lp.width = contentW;
-                        page1.setLayoutParams(p1Lp);
-                    }
-                    ViewGroup.LayoutParams p2Lp = page2.getLayoutParams();
-                    if (p2Lp != null && p2Lp.width != contentW) {
-                        p2Lp.width = contentW;
-                        page2.setLayoutParams(p2Lp);
-                    }
-                }
-            }
-        });
+        indicatorBar.addView(mDot2);
+        host.addView(indicatorBar);
 
         mHorizontalPager.setOnPageChangeListener(new PagingHorizontalScrollView.OnPageChangeListener() {
             @Override
@@ -716,12 +409,70 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
             }
         });
 
-        FrameLayout.LayoutParams cardLp = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM
-        );
-        addView(mMenuCard, cardLp);
+        updateIndicator(0);
+    }
 
-        applyTheme(false);
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int totalW = MeasureSpec.getSize(widthMeasureSpec);
+        int contentW = totalW - AcidTheme.dp(getContext(), 16) * 2;
+        if (contentW > 0) {
+            mHorizontalPager.setPageWidth(contentW);
+            setWidthIfChanged(mPage1, contentW);
+            setWidthIfChanged(mPage2, contentW);
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+
+    private static void setWidthIfChanged(View page, int width) {
+        ViewGroup.LayoutParams lp = page.getLayoutParams();
+        if (lp != null && lp.width != width) {
+            lp.width = width;
+            page.setLayoutParams(lp);
+        }
+    }
+
+    private static LinearLayout createGridRow(Context ctx) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, AcidTheme.dp(ctx, 4), 0, AcidTheme.dp(ctx, 4));
+        return row;
+    }
+
+    private static void addFourColumns(Context ctx, LinearLayout row, View c1, View c2, View c3, View c4) {
+        View[] cols = new View[]{c1, c2, c3, c4};
+        int gap = AcidTheme.dp(ctx, 3);
+        for (int i = 0; i < cols.length; i++) {
+            int colH = (cols[i] instanceof MenuCardItem) ? ViewGroup.LayoutParams.WRAP_CONTENT : 1;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, colH, 1f);
+            if (i > 0) lp.leftMargin = gap;
+            if (i < cols.length - 1) lp.rightMargin = gap;
+            row.addView(cols[i], lp);
+        }
+    }
+
+    private MenuCardItem createTile(
+        Context ctx,
+        int iconId,
+        String title,
+        final boolean dismissOnTap,
+        final Runnable action
+    ) {
+        return new MenuCardItem(
+            ctx, iconId, title,
+            AcidTheme.icon(false), AcidTheme.text(false), false,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (dismissOnTap) {
+                        dismiss();
+                    }
+                    if (action != null) {
+                        action.run();
+                    }
+                }
+            }
+        );
     }
 
     public void switchPage(int page) {
@@ -733,34 +484,17 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
     private void updateIndicator(int page) {
         mCurrentPage = page;
         Context ctx = getContext();
+        if (mDot1 == null || mDot2 == null) return;
         int activeDot = AcidTheme.accent(mIsDarkMode);
         int inactiveDot = AcidTheme.handle(mIsDarkMode);
-
         mDot1.setBackground(AcidTheme.pillBg(ctx, page == 0 ? activeDot : inactiveDot, 0, 3.5f));
         mDot2.setBackground(AcidTheme.pillBg(ctx, page == 1 ? activeDot : inactiveDot, 0, 3.5f));
-    }
-
-    public boolean isShowing() {
-        return getVisibility() == View.VISIBLE;
     }
 
     @Override
     public void show() {
         switchPage(0);
-        bringToFront();
-        setVisibility(View.VISIBLE);
-    }
-
-    @Override
-    public void dismiss() {
-        setVisibility(View.GONE);
-    }
-
-    @Override
-    public boolean handleBackPressed() {
-        if (!isShowing()) return false;
-        dismiss();
-        return true;
+        super.show();
     }
 
     public void toggle() {
@@ -771,89 +505,69 @@ public class BrowserMenuSheet extends FrameLayout implements AcidOverlay {
         }
     }
 
-    public void updateCards(boolean isDarkMode, boolean isIncognito, boolean isDesktop, int providerCount, int modelCount) {
+    public void updateCards(
+        boolean isDarkMode,
+        boolean isIncognito,
+        boolean isDesktop,
+        int providerCount,
+        int modelCount
+    ) {
         mIsDarkMode = isDarkMode;
-        int accent = AcidTheme.accent(isDarkMode);
-        int muted = AcidTheme.muted(isDarkMode);
-        int text = AcidTheme.text(isDarkMode);
-        int itemBg = AcidTheme.menuItemBg(isDarkMode);
-
-        // 1. Dark Mode: ON = Green + Moon; OFF = Muted Gray + Sun
-        mMenuItemNight.update(
-            isDarkMode ? AcidIcons.ICON_MOON : AcidIcons.ICON_SUN,
-            "夜间模式",
-            isDarkMode ? accent : muted,
-            text, itemBg
-        );
-
-        // 2. Incognito Mode: ON = Green + Active Incognito; OFF = Muted Gray + Slashed Incognito
-        mMenuItemIncognito.update(
-            isIncognito ? AcidIcons.ICON_INCOGNITO : AcidIcons.ICON_INCOGNITO_OFF,
-            "无痕模式",
-            isIncognito ? accent : muted,
-            text, itemBg
-        );
-
-        // 3. Desktop Mode: ON = Green + Desktop; OFF = Muted Gray + Mobile
-        mMenuItemDesktop.update(
-            isDesktop ? AcidIcons.ICON_DESKTOP : AcidIcons.ICON_MOBILE,
-            isDesktop ? "电脑模式" : "手机模式",
-            isDesktop ? accent : muted,
-            text, itemBg
-        );
-
-        // 4. Operational Tools: Muted Gray (standard clean icon state)
-        mMenuItemBookmark.update(AcidIcons.ICON_BOOKMARK, "书签收藏", muted, text, itemBg);
-        mMenuItemHistory.update(AcidIcons.ICON_HISTORY, "历史浏览", muted, text, itemBg);
-        mMenuItemDownload.update(AcidIcons.ICON_DOWNLOAD, "下载管理", muted, text, itemBg);
-        mMenuItemAgent.update(AcidIcons.ICON_AGENT, "Acid Agent", muted, text, itemBg);
-        mMenuItemSettings.update(AcidIcons.ICON_SETTINGS, "设置", muted, text, itemBg);
-        mMenuItemModelConfig.update(AcidIcons.ICON_MODEL, "模型配置", muted, text, itemBg);
-        mMenuItemAbout.update(AcidIcons.ICON_INFO, "关于", muted, text, itemBg);
-        mMenuItemScripts.update(AcidIcons.ICON_FILE, "脚本管理", muted, text, itemBg);
-        boolean adBlockEnabled = AdBlockManager.getInstance(getContext()).isEnabled();
-        mMenuItemAdBlock.update(
-            AcidIcons.ICON_ADBLOCK, "广告拦截",
-            adBlockEnabled ? accent : muted,
-            text, itemBg
-        );
-        updateMcpState(mIsMcpRunning);
-
-        updateIndicator(mCurrentPage);
+        mIsIncognito = isIncognito;
+        mIsDesktop = isDesktop;
+        refreshTileVisuals();
     }
 
     public void updateMcpState(boolean isRunning) {
         mIsMcpRunning = isRunning;
-        int accent = AcidTheme.accent(mIsDarkMode);
-        int muted = AcidTheme.muted(mIsDarkMode);
-        int text = AcidTheme.text(mIsDarkMode);
-        int itemBg = AcidTheme.menuItemBg(mIsDarkMode);
         if (mMenuItemMcp != null) {
             mMenuItemMcp.update(
                 AcidIcons.ICON_TERMINAL,
                 mIsMcpRunning ? "MCP 运行中" : "MCP 已关闭",
-                mIsMcpRunning ? accent : muted,
-                text,
-                itemBg
+                mIsMcpRunning,
+                mIsDarkMode
             );
         }
     }
 
-    public void applyTheme(boolean isDark) {
-        mIsDarkMode = isDark;
-        int bar = AcidTheme.bar(isDark);
-        int text = AcidTheme.text(isDark);
-        int muted = AcidTheme.muted(isDark);
+    private void refreshTileVisuals() {
+        if (mMenuItemNight == null) return;
+        mMenuItemNight.update(
+            mIsDarkMode ? AcidIcons.ICON_MOON : AcidIcons.ICON_SUN,
+            mIsDarkMode ? "日间模式" : "夜间模式",
+            mIsDarkMode,
+            mIsDarkMode
+        );
+        mMenuItemIncognito.update(
+            mIsIncognito ? AcidIcons.ICON_INCOGNITO : AcidIcons.ICON_INCOGNITO_OFF,
+            "无痕模式",
+            mIsIncognito,
+            mIsDarkMode
+        );
+        mMenuItemDesktop.update(
+            mIsDesktop ? AcidIcons.ICON_DESKTOP : AcidIcons.ICON_MOBILE,
+            mIsDesktop ? "电脑模式" : "手机模式",
+            mIsDesktop,
+            mIsDarkMode
+        );
 
-        mMenuCard.setBackground(AcidTheme.topRoundedSheetBg(getContext(), bar, 16));
-        mMenuTitle.setTextColor(text);
-        mBtnMenuClose.setColor(muted);
-        mHandle.setBackground(AcidTheme.pillBg(
-            getContext(),
-            AcidTheme.handle(isDark),
-            0,
-            2
-        ));
+        mMenuItemBookmark.update(AcidIcons.ICON_BOOKMARK, "书签收藏", false, mIsDarkMode);
+        mMenuItemHistory.update(AcidIcons.ICON_HISTORY, "历史浏览", false, mIsDarkMode);
+        mMenuItemDownload.update(AcidIcons.ICON_DOWNLOAD, "下载管理", false, mIsDarkMode);
+        mMenuItemAgent.update(AcidIcons.ICON_AGENT, "Acid Agent", false, mIsDarkMode);
+        mMenuItemSettings.update(AcidIcons.ICON_SETTINGS, "设置", false, mIsDarkMode);
+        mMenuItemModelConfig.update(AcidIcons.ICON_MODEL, "模型配置", false, mIsDarkMode);
+        mMenuItemScripts.update(AcidIcons.ICON_FILE, "脚本管理", false, mIsDarkMode);
+        mMenuItemAbout.update(AcidIcons.ICON_INFO, "关于", false, mIsDarkMode);
+
+        boolean adBlockEnabled = AdBlockManager.getInstance(getContext()).isEnabled();
+        mMenuItemAdBlock.update(AcidIcons.ICON_ADBLOCK, "广告拦截", adBlockEnabled, mIsDarkMode);
+        updateMcpState(mIsMcpRunning);
         updateIndicator(mCurrentPage);
+    }
+
+    @Override
+    protected void onThemeChanged(boolean isDark) {
+        refreshTileVisuals();
     }
 }

@@ -1,18 +1,16 @@
 package com.acid.browser;
 
+import android.app.Dialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.text.TextUtils;
 import android.text.method.HideReturnsTransformationMethod;
 import android.text.method.PasswordTransformationMethod;
-import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -21,28 +19,25 @@ import android.widget.Toast;
 import java.util.List;
 
 /**
- * AI Provider & Model Management Sheet.
- * Encapsulates the 3-level navigation:
- * 1. Configured Providers List (Test Connection, Edit, Delete)
- * 2. Add Provider (Catalog presets vs. Custom OpenAI-compatible endpoint)
- * 3. Provider Editor (Base URL, API Key with toggle, Model discovery via GET /models, Manual model addition)
+ * AI Provider & Model Management Sheet built on {@link AcidBottomSheetView}'s multi-page stack.
+ *
+ * <p>Navigation stack:
+ * <ol>
+ *   <li>Root Page: Configured Providers List ({@code 模型配置}, top-right {@code [+ 添加供应商]})</li>
+ *   <li>Sub Page 1: Add Provider ({@code ← 添加模型供应商}, segmented preset catalog / custom API)</li>
+ *   <li>Sub Page 2: Provider Editor ({@code ← 编辑/配置 xxx}) — pressing Back returns accurately
+ *       to whichever page launched it (Sub Page 1 or Root Page)!</li>
+ * </ol>
  */
 public class ModelProviderConfigSheet extends AcidBottomSheetView {
-
-    private static final String TAG = "ModelProviderConfigSheet";
 
     public interface OnConfigChangeListener {
         void onProviderConfigChanged();
     }
 
-    private static final int STATE_LIST = 0;
-    private static final int STATE_ADD = 1;
-    private static final int STATE_EDIT = 2;
-
-    private int mCurrentState = STATE_LIST;
     private final AcidModelStore mModelStore;
     private final OnConfigChangeListener mListener;
-    private boolean mIsDarkMode = false;
+    private boolean mAddTabCustomMode = false;
 
     public ModelProviderConfigSheet(Context context, AcidModelStore modelStore, OnConfigChangeListener listener) {
         super(context);
@@ -50,88 +45,58 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         mListener = listener;
     }
 
-    @Override
-    public void applyTheme(boolean isDark) {
-        super.applyTheme(isDark);
-        mIsDarkMode = isDark;
-    }
-
-    @Override
-    public boolean handleBackPressed() {
-        if (!isShowing()) return false;
-        if (mCurrentState == STATE_EDIT) {
-            showConfig();
-            return true;
-        } else if (mCurrentState == STATE_ADD) {
-            showConfig();
-            return true;
-        } else {
-            dismiss();
-            return true;
-        }
-    }
-
-    // =========================================================================
-    // 1. Configured Providers List View (State: STATE_LIST)
-    // =========================================================================
-
     public void showConfig() {
         if (mModelStore == null) return;
-        mCurrentState = STATE_LIST;
-        hideKeyboard();
-        setTitle("模型配置");
-
-        int accent = AcidTheme.accent(mIsDarkMode);
-        setAction(AcidIcons.ICON_PLUS, "添加供应商", accent, new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showAddProviderView(false);
-            }
-        });
-
-        renderConfiguredProvidersList();
+        setRootPage(buildProvidersListPage());
         show();
     }
 
-    private void renderConfiguredProvidersList() {
-        LinearLayout container = getContentContainer();
-        container.removeAllViews();
-        if (mModelStore == null) return;
+    // =========================================================================
+    // LEVEL 1: Configured Providers List Page
+    // =========================================================================
 
+    private SheetPage buildProvidersListPage() {
+        return new SheetPage(
+            "模型配置",
+            AcidIcons.ICON_PLUS,
+            "添加供应商",
+            AcidTheme.accent(mIsDarkMode),
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    mAddTabCustomMode = false;
+                    pushPage(buildAddProviderPage());
+                }
+            },
+            new PageRenderer() {
+                @Override
+                public void render(LinearLayout pinned, LinearLayout container) {
+                    renderConfiguredProvidersList(container);
+                }
+            }
+        );
+    }
+
+    private void renderConfiguredProvidersList(LinearLayout container) {
+        if (mModelStore == null) return;
         final Context ctx = getContext();
         final List<AcidModelStore.ConfiguredProvider> providers = mModelStore.getProviders();
 
-        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
-        int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
         int accent = AcidTheme.accent(mIsDarkMode);
         int blue = AcidTheme.COLOR_BLUE;
 
-        // Intro description banner
-        TextView intro = new TextView(ctx);
-        intro.setText("填入各供应商的 API 密钥即可在 Agent 模型选择器中使用其模型。点击右上角 [+ 添加供应商] 可选择内置默认供应商或添加自定义 OpenAI 兼容接口。");
-        intro.setTextColor(mutedCol);
-        intro.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        intro.setPadding(AcidTheme.dp(ctx, 2), 0, AcidTheme.dp(ctx, 2), AcidTheme.dp(ctx, 10));
-        container.addView(intro);
+        container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "已装载供应商 (" + providers.size() + ")"));
 
         for (int i = 0; i < providers.size(); i++) {
             final AcidModelStore.ConfiguredProvider p = providers.get(i);
 
-            LinearLayout card = new LinearLayout(ctx);
-            card.setOrientation(LinearLayout.VERTICAL);
-            card.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, borderCol, 1, 12));
-            int padH = AcidTheme.dp(ctx, 12);
-            int padV = AcidTheme.dp(ctx, 10);
-            card.setPadding(padH, padV, padH, padV);
-            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            cLp.bottomMargin = AcidTheme.dp(ctx, 10);
-            card.setLayoutParams(cLp);
+            LinearLayout card = AcidWidgets.cardGroup(ctx, mIsDarkMode);
+            int pad = AcidTheme.dp(ctx, 14);
+            card.setPadding(pad, AcidTheme.dp(ctx, 12), pad, AcidTheme.dp(ctx, 12));
 
-            // Row 1: Name + Tag + Status Dot
+            // Row 1: Display Name (H4 = 14sp Bold) + Source Tag + API Key Status
             LinearLayout headRow = new LinearLayout(ctx);
             headRow.setOrientation(LinearLayout.HORIZONTAL);
             headRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -139,104 +104,99 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             TextView tvName = new TextView(ctx);
             tvName.setText(p.displayName);
             tvName.setTextColor(textCol);
-            tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+            tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H4_ITEM);
             tvName.setTypeface(Typeface.DEFAULT_BOLD);
             headRow.addView(tvName);
 
+            int tagColor = p.isCustom ? AcidTheme.COLOR_PURPLE : blue;
             TextView tvTag = new TextView(ctx);
             tvTag.setText(p.isCustom ? "自定义" : "内置目录");
-            tvTag.setTextColor(p.isCustom ? AcidTheme.COLOR_PURPLE : blue);
-            tvTag.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
-            int padTagH = AcidTheme.dp(ctx, 6);
-            int padTagV = AcidTheme.dp(ctx, 2);
-            tvTag.setPadding(padTagH, padTagV, padTagH, padTagV);
-            tvTag.setBackground(AcidTheme.pillBg(
-                ctx,
-                p.isCustom ? Color.argb(26, 139, 92, 246) : Color.argb(26, 2, 132, 199),
-                0, 4
-            ));
+            tvTag.setTextColor(tagColor);
+            tvTag.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
+            tvTag.setTypeface(Typeface.DEFAULT_BOLD);
+            tvTag.setPadding(AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 2), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 2));
+            tvTag.setBackground(AcidTheme.pillBg(ctx, AcidTheme.softTint(tagColor, 28), 0, AcidTheme.RADIUS_BADGE));
             LinearLayout.LayoutParams tagLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             );
             tagLp.leftMargin = AcidTheme.dp(ctx, 6);
             headRow.addView(tvTag, tagLp);
 
-            View spacer = new View(ctx);
-            headRow.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+            headRow.addView(new View(ctx), new LinearLayout.LayoutParams(0, 1, 1f));
 
             boolean hasKey = p.hasApiKey();
             TextView tvKeyState = new TextView(ctx);
-            tvKeyState.setText(hasKey ? "● API 密钥已配置" : "● API 密钥缺失");
-            tvKeyState.setTextColor(hasKey ? accent : AcidTheme.COLOR_RED);
-            tvKeyState.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            tvKeyState.setText(hasKey ? "● 密钥已就绪" : "● 待填密钥");
+            tvKeyState.setTextColor(hasKey ? accent : AcidTheme.COLOR_AMBER);
+            tvKeyState.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
             tvKeyState.setTypeface(Typeface.DEFAULT_BOLD);
             headRow.addView(tvKeyState);
             card.addView(headRow);
 
             // Row 2: Base URL
             TextView tvUrl = new TextView(ctx);
-            tvUrl.setText("API: " + (p.baseUrl.isEmpty() ? "(使用默认地址)" : p.baseUrl));
+            tvUrl.setText("接口: " + (p.baseUrl.isEmpty() ? "(默认地址)" : p.baseUrl));
             tvUrl.setTextColor(mutedCol);
-            tvUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            tvUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             tvUrl.setSingleLine(true);
             tvUrl.setEllipsize(TextUtils.TruncateAt.END);
-            tvUrl.setPadding(0, AcidTheme.dp(ctx, 4), 0, AcidTheme.dp(ctx, 4));
+            tvUrl.setPadding(0, AcidTheme.dp(ctx, 4), 0, AcidTheme.dp(ctx, 2));
             card.addView(tvUrl);
 
-            // Row 3: Models Badges Summary
+            // Row 3: Loaded Models Summary
             StringBuilder sb = new StringBuilder("已装载 " + p.models.size() + " 个模型: ");
             for (int j = 0; j < p.models.size() && j < 4; j++) {
                 if (j > 0) sb.append(", ");
                 sb.append(p.models.get(j).name);
             }
             if (p.models.size() > 4) sb.append(" 等");
-            TextView tvModelsSummary = new TextView(ctx);
-            tvModelsSummary.setText(sb.toString());
-            tvModelsSummary.setTextColor(blue);
-            tvModelsSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-            tvModelsSummary.setSingleLine(true);
-            tvModelsSummary.setEllipsize(TextUtils.TruncateAt.END);
-            card.addView(tvModelsSummary);
+            TextView tvModels = new TextView(ctx);
+            tvModels.setText(sb.toString());
+            tvModels.setTextColor(blue);
+            tvModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+            tvModels.setSingleLine(true);
+            tvModels.setEllipsize(TextUtils.TruncateAt.END);
+            card.addView(tvModels);
 
-            // Row 4: Action Buttons Bar: [测试连通性] [编辑] [删除]
+            // Row 4: Action Bar [测试连通性] [配置与模型] ... [删除]
             LinearLayout actionsBar = new LinearLayout(ctx);
             actionsBar.setOrientation(LinearLayout.HORIZONTAL);
             actionsBar.setGravity(Gravity.CENTER_VERTICAL);
-            actionsBar.setPadding(0, AcidTheme.dp(ctx, 8), 0, 0);
+            actionsBar.setPadding(0, AcidTheme.dp(ctx, 10), 0, 0);
 
-            // Button: Test Connection
-            final TextView btnTest = new TextView(ctx);
-            btnTest.setText("测试连通性");
-            btnTest.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            btnTest.setTextColor(textCol);
-            int padBtnH = AcidTheme.dp(ctx, 10);
-            int padBtnV = AcidTheme.dp(ctx, 5);
-            btnTest.setPadding(padBtnH, padBtnV, padBtnH, padBtnV);
-            btnTest.setBackground(AcidTheme.pillBg(ctx, mIsDarkMode ? AcidTheme.DARK_BG : Color.WHITE, borderCol, 6));
-            btnTest.setOnClickListener(new OnClickListener() {
+            final TextView[] testRef = new TextView[1];
+            TextView btnTest = AcidWidgets.miniButton(ctx, mIsDarkMode, "测试连通性", textCol, false, new OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    btnTest.setText("测试中...");
-                    btnTest.setEnabled(false);
+                    final TextView target = testRef[0];
+                    if (target != null) {
+                        target.setText("测试中...");
+                        target.setEnabled(false);
+                    }
                     AcidModelStore.discoverModelsAsync(p.baseUrl, p.apiKey, new AcidModelStore.ModelDiscoveryCallback() {
                         @Override
                         public void onModelsDiscovered(final List<AcidModelStore.ModelEntry> models) {
                             post(new Runnable() {
                                 @Override
                                 public void run() {
-                                    btnTest.setText("测试连通性");
-                                    btnTest.setEnabled(true);
-                                    Toast.makeText(ctx, "连接成功! 服务端返回 " + models.size() + " 个可用模型", Toast.LENGTH_SHORT).show();
+                                    if (target != null) {
+                                        target.setText("测试连通性");
+                                        target.setEnabled(true);
+                                    }
+                                    Toast.makeText(ctx, "连接成功！服务端返回 " + models.size() + " 个可用模型", Toast.LENGTH_SHORT).show();
                                 }
                             });
                         }
+
                         @Override
                         public void onDiscoveryFailed(final String error) {
                             post(new Runnable() {
                                 @Override
                                 public void run() {
-                                    btnTest.setText("测试连通性");
-                                    btnTest.setEnabled(true);
+                                    if (target != null) {
+                                        target.setText("测试连通性");
+                                        target.setEnabled(true);
+                                    }
                                     Toast.makeText(ctx, "连接测试失败: " + error, Toast.LENGTH_LONG).show();
                                 }
                             });
@@ -244,45 +204,27 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                     });
                 }
             });
+            testRef[0] = btnTest;
             actionsBar.addView(btnTest);
 
-            // Button: Edit
-            TextView btnEdit = new TextView(ctx);
-            btnEdit.setText("配置与模型");
-            btnEdit.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            btnEdit.setTextColor(Color.WHITE);
-            btnEdit.setPadding(padBtnH, padBtnV, padBtnH, padBtnV);
-            btnEdit.setBackground(AcidTheme.pillBg(ctx, blue, blue, 6));
+            TextView btnEdit = AcidWidgets.miniButton(ctx, mIsDarkMode, "配置与模型", blue, true, new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    pushPage(buildEditProviderPage(p, null));
+                }
+            });
             LinearLayout.LayoutParams editLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             );
             editLp.leftMargin = AcidTheme.dp(ctx, 8);
-            btnEdit.setLayoutParams(editLp);
-            btnEdit.setOnClickListener(new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    showEditProviderView(p, null);
-                }
-            });
-            actionsBar.addView(btnEdit);
+            actionsBar.addView(btnEdit, editLp);
 
-            // Button: Delete (if custom or non-default)
             if (p.isCustom) {
-                View space2 = new View(ctx);
-                actionsBar.addView(space2, new LinearLayout.LayoutParams(0, 1, 1f));
-
-                TextView btnDel = new TextView(ctx);
-                btnDel.setText("删除");
-                btnDel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-                btnDel.setTextColor(AcidTheme.COLOR_RED);
-                btnDel.setPadding(padBtnH, padBtnV, padBtnH, padBtnV);
-                btnDel.setOnClickListener(new OnClickListener() {
+                actionsBar.addView(new View(ctx), new LinearLayout.LayoutParams(0, 1, 1f));
+                TextView btnDel = AcidWidgets.miniButton(ctx, mIsDarkMode, "删除", AcidTheme.COLOR_RED, false, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
-                        mModelStore.deleteProvider(p.id);
-                        if (mListener != null) mListener.onProviderConfigChanged();
-                        renderConfiguredProvidersList();
-                        Toast.makeText(ctx, "已删除供应商: " + p.displayName, Toast.LENGTH_SHORT).show();
+                        confirmDeleteProvider(p);
                     }
                 });
                 actionsBar.addView(btnDel);
@@ -292,129 +234,93 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             container.addView(card);
         }
 
-        // Add Bottom Quick Trigger Button
-        TextView btnAddBottom = new TextView(ctx);
-        btnAddBottom.setText("+ 添加供应商 (内置目录 / 自定义)");
-        btnAddBottom.setTextColor(blue);
-        btnAddBottom.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        btnAddBottom.setTypeface(Typeface.DEFAULT_BOLD);
-        btnAddBottom.setGravity(Gravity.CENTER);
-        int padAb = AcidTheme.dp(ctx, 10);
-        btnAddBottom.setPadding(padAb, padAb, padAb, padAb);
-        btnAddBottom.setBackground(AcidTheme.pillBg(ctx, cardBg, borderCol, 8));
-        btnAddBottom.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showAddProviderView(false);
+        TextView btnAddBottom = AcidWidgets.secondaryButton(
+            ctx, mIsDarkMode, "+ 添加模型供应商 (内置目录 / 自定义 API)", blue,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    mAddTabCustomMode = false;
+                    pushPage(buildAddProviderPage());
+                }
             }
-        });
+        );
         container.addView(btnAddBottom, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ));
     }
 
-    // =========================================================================
-    // 2. Add Provider View (State: STATE_ADD)
-    // =========================================================================
-
-    public void showAddProviderView(final boolean customMode) {
-        if (mModelStore == null) return;
-        mCurrentState = STATE_ADD;
-        hideKeyboard();
-        setTitle("添加模型供应商");
-
-        int mutedCol = AcidTheme.muted(mIsDarkMode);
-        setAction(AcidIcons.ICON_BACK, "返回列表", mutedCol, new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showConfig();
-            }
-        });
-
-        LinearLayout container = getContentContainer();
-        container.removeAllViews();
-        Context ctx = getContext();
-
-        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
-        int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
-        int textCol = AcidTheme.text(mIsDarkMode);
-        int blue = AcidTheme.COLOR_BLUE;
-
-        // Segmented Switch
-        LinearLayout segBar = new LinearLayout(ctx);
-        segBar.setOrientation(LinearLayout.HORIZONTAL);
-        int segPad = AcidTheme.dp(ctx, 3);
-        segBar.setPadding(segPad, segPad, segPad, segPad);
-        segBar.setBackground(AcidTheme.pillBg(ctx, cardBg, borderCol, 10));
-        LinearLayout.LayoutParams segLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        segLp.bottomMargin = AcidTheme.dp(ctx, 8);
-        segBar.setLayoutParams(segLp);
-
-        List<AcidModelStore.CatalogProviderPreset> presets = AcidModelStore.getBuiltinCatalogPresets();
-        TextView tabCatalog = new TextView(ctx);
-        tabCatalog.setText("默认供应商目录 (" + presets.size() + ")");
-        tabCatalog.setGravity(Gravity.CENTER);
-        tabCatalog.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        tabCatalog.setTypeface(!customMode ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-        int tPad = AcidTheme.dp(ctx, 8);
-        tabCatalog.setPadding(tPad, tPad, tPad, tPad);
-        tabCatalog.setTextColor(!customMode ? Color.WHITE : textCol);
-        tabCatalog.setBackground(!customMode ? AcidTheme.pillBg(ctx, blue, 0, 8) : null);
-        tabCatalog.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (customMode) showAddProviderView(false);
-            }
-        });
-        segBar.addView(tabCatalog, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView tabCustom = new TextView(ctx);
-        tabCustom.setText("自定义供应商 API");
-        tabCustom.setGravity(Gravity.CENTER);
-        tabCustom.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        tabCustom.setTypeface(customMode ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-        tabCustom.setPadding(tPad, tPad, tPad, tPad);
-        tabCustom.setTextColor(customMode ? Color.WHITE : textCol);
-        tabCustom.setBackground(customMode ? AcidTheme.pillBg(ctx, blue, 0, 8) : null);
-        tabCustom.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (!customMode) showAddProviderView(true);
-            }
-        });
-        segBar.addView(tabCustom, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        container.addView(segBar);
-
-        TextView hint = new TextView(ctx);
-        hint.setText(!customMode
-            ? "选择主流厂商，填入 API 密钥即可直接装载使用。"
-            : "连接中转站、自部署服务 (Ollama / vLLM) 或其他兼容 OpenAI 协议的接口。");
-        hint.setTextColor(mutedCol);
-        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        hint.setPadding(AcidTheme.dp(ctx, 2), 0, AcidTheme.dp(ctx, 2), AcidTheme.dp(ctx, 10));
-        container.addView(hint);
-
-        if (!customMode) {
-            renderBuiltinCatalogPresetsList();
-        } else {
-            AcidModelStore.ConfiguredProvider draftCustom = new AcidModelStore.ConfiguredProvider(
-                "", "", true, "", ""
-            );
-            renderProviderEditorForm(draftCustom, null, true);
-        }
+    private void confirmDeleteProvider(final AcidModelStore.ConfiguredProvider p) {
+        final Context ctx = getContext();
+        new AcidDialog(ctx, mIsDarkMode)
+            .setTitle("删除供应商")
+            .setMessage("确定删除自定义供应商「" + p.displayName + "」及其已配置的模型列表吗？")
+            .setDangerButton("删除", new AcidDialog.OnActionListener() {
+                @Override
+                public boolean onAction(Dialog dialog) {
+                    mModelStore.deleteProvider(p.id);
+                    if (mListener != null) mListener.onProviderConfigChanged();
+                    refreshActivePage();
+                    Toast.makeText(ctx, "已删除供应商: " + p.displayName, Toast.LENGTH_SHORT).show();
+                    return true;
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
     }
 
-    private void renderBuiltinCatalogPresetsList() {
-        LinearLayout container = getContentContainer();
-        Context ctx = getContext();
-        List<AcidModelStore.CatalogProviderPreset> presets = AcidModelStore.getBuiltinCatalogPresets();
+    // =========================================================================
+    // LEVEL 2: Add Provider Page (Catalog vs. Custom API)
+    // =========================================================================
 
-        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
-        int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
-        int textCol = AcidTheme.text(mIsDarkMode);
+    private SheetPage buildAddProviderPage() {
+        return new SheetPage("添加模型供应商", new PageRenderer() {
+            @Override
+            public void render(LinearLayout pinned, LinearLayout container) {
+                Context ctx = getContext();
+                List<AcidModelStore.CatalogProviderPreset> presets = AcidModelStore.getBuiltinCatalogPresets();
+
+                pinned.addView(AcidWidgets.segmentedTabs(
+                    ctx,
+                    mIsDarkMode,
+                    new String[]{"默认供应商目录 (" + presets.size() + ")", "自定义供应商 API"},
+                    mAddTabCustomMode ? 1 : 0,
+                    AcidTheme.COLOR_BLUE,
+                    new AcidWidgets.OnTabSelectedListener() {
+                        @Override
+                        public void onTabSelected(int index) {
+                            boolean nextCustom = (index == 1);
+                            if (mAddTabCustomMode != nextCustom) {
+                                mAddTabCustomMode = nextCustom;
+                                refreshActivePage();
+                            }
+                        }
+                    }
+                ));
+
+                container.addView(AcidWidgets.descriptionText(
+                    ctx, mIsDarkMode,
+                    !mAddTabCustomMode
+                        ? "选择主流大模型厂商，填入 API 密钥即可一键装载默认推荐模型。"
+                        : "接入第三方聚合网关、本地 Ollama / vLLM 或任意兼容 OpenAI Chat Completions 协议的服务。"
+                ));
+
+                if (!mAddTabCustomMode) {
+                    renderBuiltinCatalogPresetsList(container, presets);
+                } else {
+                    AcidModelStore.ConfiguredProvider draftCustom = new AcidModelStore.ConfiguredProvider(
+                        "", "", true, "", ""
+                    );
+                    renderProviderEditorForm(container, draftCustom, null);
+                }
+            }
+        });
+    }
+
+    private void renderBuiltinCatalogPresetsList(
+        LinearLayout container,
+        List<AcidModelStore.CatalogProviderPreset> presets
+    ) {
+        Context ctx = getContext();
         int accent = AcidTheme.accent(mIsDarkMode);
         int blue = AcidTheme.COLOR_BLUE;
 
@@ -423,81 +329,70 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             final AcidModelStore.ConfiguredProvider existing = mModelStore.getProvider(preset.id);
             boolean isLoaded = (existing != null);
 
-            LinearLayout card = new LinearLayout(ctx);
-            card.setOrientation(LinearLayout.HORIZONTAL);
-            card.setGravity(Gravity.CENTER_VERTICAL);
-            card.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, isLoaded ? accent : borderCol, 1, 10));
-            int padH = AcidTheme.dp(ctx, 14);
-            int padV = AcidTheme.dp(ctx, 12);
-            card.setPadding(padH, padV, padH, padV);
-            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            LinearLayout row = AcidWidgets.listItemCard(ctx, mIsDarkMode, isLoaded, accent);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+
+            LinearLayout textBox = new LinearLayout(ctx);
+            textBox.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
             );
-            cLp.bottomMargin = AcidTheme.dp(ctx, 8);
-            card.setLayoutParams(cLp);
+            tLp.rightMargin = AcidTheme.dp(ctx, 8);
 
             TextView tvTitle = new TextView(ctx);
             tvTitle.setText(preset.displayName);
-            tvTitle.setTextColor(textCol);
-            tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+            tvTitle.setTextColor(AcidTheme.text(mIsDarkMode));
+            tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H4_ITEM);
             tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-            LinearLayout.LayoutParams ttLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            card.addView(tvTitle, ttLp);
+            textBox.addView(tvTitle);
 
+            if (!TextUtils.isEmpty(preset.description)) {
+                TextView tvSub = new TextView(ctx);
+                tvSub.setText(preset.description);
+                tvSub.setTextColor(AcidTheme.muted(mIsDarkMode));
+                tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+                tvSub.setSingleLine(true);
+                tvSub.setEllipsize(TextUtils.TruncateAt.END);
+                tvSub.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
+                textBox.addView(tvSub);
+            }
+            row.addView(textBox, tLp);
+
+            int badgeColor = isLoaded ? accent : blue;
             TextView tvAction = new TextView(ctx);
-            tvAction.setText(isLoaded ? "已装载 · 点击编辑" : "+ 选择并配置");
-            tvAction.setTextColor(isLoaded ? accent : blue);
-            tvAction.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            tvAction.setText(isLoaded ? "已装载 · 编辑" : "+ 配置装载");
+            tvAction.setTextColor(badgeColor);
+            tvAction.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             tvAction.setTypeface(Typeface.DEFAULT_BOLD);
-            int padAcH = AcidTheme.dp(ctx, 10);
-            int padAcV = AcidTheme.dp(ctx, 5);
-            tvAction.setPadding(padAcH, padAcV, padAcH, padAcV);
-            tvAction.setBackground(AcidTheme.pillBg(
-                ctx,
-                isLoaded ? Color.argb(26, 0, 186, 118) : Color.argb(26, 2, 132, 199),
-                0, 6
-            ));
-            card.addView(tvAction);
+            tvAction.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 5), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 5));
+            tvAction.setBackground(AcidTheme.pillBg(ctx, AcidTheme.softTint(badgeColor, 26), 0, AcidTheme.RADIUS_BADGE));
+            row.addView(tvAction);
 
-            card.setOnClickListener(new OnClickListener() {
+            row.setOnClickListener(new OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    showEditProviderView(existing, preset);
+                    pushPage(buildEditProviderPage(existing, preset));
                 }
             });
 
-            container.addView(card);
+            container.addView(row);
         }
     }
 
     // =========================================================================
-    // 3. Provider Editor Form View (State: STATE_EDIT)
+    // LEVEL 3: Provider Editor Page
     // =========================================================================
 
-    public void showEditProviderView(
+    private SheetPage buildEditProviderPage(
         final AcidModelStore.ConfiguredProvider existing,
         final AcidModelStore.CatalogProviderPreset preset
     ) {
-        if (mModelStore == null) return;
-        mCurrentState = STATE_EDIT;
-        hideKeyboard();
-
-        String title = existing != null
+        String pageTitle = existing != null
             ? ("编辑 " + existing.displayName)
             : (preset != null ? ("配置 " + preset.displayName) : "创建自定义供应商");
-        setTitle(title);
 
-        int mutedCol = AcidTheme.muted(mIsDarkMode);
-        setAction(AcidIcons.ICON_BACK, "返回", mutedCol, new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showConfig();
-            }
-        });
-
-        getContentContainer().removeAllViews();
-
-        AcidModelStore.ConfiguredProvider workingDraft;
+        final AcidModelStore.ConfiguredProvider workingDraft;
         if (existing != null) {
             workingDraft = new AcidModelStore.ConfiguredProvider(
                 existing.id, existing.displayName, existing.isCustom, existing.baseUrl, existing.apiKey
@@ -516,92 +411,72 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             workingDraft = new AcidModelStore.ConfiguredProvider("", "", true, "", "");
         }
 
-        renderProviderEditorForm(workingDraft, preset, false);
+        return new SheetPage(pageTitle, new PageRenderer() {
+            @Override
+            public void render(LinearLayout pinned, LinearLayout container) {
+                renderProviderEditorForm(container, workingDraft, preset);
+            }
+        });
     }
 
     private void renderProviderEditorForm(
+        LinearLayout container,
         final AcidModelStore.ConfiguredProvider draft,
-        final AcidModelStore.CatalogProviderPreset preset,
-        final boolean embeddedInAddTab
+        final AcidModelStore.CatalogProviderPreset preset
     ) {
         final Context ctx = getContext();
-        int cardBg = AcidTheme.cardSurface(mIsDarkMode);
-        int inputBg = mIsDarkMode ? AcidTheme.DARK_BG : Color.WHITE;
-        int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         final int textCol = AcidTheme.text(mIsDarkMode);
         final int mutedCol = AcidTheme.muted(mIsDarkMode);
         final int blue = AcidTheme.COLOR_BLUE;
 
-        LinearLayout form = new LinearLayout(ctx);
-        form.setOrientation(LinearLayout.VERTICAL);
-        form.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, borderCol, 1, 12));
-        int padF = AcidTheme.dp(ctx, 12);
-        form.setPadding(padF, padF, padF, padF);
+        LinearLayout form = AcidWidgets.cardGroup(ctx, mIsDarkMode);
+        int pad = AcidTheme.dp(ctx, 14);
+        form.setPadding(pad, pad, pad, pad);
 
         // 1. Display Name
-        TextView lblName = new TextView(ctx);
-        lblName.setText(draft.isCustom ? "供应商显示名称 (必填):" : ("供应商: " + draft.displayName + " (ID: " + draft.id + ")"));
-        lblName.setTextColor(textCol);
-        lblName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        lblName.setTypeface(Typeface.DEFAULT_BOLD);
-        form.addView(lblName);
-
-        final EditText etDisplayName = new EditText(ctx);
-        etDisplayName.setSingleLine(true);
-        etDisplayName.setText(draft.displayName);
-        etDisplayName.setHint("例如: 我的中转网关 / Ollama 本地服务");
-        etDisplayName.setTextColor(textCol);
-        etDisplayName.setHintTextColor(mutedCol);
-        etDisplayName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        etDisplayName.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7));
-        etDisplayName.setBackground(AcidTheme.pillBg(ctx, inputBg, borderCol, 8));
+        final EditText etDisplayName;
         if (draft.isCustom) {
-            LinearLayout.LayoutParams dnLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            form.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "供应商显示名称 (必填)"));
+            etDisplayName = AcidWidgets.inputField(
+                ctx, mIsDarkMode, draft.displayName, "例如: 我的中转网关 / Ollama 本地服务", true
             );
-            dnLp.topMargin = AcidTheme.dp(ctx, 4);
-            dnLp.bottomMargin = AcidTheme.dp(ctx, 8);
-            form.addView(etDisplayName, dnLp);
+            form.addView(etDisplayName);
         } else {
-            lblName.setPadding(0, 0, 0, AcidTheme.dp(ctx, 8));
+            etDisplayName = new EditText(ctx);
+            etDisplayName.setText(draft.displayName);
+
+            TextView tvFixed = new TextView(ctx);
+            tvFixed.setText(draft.displayName + " (" + draft.id + ")");
+            tvFixed.setTextColor(textCol);
+            tvFixed.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H3_CARD);
+            tvFixed.setTypeface(Typeface.DEFAULT_BOLD);
+            tvFixed.setPadding(0, 0, 0, AcidTheme.dp(ctx, 10));
+            form.addView(tvFixed);
         }
 
-        // 2. API Key with Show/Hide Toggle
-        LinearLayout keyLabelRow = new LinearLayout(ctx);
-        keyLabelRow.setOrientation(LinearLayout.HORIZONTAL);
-        keyLabelRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView lblKey = new TextView(ctx);
-        lblKey.setText("API 密钥 (API Key):");
-        lblKey.setTextColor(textCol);
-        lblKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        lblKey.setTypeface(Typeface.DEFAULT_BOLD);
-        keyLabelRow.addView(lblKey, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        // 2. API Key with Show/Hide toggle
+        LinearLayout keyHead = new LinearLayout(ctx);
+        keyHead.setOrientation(LinearLayout.HORIZONTAL);
+        keyHead.setGravity(Gravity.CENTER_VERTICAL);
+        TextView lblKey = AcidWidgets.fieldLabel(ctx, mIsDarkMode, "API 密钥 (API Key)");
+        keyHead.addView(lblKey, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         final TextView btnToggleKeyVis = new TextView(ctx);
         btnToggleKeyVis.setText("显示密钥");
         btnToggleKeyVis.setTextColor(blue);
-        btnToggleKeyVis.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        btnToggleKeyVis.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+        btnToggleKeyVis.setTypeface(Typeface.DEFAULT_BOLD);
         btnToggleKeyVis.setPadding(AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 2), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 2));
-        keyLabelRow.addView(btnToggleKeyVis);
-        form.addView(keyLabelRow);
+        keyHead.addView(btnToggleKeyVis);
+        form.addView(keyHead);
 
-        final EditText etApiKey = new EditText(ctx);
-        etApiKey.setSingleLine(true);
-        etApiKey.setText(draft.apiKey);
-        etApiKey.setHint(preset != null ? ("输入 API Key (" + preset.envKeyHint + ")") : "输入 sk-... (本地免鉴权接口可留空)");
-        etApiKey.setTextColor(textCol);
-        etApiKey.setHintTextColor(mutedCol);
-        etApiKey.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        etApiKey.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7));
-        etApiKey.setBackground(AcidTheme.pillBg(ctx, inputBg, borderCol, 8));
-        etApiKey.setTransformationMethod(PasswordTransformationMethod.getInstance());
-        LinearLayout.LayoutParams keyLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        final EditText etApiKey = AcidWidgets.inputField(
+            ctx, mIsDarkMode, draft.apiKey,
+            preset != null ? ("输入 API Key (" + preset.envKeyHint + ")") : "输入 sk-... (本地免鉴权接口可留空)",
+            true
         );
-        keyLp.topMargin = AcidTheme.dp(ctx, 4);
-        keyLp.bottomMargin = AcidTheme.dp(ctx, 8);
-        form.addView(etApiKey, keyLp);
+        etApiKey.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        form.addView(etApiKey);
 
         btnToggleKeyVis.setOnClickListener(new OnClickListener() {
             private boolean revealed = false;
@@ -617,126 +492,102 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         });
 
         // 3. Base URL
-        TextView lblUrl = new TextView(ctx);
-        lblUrl.setText("API 地址 (Base URL - OpenAI 兼容接口):");
-        lblUrl.setTextColor(textCol);
-        lblUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        lblUrl.setTypeface(Typeface.DEFAULT_BOLD);
-        form.addView(lblUrl);
-
-        final EditText etBaseUrl = new EditText(ctx);
-        etBaseUrl.setSingleLine(true);
-        etBaseUrl.setText(draft.baseUrl);
-        etBaseUrl.setHint(preset != null ? preset.defaultBaseUrl : "https://gateway.example/v1");
-        etBaseUrl.setTextColor(textCol);
-        etBaseUrl.setHintTextColor(mutedCol);
-        etBaseUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        etBaseUrl.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 7));
-        etBaseUrl.setBackground(AcidTheme.pillBg(ctx, inputBg, borderCol, 8));
-        LinearLayout.LayoutParams urlLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        form.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "API 接口地址 (OpenAI 兼容 Base URL)"));
+        final EditText etBaseUrl = AcidWidgets.inputField(
+            ctx, mIsDarkMode, draft.baseUrl,
+            preset != null ? preset.defaultBaseUrl : "https://gateway.example.com/v1",
+            true
         );
-        urlLp.topMargin = AcidTheme.dp(ctx, 4);
-        urlLp.bottomMargin = AcidTheme.dp(ctx, 10);
-        form.addView(etBaseUrl, urlLp);
+        form.addView(etBaseUrl);
 
-        // 4. Models Catalog Section
-        LinearLayout modelHeaderRow = new LinearLayout(ctx);
-        modelHeaderRow.setOrientation(LinearLayout.HORIZONTAL);
-        modelHeaderRow.setGravity(Gravity.CENTER_VERTICAL);
+        // 4. Models Section Header + Reset Action
+        LinearLayout modelHead = new LinearLayout(ctx);
+        modelHead.setOrientation(LinearLayout.HORIZONTAL);
+        modelHead.setGravity(Gravity.CENTER_VERTICAL);
+        TextView lblModels = AcidWidgets.fieldLabel(ctx, mIsDarkMode, "装载的模型列表");
+        modelHead.addView(lblModels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView lblModels = new TextView(ctx);
-        lblModels.setText("装载的模型列表");
-        lblModels.setTextColor(textCol);
-        lblModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        lblModels.setTypeface(Typeface.DEFAULT_BOLD);
-        modelHeaderRow.addView(lblModels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        final LinearLayout modelsListBoxRef = new LinearLayout(ctx);
-        modelsListBoxRef.setOrientation(LinearLayout.VERTICAL);
+        final LinearLayout modelsListBox = new LinearLayout(ctx);
+        modelsListBox.setOrientation(LinearLayout.VERTICAL);
 
         if (preset != null) {
-            TextView btnResetModels = new TextView(ctx);
-            btnResetModels.setText("恢复默认模型");
-            btnResetModels.setTextColor(blue);
-            btnResetModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-            btnResetModels.setPadding(AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 2), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 2));
-            modelHeaderRow.addView(btnResetModels);
-            btnResetModels.setOnClickListener(new OnClickListener() {
+            TextView btnReset = new TextView(ctx);
+            btnReset.setText("恢复默认模型");
+            btnReset.setTextColor(blue);
+            btnReset.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+            btnReset.setTypeface(Typeface.DEFAULT_BOLD);
+            btnReset.setPadding(AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 2), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 2));
+            btnReset.setOnClickListener(new OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     draft.models.clear();
                     for (AcidModelStore.ModelEntry m : preset.defaultModels) {
                         draft.models.add(m.copy());
                     }
-                    renderDraftModelsList(modelsListBoxRef, draft);
+                    renderDraftModelsList(modelsListBox, draft);
                     Toast.makeText(ctx, "已恢复预设模型目录", Toast.LENGTH_SHORT).show();
                 }
             });
+            modelHead.addView(btnReset);
         }
+        form.addView(modelHead);
 
-        form.addView(modelHeaderRow);
-        form.addView(buildModelDiscoveryActionBar(draft, etBaseUrl, etApiKey, modelsListBoxRef));
-        form.addView(modelsListBoxRef);
-        renderDraftModelsList(modelsListBoxRef, draft);
+        // Discovery & Manual Add Toolbar
+        form.addView(buildModelDiscoveryActionBar(draft, etBaseUrl, etApiKey, modelsListBox));
+        form.addView(modelsListBox);
+        renderDraftModelsList(modelsListBox, draft);
 
-        // 5. Save Button
-        TextView btnSave = new TextView(ctx);
-        btnSave.setText(draft.isCustom && draft.id.isEmpty() ? "创建并装载供应商" : "保存并装载供应商");
-        btnSave.setTextColor(Color.WHITE);
-        btnSave.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
-        btnSave.setTypeface(Typeface.DEFAULT_BOLD);
-        btnSave.setGravity(Gravity.CENTER);
-        int padSave = AcidTheme.dp(ctx, 11);
-        btnSave.setPadding(padSave, padSave, padSave, padSave);
-        btnSave.setBackground(AcidTheme.pillBg(ctx, blue, blue, 10));
+        // 5. Primary Save Button
+        TextView btnSave = AcidWidgets.primaryButton(
+            ctx, mIsDarkMode,
+            draft.isCustom && draft.id.isEmpty() ? "创建并装载供应商" : "保存供应商配置",
+            blue,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    AcidTheme.hideKeyboard(ModelProviderConfigSheet.this);
+                    String displayName = etDisplayName.getText().toString().trim();
+                    String apiKey = etApiKey.getText().toString().trim();
+                    String baseUrl = etBaseUrl.getText().toString().trim();
+
+                    if (draft.isCustom) {
+                        if (displayName.isEmpty()) {
+                            Toast.makeText(ctx, "供应商名称不能为空", Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        if (draft.id.isEmpty()) {
+                            draft.id = "custom_" + System.currentTimeMillis();
+                        }
+                        draft.displayName = displayName;
+                    }
+                    draft.apiKey = apiKey;
+                    if (!baseUrl.isEmpty()) {
+                        draft.baseUrl = baseUrl;
+                    } else if (draft.baseUrl.isEmpty() && preset != null) {
+                        draft.baseUrl = preset.defaultBaseUrl;
+                    }
+
+                    if (draft.models.isEmpty()) {
+                        Toast.makeText(ctx, "请至少为此供应商添加或保留一个可用模型", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    mModelStore.upsertProvider(draft);
+                    if (mListener != null) {
+                        mListener.onProviderConfigChanged();
+                    }
+                    Toast.makeText(ctx, "已保存供应商: " + draft.displayName, Toast.LENGTH_SHORT).show();
+                    setRootPage(buildProvidersListPage());
+                }
+            }
+        );
         LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        saveLp.topMargin = AcidTheme.dp(ctx, 14);
-        btnSave.setLayoutParams(saveLp);
+        saveLp.topMargin = AcidTheme.dp(ctx, 12);
+        form.addView(btnSave, saveLp);
 
-        btnSave.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                hideKeyboard();
-                String displayName = etDisplayName.getText().toString().trim();
-                String apiKey = etApiKey.getText().toString().trim();
-                String baseUrl = etBaseUrl.getText().toString().trim();
-
-                if (draft.isCustom) {
-                    if (displayName.isEmpty()) {
-                        Toast.makeText(ctx, "供应商名称不能为空", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    if (draft.id.isEmpty()) {
-                        draft.id = "custom_" + System.currentTimeMillis();
-                    }
-                    draft.displayName = displayName;
-                }
-                draft.apiKey = apiKey;
-                if (!baseUrl.isEmpty()) {
-                    draft.baseUrl = baseUrl;
-                } else if (draft.baseUrl.isEmpty() && preset != null) {
-                    draft.baseUrl = preset.defaultBaseUrl;
-                }
-
-                if (draft.models.isEmpty()) {
-                    Toast.makeText(ctx, "请至少为此供应商添加或保留一个可用模型", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-
-                mModelStore.upsertProvider(draft);
-                if (mListener != null) {
-                    mListener.onProviderConfigChanged();
-                }
-                Toast.makeText(ctx, "供应商 " + draft.displayName + " 配置已保存！", Toast.LENGTH_SHORT).show();
-                showConfig();
-            }
-        });
-        form.addView(btnSave);
-
-        getContentContainer().addView(form);
+        container.addView(form);
     }
 
     private View buildModelDiscoveryActionBar(
@@ -745,108 +596,101 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         final EditText etApiKey,
         final LinearLayout modelsListBox
     ) {
-        Context ctx = getContext();
-        int inputBg = mIsDarkMode ? AcidTheme.DARK_BG : Color.WHITE;
-        int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
-        int textCol = AcidTheme.text(mIsDarkMode);
-        int blue = AcidTheme.COLOR_BLUE;
-
+        final Context ctx = getContext();
         LinearLayout bar = new LinearLayout(ctx);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setPadding(0, AcidTheme.dp(ctx, 6), 0, AcidTheme.dp(ctx, 6));
+        bar.setPadding(0, AcidTheme.dp(ctx, 4), 0, AcidTheme.dp(ctx, 8));
 
-        // Button: Add Manually
-        TextView btnAdd = new TextView(ctx);
-        btnAdd.setText("+ 手动添加");
-        btnAdd.setTextColor(textCol);
-        btnAdd.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        int padH = AcidTheme.dp(ctx, 8);
-        int padV = AcidTheme.dp(ctx, 4);
-        btnAdd.setPadding(padH, padV, padH, padV);
-        btnAdd.setBackground(AcidTheme.pillBg(ctx, inputBg, borderCol, 6));
-        btnAdd.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showManualAddModelDialog(draft, modelsListBox);
+        TextView btnAdd = AcidWidgets.miniButton(
+            ctx, mIsDarkMode, "+ 手动添加", AcidTheme.text(mIsDarkMode), false,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showManualAddModelDialog(draft, modelsListBox);
+                }
             }
-        });
+        );
         bar.addView(btnAdd);
 
-        // Button: Sync Online Models
-        final TextView btnSync = new TextView(ctx);
-        btnSync.setText("从接口同步模型列表 (/models)");
-        btnSync.setTextColor(blue);
-        btnSync.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        btnSync.setPadding(padH, padV, padH, padV);
-        btnSync.setBackground(AcidTheme.pillBg(ctx, inputBg, borderCol, 6));
-        LinearLayout.LayoutParams syncLp = new LinearLayout.LayoutParams(
+        final TextView[] syncRef = new TextView[1];
+        TextView btnSync = AcidWidgets.miniButton(
+            ctx, mIsDarkMode, "同步接口模型 (/models)", AcidTheme.COLOR_BLUE, false,
+            new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    String targetUrl = etBaseUrl.getText().toString().trim();
+                    if (targetUrl.isEmpty()) targetUrl = draft.baseUrl;
+                    String apiKey = etApiKey.getText().toString().trim();
+                    if (targetUrl.isEmpty()) {
+                        Toast.makeText(ctx, "请先填入有效的 API 接口地址", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    final TextView target = syncRef[0];
+                    if (target != null) {
+                        target.setText("获取中...");
+                        target.setEnabled(false);
+                    }
+                    AcidModelStore.discoverModelsAsync(targetUrl, apiKey, new AcidModelStore.ModelDiscoveryCallback() {
+                        @Override
+                        public void onModelsDiscovered(final List<AcidModelStore.ModelEntry> models) {
+                            post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (target != null) {
+                                        target.setText("同步接口模型 (/models)");
+                                        target.setEnabled(true);
+                                    }
+                                    if (models.isEmpty()) {
+                                        Toast.makeText(ctx, "接口未返回任何可用模型", Toast.LENGTH_SHORT).show();
+                                        return;
+                                    }
+                                    showDiscoveredModelsPickerDialog(draft, models, modelsListBox);
+                                }
+                            });
+                        }
+
+                        @Override
+                        public void onDiscoveryFailed(final String error) {
+                            post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (target != null) {
+                                        target.setText("同步接口模型 (/models)");
+                                        target.setEnabled(true);
+                                    }
+                                    Toast.makeText(ctx, "获取模型列表失败: " + error, Toast.LENGTH_LONG).show();
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+        );
+        syncRef[0] = btnSync;
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        syncLp.leftMargin = AcidTheme.dp(ctx, 6);
-        btnSync.setLayoutParams(syncLp);
-
-        btnSync.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                String targetUrl = etBaseUrl.getText().toString().trim();
-                if (targetUrl.isEmpty()) targetUrl = draft.baseUrl;
-                String apiKey = etApiKey.getText().toString().trim();
-                if (targetUrl.isEmpty()) {
-                    Toast.makeText(getContext(), "请先填入有效的 API Base URL", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-
-                btnSync.setText("获取中...");
-                btnSync.setEnabled(false);
-                AcidModelStore.discoverModelsAsync(targetUrl, apiKey, new AcidModelStore.ModelDiscoveryCallback() {
-                    @Override
-                    public void onModelsDiscovered(final List<AcidModelStore.ModelEntry> models) {
-                        post(new Runnable() {
-                            @Override
-                            public void run() {
-                                btnSync.setText("从接口同步模型列表 (/models)");
-                                btnSync.setEnabled(true);
-                                if (models.isEmpty()) {
-                                    Toast.makeText(getContext(), "接口未返回任何可用模型", Toast.LENGTH_SHORT).show();
-                                    return;
-                                }
-                                showDiscoveredModelsPickerDialog(draft, models, modelsListBox);
-                            }
-                        });
-                    }
-                    @Override
-                    public void onDiscoveryFailed(final String error) {
-                        post(new Runnable() {
-                            @Override
-                            public void run() {
-                                btnSync.setText("从接口同步模型列表 (/models)");
-                                btnSync.setEnabled(true);
-                                Toast.makeText(getContext(), "获取模型列表失败: " + error, Toast.LENGTH_LONG).show();
-                            }
-                        });
-                    }
-                });
-            }
-        });
-        bar.addView(btnSync);
+        sLp.leftMargin = AcidTheme.dp(ctx, 8);
+        bar.addView(btnSync, sLp);
 
         return bar;
     }
 
-    private void renderDraftModelsList(final LinearLayout modelsListBox, final AcidModelStore.ConfiguredProvider draft) {
+    private void renderDraftModelsList(
+        final LinearLayout modelsListBox,
+        final AcidModelStore.ConfiguredProvider draft
+    ) {
         modelsListBox.removeAllViews();
         Context ctx = getContext();
-        int cardBg = mIsDarkMode ? AcidTheme.DARK_BG : Color.WHITE;
-        int borderCol = mIsDarkMode ? AcidTheme.DARK_BORDER : AcidTheme.LIGHT_BORDER;
         int textCol = AcidTheme.text(mIsDarkMode);
         int mutedCol = AcidTheme.muted(mIsDarkMode);
-        int blue = AcidTheme.COLOR_BLUE;
 
         if (draft.models.isEmpty()) {
             TextView empty = new TextView(ctx);
-            empty.setText("当前暂无已装载模型，请点击上方 [+ 手动添加] 或从接口同步");
+            empty.setText("当前暂无已装载模型，请点击上方「+ 手动添加」或从接口同步");
             empty.setTextColor(mutedCol);
-            empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             empty.setPadding(0, AcidTheme.dp(ctx, 6), 0, AcidTheme.dp(ctx, 6));
             modelsListBox.addView(empty);
             return;
@@ -859,38 +703,45 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             LinearLayout row = new LinearLayout(ctx);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            int pad = AcidTheme.dp(ctx, 8);
-            row.setPadding(pad, pad, pad, pad);
-            row.setBackground(AcidTheme.pillBg(ctx, cardBg, borderCol, 6));
+            int padH = AcidTheme.dp(ctx, 10);
+            int padV = AcidTheme.dp(ctx, 8);
+            row.setPadding(padH, padV, padH, padV);
+            row.setBackground(AcidTheme.pillBg(
+                ctx,
+                AcidTheme.formInputBg(mIsDarkMode),
+                AcidTheme.border(mIsDarkMode),
+                AcidTheme.RADIUS_CONTROL
+            ));
             LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             );
-            rLp.bottomMargin = AcidTheme.dp(ctx, 4);
+            rLp.bottomMargin = AcidTheme.dp(ctx, 5);
 
             LinearLayout tBox = new LinearLayout(ctx);
             tBox.setOrientation(LinearLayout.VERTICAL);
-            LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
 
             TextView tvName = new TextView(ctx);
             tvName.setText(m.name);
             tvName.setTextColor(textCol);
-            tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
             tvName.setTypeface(Typeface.DEFAULT_BOLD);
             tBox.addView(tvName);
 
             TextView tvId = new TextView(ctx);
             tvId.setText("ID: " + m.id);
             tvId.setTextColor(mutedCol);
-            tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
             tBox.addView(tvId);
-            row.addView(tBox, tLp);
+            row.addView(tBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-            // Delete Model 'X'
             LinearLayout delBox = new LinearLayout(ctx);
             delBox.setGravity(Gravity.CENTER);
-            int padD = AcidTheme.dp(ctx, 4);
-            delBox.setPadding(padD, padD, padD, padD);
-            AcidIcons.SvgIconView delIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CLOSE, mutedCol, 12);
+            int delSize = AcidTheme.dp(ctx, 28);
+            delBox.setLayoutParams(new LinearLayout.LayoutParams(delSize, delSize));
+            delBox.setBackground(AcidTheme.interactiveBg(
+                ctx, Color.TRANSPARENT, AcidTheme.rowPressed(mIsDarkMode), 0, AcidTheme.RADIUS_BADGE
+            ));
+            AcidIcons.SvgIconView delIcon = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CLOSE, mutedCol, 14);
             delBox.addView(delIcon);
             delBox.setOnClickListener(new OnClickListener() {
                 @Override
@@ -905,58 +756,50 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         }
     }
 
+    // =========================================================================
+    // TIER 3: AcidDialog Modals
+    // =========================================================================
+
     private void showManualAddModelDialog(
         final AcidModelStore.ConfiguredProvider draft,
         final LinearLayout modelsListBox
     ) {
-        Context ctx = getContext();
+        final Context ctx = getContext();
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
-        int pad = AcidTheme.dp(ctx, 16);
-        box.setPadding(pad, pad, pad, pad);
 
-        TextView tvId = new TextView(ctx);
-        tvId.setText("模型 ID (例如: deepseek-flash, gpt-5.4, claude-sonnet-4-5, gemini-3.8-flash):");
-        tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        box.addView(tvId);
-
-        final EditText etId = new EditText(ctx);
-        etId.setSingleLine(true);
-        etId.setHint("输入 exact model ID");
-        etId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        box.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "模型 ID (必填)"));
+        final EditText etId = AcidWidgets.inputField(
+            ctx, mIsDarkMode, "", "如: deepseek-chat / gpt-4o / qwen-max", true
+        );
         box.addView(etId);
 
-        TextView tvName = new TextView(ctx);
-        tvName.setText("显示名称 (选填，留空则使用模型 ID):");
-        tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        tvName.setPadding(0, AcidTheme.dp(ctx, 8), 0, 0);
-        box.addView(tvName);
-
-        final EditText etName = new EditText(ctx);
-        etName.setSingleLine(true);
-        etName.setHint("例如: DeepSeek V4.1 Flash");
-        etName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        box.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "显示名称 (选填，留空则同模型 ID)"));
+        final EditText etName = AcidWidgets.inputField(
+            ctx, mIsDarkMode, "", "如: DeepSeek V3", true
+        );
         box.addView(etName);
 
-        AcidTheme.dialogBuilder(ctx, mIsDarkMode)
+        new AcidDialog(ctx, mIsDarkMode)
             .setTitle("手动添加模型")
-            .setView(box)
-            .setPositiveButton("添加", new DialogInterface.OnClickListener() {
+            .setCustomView(box)
+            .setPositiveButton("添加", new AcidDialog.OnActionListener() {
                 @Override
-                public void onClick(DialogInterface dialog, int which) {
+                public boolean onAction(Dialog dialog) {
                     String id = etId.getText().toString().trim();
                     if (id.isEmpty()) {
-                        Toast.makeText(getContext(), "模型 ID 不能为空", Toast.LENGTH_SHORT).show();
-                        return;
+                        Toast.makeText(ctx, "模型 ID 不能为空", Toast.LENGTH_SHORT).show();
+                        return false;
                     }
                     String name = etName.getText().toString().trim();
                     if (name.isEmpty()) name = id;
                     if (draft.findModel(id) != null) {
-                        Toast.makeText(getContext(), "该模型 ID 已存在", Toast.LENGTH_SHORT).show();
-                        return;
+                        Toast.makeText(ctx, "该模型 ID 已存在", Toast.LENGTH_SHORT).show();
+                        return false;
                     }
                     draft.models.add(new AcidModelStore.ModelEntry(id, name, true));
                     renderDraftModelsList(modelsListBox, draft);
+                    return true;
                 }
             })
             .setNegativeButton("取消", null)
@@ -968,26 +811,21 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         final List<AcidModelStore.ModelEntry> discovered,
         final LinearLayout modelsListBox
     ) {
-        Context ctx = getContext();
+        final Context ctx = getContext();
         final String[] labels = new String[discovered.size()];
         final boolean[] checked = new boolean[discovered.size()];
         for (int i = 0; i < discovered.size(); i++) {
             AcidModelStore.ModelEntry m = discovered.get(i);
-            labels[i] = m.name != null && !m.name.equals(m.id) ? (m.name + " (" + m.id + ")") : m.id;
+            labels[i] = (m.name != null && !m.name.equals(m.id)) ? (m.name + " (" + m.id + ")") : m.id;
             checked[i] = (draft.findModel(m.id) != null);
         }
 
-        AcidTheme.dialogBuilder(ctx, mIsDarkMode)
-            .setTitle("选择要装载的模型 (共发现 " + discovered.size() + " 个)")
-            .setMultiChoiceItems(labels, checked, new DialogInterface.OnMultiChoiceClickListener() {
+        new AcidDialog(ctx, mIsDarkMode)
+            .setTitle("选择要装载的模型 (共 " + discovered.size() + " 个)")
+            .setMultiChoiceItems(labels, checked)
+            .setPositiveButton("添加所选", new AcidDialog.OnActionListener() {
                 @Override
-                public void onClick(DialogInterface dialog, int which, boolean isChecked) {
-                    checked[which] = isChecked;
-                }
-            })
-            .setPositiveButton("添加所选", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface dialog, int which) {
+                public boolean onAction(Dialog dialog) {
                     int added = 0;
                     for (int i = 0; i < discovered.size(); i++) {
                         if (checked[i]) {
@@ -999,21 +837,11 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                         }
                     }
                     renderDraftModelsList(modelsListBox, draft);
-                    Toast.makeText(getContext(), "已添加 " + added + " 个模型", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(ctx, "已添加 " + added + " 个模型", Toast.LENGTH_SHORT).show();
+                    return true;
                 }
             })
             .setNegativeButton("取消", null)
             .show();
-    }
-
-    private void hideKeyboard() {
-        try {
-            InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-            if (imm != null && findFocus() != null) {
-                imm.hideSoftInputFromWindow(findFocus().getWindowToken(), 0);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to hide the soft keyboard", e);
-        }
     }
 }

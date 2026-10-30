@@ -61,7 +61,7 @@ public class AdBlockManager {
     }
 
     private final Context mContext;
-    private final BrowserDataStore mDataStore;
+    private BrowserDataStore mDataStore;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     private final Set<String> mBlockedDomains = Collections.synchronizedSet(new HashSet<String>());
@@ -139,6 +139,19 @@ public class AdBlockManager {
             in.close();
             out.close();
         } catch (Exception ignored) {}
+    }
+
+    public void bindDataStore(BrowserDataStore store) {
+        if (store != null) {
+            mDataStore = store;
+            syncFromDataStore();
+        }
+    }
+
+    public void syncFromDataStore() {
+        if (mDataStore != null) {
+            mEnabled = mDataStore.isAdBlockEnabled();
+        }
     }
 
     public boolean isEnabled() {

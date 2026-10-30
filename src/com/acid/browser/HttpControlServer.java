@@ -39,7 +39,7 @@ public class HttpControlServer {
     public static final int DEFAULT_PORT = 3090;
     public static final String MCP_PROTOCOL_VERSION = "2024-11-05";
     public static final String MCP_SERVER_NAME = "AcidBrowser";
-    public static final String MCP_SERVER_VERSION = "0.4.4";
+    public static final String MCP_SERVER_VERSION = "0.4.5";
 
     private final BrowserController mController;
     private final AcidSandboxTools mSandboxTools;
