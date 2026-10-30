@@ -128,7 +128,7 @@ public class AcidMarkdownView extends LinearLayout {
         float d = ctx.getResources().getDisplayMetrics().density;
         TextView tv = new TextView(ctx);
         tv.setTextColor(textColor);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         tv.setLineSpacing(Math.round(3 * d), 1.0f);
         tv.setTextIsSelectable(true);
         tv.setText(formatRichLines(block, inlineCodeBg, inlineCodeFg));
@@ -166,7 +166,7 @@ public class AcidMarkdownView extends LinearLayout {
 
         TextView tv = new TextView(ctx);
         tv.setTextColor(mutedColor);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.8f);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         tv.setText(parseInlineMarkdown(quoteText, inlineCodeBg, inlineCodeFg));
         box.addView(tv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -199,7 +199,7 @@ public class AcidMarkdownView extends LinearLayout {
             TextView langTv = new TextView(ctx);
             langTv.setText(lang.toUpperCase());
             langTv.setTextColor(AcidTheme.DARK_INLINE_CODE_FG);
-            langTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+            langTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_MICRO);
             langTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
             LinearLayout.LayoutParams lLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -214,7 +214,7 @@ public class AcidMarkdownView extends LinearLayout {
         TextView codeTv = new TextView(ctx);
         codeTv.setText(code);
         codeTv.setTextColor(AcidTheme.DARK_CODE_TEXT);
-        codeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.8f);
+        codeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         codeTv.setTypeface(Typeface.MONOSPACE);
         codeTv.setTextIsSelectable(true);
         hsv.addView(codeTv);
@@ -354,7 +354,7 @@ public class AcidMarkdownView extends LinearLayout {
             TextView tv = new TextView(ctx);
             tv.setPadding(padH, padVHead, padH, padVHead);
             tv.setTextColor(textColor);
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_FIELD_LABEL);
             tv.setTypeface(Typeface.DEFAULT_BOLD);
             tv.setGravity(alignments[c]);
             tv.setMinWidth(minCellWidth);
@@ -393,7 +393,7 @@ public class AcidMarkdownView extends LinearLayout {
                 TextView tv = new TextView(ctx);
                 tv.setPadding(padH, padVCell, padH, padVCell);
                 tv.setTextColor(textColor);
-                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.0f);
+                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_FIELD_LABEL);
                 tv.setLineSpacing(Math.round(2 * d), 1.0f);
                 tv.setGravity(alignments[c]);
                 tv.setMinWidth(minCellWidth);
@@ -431,7 +431,7 @@ public class AcidMarkdownView extends LinearLayout {
                         sb.append(tLine).append("\n");
                     }
                     cm.setPrimaryClip(ClipData.newPlainText("table", sb.toString().trim()));
-                    Toast.makeText(finalCtx, "已复制表格 Markdown 到剪贴板", Toast.LENGTH_SHORT).show();
+                    AcidFeedback.ok(finalCtx, "已复制表格 Markdown 到剪贴板");
                 }
                 return true;
             }

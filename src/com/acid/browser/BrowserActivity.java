@@ -116,6 +116,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         requestWindowFeature(Window.FEATURE_NO_TITLE);
 
         mDataStore = new BrowserDataStore(this);
+        mDataStore.setCallbackDispatcher(new BrowserDataStore.CallbackDispatcher() {
+            @Override
+            public void dispatch(Runnable action) {
+                runOnUiThread(action);
+            }
+        });
         mIsDarkMode = mDataStore.isDarkMode();
         getWindow().setBackgroundDrawable(new ColorDrawable(AcidTheme.bg(mIsDarkMode)));
 
@@ -125,12 +131,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mDataStore.setOnSettingsChangedListener(new BrowserDataStore.OnSettingsChangedListener() {
             @Override
             public void onSettingsChanged() {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        syncFromHotReloadedSettings();
-                    }
-                });
+                syncFromHotReloadedSettings();
             }
         });
 
@@ -348,13 +349,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     if (mController != null) {
                         boolean ok = mController.runUserscriptNow(meta);
                         if (ok) {
-                            Toast.makeText(BrowserActivity.this, "已执行「" + meta.name + "」", Toast.LENGTH_SHORT).show();
+                            AcidFeedback.ok(BrowserActivity.this, "已执行「" + meta.name + "」");
                         } else {
-                            Toast.makeText(
+                            AcidFeedback.warn(
                                 BrowserActivity.this,
-                                "「" + meta.name + "」不适用于当前页面 (" + meta.describeScope() + ")",
-                                Toast.LENGTH_LONG
-                            ).show();
+                                "「" + meta.name + "」不适用于当前页面 (" + meta.describeScope() + ")"
+                            );
                         }
                     }
                 }
@@ -405,7 +405,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             new AgentModelSelectorSheet.ModelSelectorListener() {
                 @Override
                 public void onOpenModelProviderConfig() {
-                    mProviderConfigSheet.showConfig();
                     mOverlayStack.pushModal(mModelSelectorSheet, mProviderConfigSheet);
                 }
 
@@ -426,7 +425,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             new BrowserSettingsSheet.OnSettingsActionListener() {
                 @Override
                 public void onOpenModelConfig() {
-                    mProviderConfigSheet.showConfig();
                     mOverlayStack.pushModal(mSettingsSheet, mProviderConfigSheet);
                 }
 
@@ -459,7 +457,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
                 @Override
                 public void onOpenAbout() {
-                    mAboutSheet.showAbout();
                     mOverlayStack.pushModal(mSettingsSheet, mAboutSheet);
                 }
 
@@ -491,7 +488,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     } else {
                         msg = "已清除所选浏览数据 (" + cleaned + " 类)";
                     }
-                    Toast.makeText(BrowserActivity.this, msg, Toast.LENGTH_SHORT).show();
+                    AcidFeedback.ok(BrowserActivity.this, msg);
                 }
 
                 @Override
@@ -500,7 +497,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     String msg = cleaned > 0
                         ? ("已清理 AI 工作区 (" + cleaned + " 个临时项，settings.json 与脚本已保留)")
                         : "AI 工作区当前无临时残留 (settings.json 与脚本已安全保留)";
-                    Toast.makeText(BrowserActivity.this, msg, Toast.LENGTH_SHORT).show();
+                    AcidFeedback.ok(BrowserActivity.this, msg);
                 }
 
                 @Override
@@ -515,20 +512,18 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     if (mController != null) {
                         mController.setWebDebuggingEnabled(enabled);
                     }
-                    Toast.makeText(
+                    AcidFeedback.info(
                         BrowserActivity.this,
-                        enabled ? "已开启网页远程调试 (Chrome DevTools)" : "已关闭网页远程调试",
-                        Toast.LENGTH_SHORT
-                    ).show();
+                        enabled ? "已开启网页远程调试 (Chrome DevTools)" : "已关闭网页远程调试"
+                    );
                 }
 
                 @Override
                 public void onDoNotTrackChanged(boolean enabled) {
-                    Toast.makeText(
+                    AcidFeedback.info(
                         BrowserActivity.this,
-                        enabled ? "已开启「不跟踪 (DNT)」请求" : "已关闭「不跟踪」请求",
-                        Toast.LENGTH_SHORT
-                    ).show();
+                        enabled ? "已开启「不跟踪 (DNT)」请求" : "已关闭「不跟踪」请求"
+                    );
                 }
 
                 @Override
@@ -536,11 +531,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     if (mController != null) {
                         mController.setBlockImages(enabled);
                     }
-                    Toast.makeText(
+                    AcidFeedback.info(
                         BrowserActivity.this,
-                        enabled ? "已开启无图省流模式" : "已恢复正常图片加载",
-                        Toast.LENGTH_SHORT
-                    ).show();
+                        enabled ? "已开启无图省流模式" : "已恢复正常图片加载"
+                    );
                 }
             }
         );
@@ -583,16 +577,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 boolean nextDesktop = !mController.isDesktopMode();
                 mController.setDesktopMode(nextDesktop, true);
                 updateMenuSheetCards();
-                Toast.makeText(
+                AcidFeedback.info(
                     BrowserActivity.this,
-                    nextDesktop ? "已切换为电脑端视口 (1280px)" : "已切换为移动端视口",
-                    Toast.LENGTH_SHORT
-                ).show();
+                    nextDesktop ? "已切换为电脑端视口 (1280px)" : "已切换为移动端视口"
+                );
             }
 
             @Override
             public void onOpenDownloads() {
-                mDownloadsSheet.showDownloads();
                 mOverlayStack.openRootModal(mDownloadsSheet);
             }
 
@@ -603,13 +595,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
             @Override
             public void onOpenModelProviderConfig() {
-                mProviderConfigSheet.showConfig();
                 mOverlayStack.openRootModal(mProviderConfigSheet);
             }
 
             @Override
             public void onOpenAbout() {
-                mAboutSheet.showAbout();
                 mOverlayStack.openRootModal(mAboutSheet);
             }
 
@@ -620,23 +610,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
             @Override
             public void onOpenUserscripts() {
-                mUserscriptSheet.showScripts();
+                mUserscriptSheet.renderScripts();
                 mOverlayStack.openRootModal(mUserscriptSheet);
             }
 
             @Override
             public void onOpenAdBlock() {
-                mAdBlockSheet.showAdBlock();
+                mAdBlockSheet.renderContent();
                 mOverlayStack.openRootModal(mAdBlockSheet);
             }
 
             @Override
             public void onOpenSettings() {
                 mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
-                mSettingsSheet.showSettings();
                 mOverlayStack.openRootModal(mSettingsSheet);
             }
-        });
+        }, mDataStore);
         attachModalSheet(mMenuSheet);
     }
 
@@ -698,7 +687,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onClick(View v) {
                 if (mAdBlockSheet != null) {
-                    mAdBlockSheet.showAdBlock();
+                    mAdBlockSheet.renderContent();
                     mOverlayStack.openRootModal(mAdBlockSheet);
                 }
             }
@@ -729,7 +718,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN)) {
                     AcidTheme.hideKeyboard(BrowserActivity.this);
                     if (mTabsOverview != null && mTabsOverview.isShowing()) {
-                        mTabsOverview.close();
+                        mTabsOverview.dismiss();
                     }
                     mController.loadUrl(mEtUrl.getText().toString());
                     BrowserController.TabSession tab = mController.getActiveTab();
@@ -791,11 +780,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mAgentUnreadBadge = new TextView(this);
         mAgentUnreadBadge.setText("!");
         mAgentUnreadBadge.setTextColor(Color.WHITE);
-        mAgentUnreadBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        mAgentUnreadBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_MICRO);
         mAgentUnreadBadge.setTypeface(Typeface.DEFAULT_BOLD);
         mAgentUnreadBadge.setGravity(Gravity.CENTER);
         int badgeSize = dp(13);
-        mAgentUnreadBadge.setBackground(AcidTheme.pillBg(this, AcidTheme.COLOR_RED, Color.WHITE, 6.5f));
+        mAgentUnreadBadge.setBackground(AcidTheme.pillBg(this, AcidTheme.COLOR_RED, Color.WHITE, AcidTheme.RADIUS_PILL));
         mAgentUnreadBadge.setLayoutParams(new FrameLayout.LayoutParams(
             badgeSize, badgeSize, Gravity.TOP | Gravity.END
         ));
@@ -926,7 +915,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onClick(View v) {
                 if (mTabsOverview != null && mTabsOverview.isShowing()) {
-                    mTabsOverview.close();
+                    mTabsOverview.dismiss();
                     return;
                 }
                 BrowserController.TabSession tab = mController.getActiveTab();
@@ -944,7 +933,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onClick(View v) {
                 if (mTabsOverview != null && mTabsOverview.isShowing()) {
-                    mTabsOverview.close();
+                    mTabsOverview.dismiss();
                     return;
                 }
                 BrowserController.TabSession tab = mController.getActiveTab();
@@ -962,7 +951,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onClick(View v) {
                 if (mTabsOverview != null && mTabsOverview.isShowing()) {
-                    mTabsOverview.close();
+                    mTabsOverview.dismiss();
                 }
                 mController.loadUrl(mController.getHomeUrl());
             }
@@ -1057,13 +1046,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         }
         updateAddressBarVisual();
         updateMenuSheetCards();
-        Toast.makeText(
+        AcidFeedback.info(
             this,
             mIncognitoMode
                 ? "已开启无痕模式 (禁用历史记录、表单保存与磁盘缓存)"
-                : "已退出无痕模式 (已自动清理临时缓存与会话 Cookie)",
-            Toast.LENGTH_SHORT
-        ).show();
+                : "已退出无痕模式 (已自动清理临时缓存与会话 Cookie)"
+        );
     }
 
     private void toggleMcpServer() {
@@ -1072,11 +1060,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (currentlyRunning) {
             mHttpServer.stop();
             mDataStore.setMcpServerEnabled(false);
-            Toast.makeText(this, "MCP 服务已停止 (3090 端口已释放)", Toast.LENGTH_SHORT).show();
+            AcidFeedback.info(this, "MCP 服务已停止 (3090 端口已释放)");
         } else {
             mHttpServer.start();
             mDataStore.setMcpServerEnabled(true);
-            Toast.makeText(this, "MCP 服务已启动 (127.0.0.1:3090)", Toast.LENGTH_SHORT).show();
+            AcidFeedback.ok(this, "MCP 服务已启动 (127.0.0.1:3090)");
         }
         updateMenuSheetCards();
     }
@@ -1109,7 +1097,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         int searchBorder = mIncognitoMode
             ? AcidTheme.COLOR_PURPLE
             : AcidTheme.searchBorder(mIsDarkMode);
-        mSearchContainer.setBackground(AcidTheme.pillBg(this, searchBg, searchBorder, 18));
+        mSearchContainer.setBackground(AcidTheme.pillBg(this, searchBg, searchBorder, AcidTheme.RADIUS_PILL));
         mSearchIcon.setIcon(mIncognitoMode ? AcidIcons.ICON_INCOGNITO : AcidIcons.ICON_SEARCH);
         mSearchIcon.setColor(mIncognitoMode ? AcidTheme.COLOR_PURPLE : AcidTheme.muted(mIsDarkMode));
         mEtUrl.setHint(mIncognitoMode ? "无痕模式 · 搜索或输入网址..." : "搜索或输入网址...");
@@ -1160,7 +1148,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mTakeoverBar.setBackgroundColor(AcidTheme.takeoverBg(dark));
 
         mShieldBox.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, AcidTheme.RADIUS_CONTROL));
-        mReloadBox.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, 14));
+        mReloadBox.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, AcidTheme.RADIUS_PILL));
         mBtnReload.setColor(muted);
 
         updateAddressBarVisual();
@@ -1191,13 +1179,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             int yellow = AcidTheme.COLOR_AMBER;
             mIconTopAgent.setColor(yellow);
             mBtnTopAgent.setBackground(AcidTheme.interactiveBg(
-                this, AcidTheme.softTint(yellow, 32), AcidTheme.softTint(yellow, 64), yellow, 12
+                this, AcidTheme.softTint(yellow, 32), AcidTheme.softTint(yellow, 64), yellow, AcidTheme.RADIUS_CARD
             ));
         } else if (pausedForTakeover) {
             int orange = AcidTheme.COLOR_ORANGE;
             mIconTopAgent.setColor(orange);
             mBtnTopAgent.setBackground(AcidTheme.interactiveBg(
-                this, AcidTheme.softTint(orange, 32), AcidTheme.softTint(orange, 64), orange, 12
+                this, AcidTheme.softTint(orange, 32), AcidTheme.softTint(orange, 64), orange, AcidTheme.RADIUS_CARD
             ));
         } else {
             mIconTopAgent.setColor(AcidTheme.icon(mIsDarkMode));
@@ -1300,7 +1288,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void run() {
                 mBtnShield.setColor(AcidTheme.COLOR_AMBER);
-                Toast.makeText(BrowserActivity.this, "已拦截 App 唤端跳转 (共 " + totalBlocked + " 次)", Toast.LENGTH_SHORT).show();
+                AcidFeedback.info(BrowserActivity.this, "已拦截 App 唤端跳转 (共 " + totalBlocked + " 次)");
             }
         });
     }

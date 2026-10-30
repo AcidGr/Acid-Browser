@@ -936,137 +936,16 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
-    private static String jsDialogHostTitle(String url, String fallback) {
-        if (url != null && !url.isEmpty()) {
-            try {
-                String host = Uri.parse(url).getHost();
-                if (host != null && !host.isEmpty()) {
-                    return host + " 提示";
-                }
-            } catch (Exception ignored) {}
-        }
-        return fallback;
-    }
-
     private void showHumanJsAlert(String url, String message, final JsResult result) {
-        final boolean[] settled = new boolean[]{false};
-        try {
-            new AcidDialog(mContext, mDarkMode)
-                .setTitle(jsDialogHostTitle(url, "网页提示"))
-                .setMessage(message != null ? message : "")
-                .setPositiveButton("确定", new AcidDialog.OnActionListener() {
-                    @Override
-                    public boolean onAction(android.app.Dialog dialog) {
-                        if (!settled[0]) {
-                            settled[0] = true;
-                            result.confirm();
-                        }
-                        return true;
-                    }
-                })
-                .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
-                    @Override
-                    public void onCancel(android.content.DialogInterface d) {
-                        if (!settled[0]) {
-                            settled[0] = true;
-                            result.cancel();
-                        }
-                    }
-                })
-                .show();
-        } catch (Exception e) {
-            if (!settled[0]) result.cancel();
-        }
+        JsDialogHelper.showAlert(mContext, mDarkMode, url, message, result);
     }
 
     private void showHumanJsConfirm(String url, String message, final JsResult result) {
-        final boolean[] settled = new boolean[]{false};
-        try {
-            new AcidDialog(mContext, mDarkMode)
-                .setTitle(jsDialogHostTitle(url, "网页确认"))
-                .setMessage(message != null ? message : "")
-                .setPositiveButton("确定", new AcidDialog.OnActionListener() {
-                    @Override
-                    public boolean onAction(android.app.Dialog dialog) {
-                        if (!settled[0]) {
-                            settled[0] = true;
-                            result.confirm();
-                        }
-                        return true;
-                    }
-                })
-                .setNegativeButton("取消", new AcidDialog.OnActionListener() {
-                    @Override
-                    public boolean onAction(android.app.Dialog dialog) {
-                        if (!settled[0]) {
-                            settled[0] = true;
-                            result.cancel();
-                        }
-                        return true;
-                    }
-                })
-                .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
-                    @Override
-                    public void onCancel(android.content.DialogInterface d) {
-                        if (!settled[0]) {
-                            settled[0] = true;
-                            result.cancel();
-                        }
-                    }
-                })
-                .show();
-        } catch (Exception e) {
-            if (!settled[0]) result.cancel();
-        }
+        JsDialogHelper.showConfirm(mContext, mDarkMode, url, message, result);
     }
 
     private void showHumanJsPrompt(String url, String message, String defaultValue, final JsPromptResult result) {
-        final boolean[] settled = new boolean[]{false};
-        try {
-            android.widget.LinearLayout box = new android.widget.LinearLayout(mContext);
-            box.setOrientation(android.widget.LinearLayout.VERTICAL);
-            final android.widget.EditText et = AcidWidgets.inputField(
-                mContext, mDarkMode, defaultValue != null ? defaultValue : "", "", true
-            );
-            box.addView(et);
-
-            new AcidDialog(mContext, mDarkMode)
-                .setTitle(jsDialogHostTitle(url, "网页输入"))
-                .setMessage(message != null ? message : "")
-                .setCustomView(box)
-                .setPositiveButton("确定", new AcidDialog.OnActionListener() {
-                    @Override
-                    public boolean onAction(android.app.Dialog dialog) {
-                        if (!settled[0]) {
-                            settled[0] = true;
-                            result.confirm(et.getText() != null ? et.getText().toString() : "");
-                        }
-                        return true;
-                    }
-                })
-                .setNegativeButton("取消", new AcidDialog.OnActionListener() {
-                    @Override
-                    public boolean onAction(android.app.Dialog dialog) {
-                        if (!settled[0]) {
-                            settled[0] = true;
-                            result.cancel();
-                        }
-                        return true;
-                    }
-                })
-                .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
-                    @Override
-                    public void onCancel(android.content.DialogInterface d) {
-                        if (!settled[0]) {
-                            settled[0] = true;
-                            result.cancel();
-                        }
-                    }
-                })
-                .show();
-        } catch (Exception e) {
-            if (!settled[0]) result.cancel();
-        }
+        JsDialogHelper.showPrompt(mContext, mDarkMode, url, message, defaultValue, result);
     }
 
     private void applyDarkModeToSettings(WebView wv, boolean dark) {
@@ -1391,14 +1270,14 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void startDownload(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength) {
         if (url == null || url.isEmpty()) return;
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            Toast.makeText(mContext, "当前暂不支持下载此协议资源: " + url, Toast.LENGTH_SHORT).show();
+            AcidFeedback.warn(mContext, "当前暂不支持下载此协议资源: " + url);
             return;
         }
 
         try {
             DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm == null) {
-                Toast.makeText(mContext, "系统下载管理器不可用", Toast.LENGTH_SHORT).show();
+                AcidFeedback.warn(mContext, "系统下载管理器不可用");
                 return;
             }
 
@@ -1448,10 +1327,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
 
             emitLog("[DOWNLOAD] Enqueued: " + fileName + " (id=" + downloadId + ") -> /Download/");
-            Toast.makeText(mContext, "已开始下载: " + fileName + "\n保存至手机 Download 目录", Toast.LENGTH_SHORT).show();
+            AcidFeedback.ok(mContext, "已开始下载: " + fileName + "\n保存至手机 Download 目录");
         } catch (Exception e) {
             emitLog("[DOWNLOAD] Failed to enqueue: " + e.getMessage());
-            Toast.makeText(mContext, "下载发起失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            AcidFeedback.error(mContext, "下载发起失败: " + e.getMessage());
         }
     }
 
@@ -1615,7 +1494,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
 
             if (uri == null) {
-                Toast.makeText(mContext, "未找到下载文件: " + it.fileName, Toast.LENGTH_SHORT).show();
+                AcidFeedback.warn(mContext, "未找到下载文件: " + it.fileName);
                 return;
             }
 
@@ -1651,9 +1530,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 mContext.startActivity(intent);
             }
         } catch (ActivityNotFoundException anfe) {
-            Toast.makeText(mContext, "系统未找到可打开此类型文件的应用 (" + it.fileName + ")", Toast.LENGTH_SHORT).show();
+            AcidFeedback.warn(mContext, "系统未找到可打开此类型文件的应用 (" + it.fileName + ")");
         } catch (Exception e) {
-            Toast.makeText(mContext, "无法打开文件: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            AcidFeedback.error(mContext, "无法打开文件: " + e.getMessage());
         }
     }
 
@@ -1672,7 +1551,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 mContext.startActivity(intent);
             } catch (Exception e2) {
                 File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                Toast.makeText(mContext, "存储目录: " + dir.getAbsolutePath(), Toast.LENGTH_LONG).show();
+                AcidFeedback.info(mContext, "存储目录: " + dir.getAbsolutePath());
             }
         }
     }
@@ -1683,10 +1562,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             ClipboardManager cm = (ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) {
                 cm.setPrimaryClip(ClipData.newPlainText("download_url", text));
-                Toast.makeText(mContext, "已复制下载链接到剪贴板", Toast.LENGTH_SHORT).show();
+                AcidFeedback.ok(mContext, "已复制到剪贴板");
             }
         } catch (Exception e) {
-            Toast.makeText(mContext, "复制失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            AcidFeedback.error(mContext, "复制失败: " + e.getMessage());
         }
     }
 
