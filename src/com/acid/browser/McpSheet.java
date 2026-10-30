@@ -352,13 +352,6 @@ public class McpSheet extends AcidBottomSheetView {
                 cm.setPrimaryClip(ClipData.newPlainText("mcp_" + label, content));
                 AcidFeedback.ok(context, "已复制" + label + "到剪贴板");
             }
-            // Sync to shared workspace file for CLI scripts and verification
-            try {
-                java.io.File dump = new java.io.File("/data/local/ubuntu/root/workspace/Acid-broswer/build/mcp_token.txt");
-                java.io.FileOutputStream fos = new java.io.FileOutputStream(dump);
-                fos.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                fos.close();
-            } catch (Throwable ignored) {}
         } catch (Exception e) {
             AcidFeedback.error(context, "复制失败: " + e.getMessage());
         }

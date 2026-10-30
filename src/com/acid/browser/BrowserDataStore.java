@@ -832,10 +832,12 @@ public class BrowserDataStore {
         }
 
         if (list.isEmpty() && readable) {
-            list.add(new EntryItem("Acid 靶场首页", BrowserController.HOME_URL));
-            list.add(new EntryItem("Hacker News", "https://news.ycombinator.com"));
+            list.add(new EntryItem("Google", "https://www.google.com"));
             list.add(new EntryItem("GitHub", "https://github.com"));
-            list.add(new EntryItem("百度搜索", "https://www.baidu.com"));
+            list.add(new EntryItem("Bilibili", "https://www.bilibili.com"));
+            list.add(new EntryItem("知乎", "https://www.zhihu.com"));
+            list.add(new EntryItem("Hacker News", "https://news.ycombinator.com"));
+            list.add(new EntryItem("百度", "https://www.baidu.com"));
             saveBookmarks(list);
         }
         return list;

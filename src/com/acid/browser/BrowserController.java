@@ -49,7 +49,7 @@ import java.util.List;
 public class BrowserController implements WebAutomationDriver.AutomationHost {
     private static final String TAG = "AcidBrowserCtrl";
 
-    public static final String HOME_URL = "file:///android_asset/home.html";
+    public static final String HOME_URL = "file:///android_asset/homepage/index.html";
 
     public static final String UA_MOBILE =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
