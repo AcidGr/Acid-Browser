@@ -28,38 +28,63 @@ public final class AcidTheme {
     private AcidTheme() {}
 
     // =====================================================================
-    // 1. Typography Hierarchy Scale (in SP)
+    // 1. Semantic Typography Scale (in SP) — Visually Distinct Roles
     // =====================================================================
 
-    /** L1: Primary modal/sheet top-bar title & dialog title (16sp Bold). */
-    public static final float SP_H1_SHEET = 16f;
-    /** L2: Section / group header outside cards (12sp Bold, muted). */
-    public static final float SP_H2_SECTION = 12f;
-    /** L3: Hero / status card internal lead title (14.5sp Bold, text). */
-    public static final float SP_H3_CARD = 14.5f;
-    /** L4: Standard list item / settings row title (14sp Bold, text). */
-    public static final float SP_H4_ITEM = 14f;
-    /** Body copy, dialog message & input field text (13sp Regular, text). */
+    /** L1/L2 BottomSheet top-bar title (16sp Bold). */
+    public static final float SP_SHEET_TITLE = 16f;
+    /** L3 Modal Dialog title (15sp Bold) — visually subordinate to Sheet Title. */
+    public static final float SP_DIALOG_TITLE = 15f;
+    /** Hero / status card lead headline (15sp Bold) — full 1sp above row items. */
+    public static final float SP_HERO = 15f;
+    /** Standard list item / settings row title (14sp Bold). */
+    public static final float SP_ITEM = 14f;
+    /** Body copy, dialog message, input field & button text (13sp Regular/Bold). */
     public static final float SP_BODY = 13f;
     /** Form field label above inputs & segmented tab label (12sp Bold). */
-    public static final float SP_LABEL = 12f;
+    public static final float SP_FIELD_LABEL = 12f;
+    /** Section overline header placed outside above a card group (11.5sp Bold, muted, tracked). */
+    public static final float SP_OVERLINE = 11.5f;
     /** Secondary subtitle, URL, metadata & helper hint (11.5sp Regular, muted). */
     public static final float SP_CAPTION = 11.5f;
-    /** Compact status pill, tag & code header badge (10.5sp Bold). */
+    /** Compact status pill, tag & code preview text (10.5sp Bold/Monospace). */
     public static final float SP_BADGE = 10.5f;
+    /** Micro badge / unread counter (9.5sp Bold). */
+    public static final float SP_MICRO = 9.5f;
+
+    // Legacy compatibility aliases
+    public static final float SP_H1_SHEET = SP_SHEET_TITLE;
+    public static final float SP_H2_SECTION = SP_OVERLINE;
+    public static final float SP_H3_CARD = SP_HERO;
+    public static final float SP_H4_ITEM = SP_ITEM;
+    public static final float SP_LABEL = SP_FIELD_LABEL;
 
     // =====================================================================
-    // 2. Corner Radius Scale (in DP)
+    // 2. Corner Radius & Layout Geometry Scale (in DP)
     // =====================================================================
 
     /** Modal containers: BottomSheet top corners, AcidDialog, Floating Agent drawer. */
     public static final float RADIUS_SHEET = 16f;
-    /** Grouped cards, context menus & hero blocks. */
+    /** Grouped cards, context menus, tab cards & hero blocks. */
     public static final float RADIUS_CARD = 12f;
     /** Interactive controls: list rows, input boxes, buttons, menu tiles. */
     public static final float RADIUS_CONTROL = 8f;
     /** Micro badges, inline chips & code blocks. */
     public static final float RADIUS_BADGE = 6f;
+    /** Full capsule pills: address bar, filter chips, chat input, indicator dots. */
+    public static final float RADIUS_PILL = 999f;
+
+    /** Standard content card horizontal/vertical padding (dp). */
+    public static final float CARD_PAD_H_DP = 14f;
+    public static final float CARD_PAD_V_DP = 12f;
+    public static final float HERO_PAD_DP = 16f;
+
+    /** Standard group row geometry used to derive divider indentation automatically. */
+    public static final float ROW_PAD_H_DP = 14f;
+    public static final float ROW_PAD_V_DP = 12f;
+    public static final float ROW_ICON_BOX_DP = 32f;
+    public static final float ROW_ICON_GAP_DP = 12f;
+    public static final float ROW_DIVIDER_INDENT_DP = ROW_PAD_H_DP + ROW_ICON_BOX_DP + ROW_ICON_GAP_DP;
 
     // =====================================================================
     // 3. Day / Light Palette
@@ -228,6 +253,28 @@ public final class AcidTheme {
     public static int pressedBg(boolean dark) { return dark ? DARK_ROW_PRESSED : LIGHT_ROW_PRESSED; }
     public static int overviewHeaderBg(boolean dark) { return dark ? DARK_MENU_ITEM_BG : LIGHT_MENU_ITEM_BG; }
     public static int rowPressed(boolean dark) { return dark ? DARK_ROW_PRESSED : LIGHT_ROW_PRESSED; }
+
+    public static int switchThumb(boolean dark, boolean checked) {
+        if (checked) return accent(dark);
+        return dark ? DARK_TEXT_SECONDARY : LIGHT_MUTED;
+    }
+
+    public static int switchTrack(boolean dark, boolean checked) {
+        if (checked) return softTint(accent(dark), dark ? 95 : 85);
+        return dark ? DARK_SEARCH_BORDER : LIGHT_ICON_DISABLED;
+    }
+
+    /**
+     * Computes high-contrast foreground text/icon color ({@code BLACK} or {@code WHITE})
+     * against any solid fill color using perceived luminance.
+     */
+    public static int onColor(int fillColor) {
+        int r = Color.red(fillColor);
+        int g = Color.green(fillColor);
+        int b = Color.blue(fillColor);
+        int yiq = (r * 299 + g * 587 + b * 114) / 1000;
+        return yiq >= 145 ? Color.BLACK : Color.WHITE;
+    }
 
     /** Translucent tint background for badges and soft buttons (alpha ~12%). */
     public static int softTint(int color, int alpha) {
