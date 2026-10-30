@@ -54,6 +54,9 @@ public final class TestRunner {
         run("History full unconstrained retention, timestamps & history.json sync", new TestCase() {
             @Override public void execute() throws Exception { testHistoryFullRetentionAndSafety(); }
         });
+        run("SkillManager discovery, Prompt catalog & custom homepage priority", new TestCase() {
+            @Override public void execute() throws Exception { testSkillsAndCustomHomepage(); }
+        });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
@@ -501,6 +504,76 @@ public final class TestRunner {
         historyFile.delete();
         bookmarksFile.delete();
         settingsFile.delete();
+        tmpDir.delete();
+    }
+
+    private static void testSkillsAndCustomHomepage() throws Exception {
+        File tmpDir = new File("/tmp/acid_test_skills_" + System.currentTimeMillis());
+        tmpDir.mkdirs();
+
+        File skillsDir = new File(tmpDir, "skills");
+        skillsDir.mkdirs();
+        File homepageDir = new File(tmpDir, "homepage");
+        homepageDir.mkdirs();
+
+        File settingsFile = new File(tmpDir, "settings.json");
+        File bookmarksFile = new File(tmpDir, "bookmarks.json");
+        File historyFile = new File(tmpDir, "history.json");
+        InMemoryPrefs primary = new InMemoryPrefs();
+        InMemoryPrefs legacy = new InMemoryPrefs();
+
+        BrowserDataStore store = new BrowserDataStore(primary, legacy, settingsFile, bookmarksFile, historyFile);
+        store.setWorkspaceDir(tmpDir);
+
+        // 1. Check builtin skill detection
+        assertTrue(SkillManager.isBuiltin("homepage_dev.md"), "homepage_dev.md recognized as builtin");
+        assertTrue(SkillManager.isBuiltin("userscript_dev.md"), "userscript_dev.md recognized as builtin");
+        assertTrue(!SkillManager.isBuiltin("third_party.md"), "third_party.md recognized as custom");
+
+        // 2. Custom homepage priority
+        // Initially index.html does not exist in workspace homepage/
+        assertEquals(BrowserController.HOME_URL, store.getEffectiveHomeUrl(), "fallback to asset HOME_URL when workspace homepage does not exist");
+
+        // Create custom homepage/index.html in workspace
+        File customIndex = new File(homepageDir, "index.html");
+        FileOutputStream fos = new FileOutputStream(customIndex);
+        fos.write("<!DOCTYPE html><html><body>Custom Home</body></html>".getBytes(StandardCharsets.UTF_8));
+        fos.close();
+
+        // Effective home url must now point directly to file://.../homepage/index.html
+        String effectiveUrl = store.getEffectiveHomeUrl();
+        assertTrue(effectiveUrl.startsWith("file://"), "effective url uses file protocol");
+        assertTrue(effectiveUrl.endsWith("homepage/index.html"), "effective url points to custom homepage/index.html");
+
+        // Test HOME_BLANK override
+        store.setHomeType(BrowserDataStore.HOME_BLANK);
+        assertEquals("about:blank", store.getEffectiveHomeUrl(), "HOME_BLANK returns about:blank");
+
+        // Test HOME_CUSTOM override
+        store.setHomeType(BrowserDataStore.HOME_CUSTOM);
+        store.setCustomHomeUrl("https://example.com");
+        assertEquals("https://example.com", store.getEffectiveHomeUrl(), "HOME_CUSTOM returns configured url");
+
+        // Reset to HOME_ACID (0)
+        store.setHomeType(BrowserDataStore.HOME_ACID);
+        assertEquals(effectiveUrl, store.getEffectiveHomeUrl(), "HOME_ACID returns custom workspace homepage");
+
+        // 3. Whitelist safety: clearWorkspaceTempFiles must NEVER delete homepage or skills directories
+        File tempScrape = new File(tmpDir, "scrape_temp.json");
+        tempScrape.createNewFile();
+        int cleaned = store.clearWorkspaceTempFiles(tmpDir);
+        assertEquals(1, Integer.valueOf(cleaned), "cleaned 1 temp file");
+        assertTrue(!tempScrape.exists(), "temp scrape file deleted");
+        assertTrue(customIndex.exists(), "homepage/index.html preserved by whitelist");
+        assertTrue(skillsDir.exists(), "skills directory preserved by whitelist");
+
+        // Cleanup
+        customIndex.delete();
+        homepageDir.delete();
+        skillsDir.delete();
+        settingsFile.delete();
+        bookmarksFile.delete();
+        historyFile.delete();
         tmpDir.delete();
     }
 }

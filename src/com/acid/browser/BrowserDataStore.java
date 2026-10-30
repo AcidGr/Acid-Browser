@@ -9,10 +9,14 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -118,6 +122,7 @@ public class BrowserDataStore {
     private File mSettingsJsonFile = null;
     private File mBookmarksJsonFile = null;
     private File mHistoryJsonFile = null;
+    private File mWorkspaceDir = null;
     private OnSettingsChangedListener mSettingsChangedListener = null;
     private OnBookmarksChangedListener mBookmarksChangedListener = null;
     private OnHistoryChangedListener mHistoryChangedListener = null;
@@ -164,13 +169,46 @@ public class BrowserDataStore {
 
     public void setWorkspaceDir(File workspaceDir) {
         if (workspaceDir != null) {
+            mWorkspaceDir = workspaceDir;
             mSettingsJsonFile = new File(workspaceDir, "settings.json");
             mBookmarksJsonFile = new File(workspaceDir, "bookmarks.json");
             mHistoryJsonFile = new File(workspaceDir, "history.json");
             syncSettingsJsonFile();
             syncBookmarksJsonFile();
             syncHistoryJsonFile();
+            syncDefaultHomepage();
             startWatchingSettingsFile();
+        }
+    }
+
+    public File getWorkspaceDir() {
+        return mWorkspaceDir;
+    }
+
+    public void syncDefaultHomepage() {
+        if (mWorkspaceDir == null || mContext == null) return;
+        try {
+            File homepageDir = new File(mWorkspaceDir, "homepage");
+            if (!homepageDir.exists()) {
+                homepageDir.mkdirs();
+            }
+            File targetIndex = new File(homepageDir, "index.html");
+            if (!targetIndex.exists() || targetIndex.length() == 0) {
+                InputStream is = mContext.getAssets().open("homepage/index.html");
+                BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = br.readLine()) != null) {
+                    sb.append(line).append("\n");
+                }
+                br.close();
+                OutputStreamWriter osw = new OutputStreamWriter(new FileOutputStream(targetIndex), StandardCharsets.UTF_8);
+                osw.write(sb.toString());
+                osw.flush();
+                osw.close();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to sync default homepage template to workspace", e);
         }
     }
 
@@ -585,6 +623,12 @@ public class BrowserDataStore {
                     custom = "https://" + custom;
                 }
                 return custom;
+            }
+        }
+        if (mWorkspaceDir != null) {
+            File customHome = new File(new File(mWorkspaceDir, "homepage"), "index.html");
+            if (customHome.exists() && customHome.isFile() && customHome.length() > 0) {
+                return "file://" + customHome.getAbsolutePath();
             }
         }
         return BrowserController.HOME_URL;
@@ -1045,7 +1089,11 @@ public class BrowserDataStore {
 
     public void recordHistory(String url, String title, boolean incognitoMode) {
         if (incognitoMode) return;
-        if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)) return;
+        if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)
+            || url.contains("/acid_workspace/homepage/index.html")
+            || "acid://home".equalsIgnoreCase(url) || "about:home".equalsIgnoreCase(url)) {
+            return;
+        }
         SharedPreferences prefs = prefs();
         String raw = prefs.getString(PREF_HISTORY, "[]");
         JSONArray next = new JSONArray();

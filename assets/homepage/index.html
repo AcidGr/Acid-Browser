@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <title>Acid</title>
+    <style>
+        :root {
+            --bg-gradient: linear-gradient(180deg, #F8FAFC 0%, #EEF2F6 100%);
+            --text-main: #1E293B;
+            --text-muted: #64748B;
+            --search-bg: #FFFFFF;
+            --search-border: rgba(226, 232, 240, 0.9);
+            --search-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06), 0 2px 6px -1px rgba(15, 23, 42, 0.04);
+            --card-bg: rgba(255, 255, 255, 0.8);
+            --card-border: rgba(226, 232, 240, 0.8);
+            --card-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+            --tile-text: #334155;
+            --badge-bg: #FFFFFF;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-gradient: linear-gradient(180deg, #090D14 0%, #0F172A 100%);
+                --text-main: #F1F5F9;
+                --text-muted: #94A3B8;
+                --search-bg: rgba(30, 41, 59, 0.7);
+                --search-border: rgba(51, 65, 85, 0.8);
+                --search-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.4);
+                --card-bg: rgba(30, 41, 59, 0.6);
+                --card-border: rgba(51, 65, 85, 0.6);
+                --card-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+                --tile-text: #E2E8F0;
+                --badge-bg: #1E293B;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            min-height: 100vh;
+            background: var(--bg-gradient);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            padding: calc(env(safe-area-inset-top, 20px) + 28px) 16px calc(env(safe-area-inset-bottom, 20px) + 24px);
+            user-select: none;
+            overflow-x: hidden;
+            transition: background 0.3s ease;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 580px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* 头部时钟与日期区域 */
+        .header-widget {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 24px;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        /* 三色经典平滑渐变时钟：蓝 -> 桃红 -> 暖黄 */
+        .clock-display {
+            font-size: 56px;
+            font-weight: 900;
+            line-height: 1.05;
+            letter-spacing: -2px;
+            background: linear-gradient(115deg, #2563EB 0%, #3B82F6 30%, #F43F5E 65%, #F59E0B 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(0 4px 14px rgba(244, 63, 94, 0.18));
+            font-feature-settings: "tnum";
+            font-variant-numeric: tabular-nums;
+            margin-bottom: 7px;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .clock-display {
+                background: linear-gradient(115deg, #60A5FA 0%, #F472B6 60%, #FBBF24 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                filter: drop-shadow(0 4px 16px rgba(244, 114, 182, 0.28));
+            }
+        }
+
+        /* 三色流光微边框日期胶囊 */
+        .date-capsule {
+            font-size: 12px;
+            font-weight: 700;
+            color: #1E40AF;
+            padding: 3px 14px;
+            border-radius: 20px;
+            background: linear-gradient(var(--badge-bg), var(--badge-bg)) padding-box,
+                        linear-gradient(90deg, #3B82F6, #F43F5E, #F59E0B) border-box;
+            border: 1.5px solid transparent;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.12);
+            margin-bottom: 12px;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .date-capsule {
+                color: #93C5FD;
+            }
+        }
+
+        /* 每日一言/语录组件 */
+        .quote-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            max-width: 90vw;
+            cursor: pointer;
+            padding: 6px 14px;
+            border-radius: 12px;
+            transition: transform 0.15s ease, opacity 0.15s ease;
+        }
+        .quote-box:active {
+            transform: scale(0.97);
+            opacity: 0.75;
+        }
+        .quote-text {
+            font-size: 13.5px;
+            line-height: 1.55;
+            color: var(--text-main);
+            text-align: center;
+            font-weight: 500;
+            letter-spacing: 0.3px;
+        }
+        .quote-from {
+            font-size: 11px;
+            font-weight: 600;
+            margin-top: 4px;
+            background: linear-gradient(90deg, #F43F5E, #F59E0B);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            align-self: center;
+        }
+
+        /* 搜索栏 */
+        .search-container {
+            width: 100%;
+            margin-bottom: 28px;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        .search-form {
+            position: relative;
+            display: flex;
+            align-items: center;
+            background: var(--search-bg);
+            border: 1.5px solid var(--search-border);
+            border-radius: 24px;
+            box-shadow: var(--search-shadow);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            padding: 4px 6px 4px 16px;
+            transition: all 0.2s ease;
+        }
+
+        .search-form:focus-within {
+            border-color: #3B82F6;
+            box-shadow: 0 6px 24px -2px rgba(59, 130, 246, 0.25);
+        }
+
+        .search-icon {
+            width: 18px;
+            height: 18px;
+            stroke: var(--text-muted);
+            stroke-width: 2.2;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            margin-right: 10px;
+            flex-shrink: 0;
+        }
+
+        .search-input {
+            width: 100%;
+            height: 42px;
+            border: none;
+            outline: none;
+            background: transparent;
+            color: var(--text-main);
+            font-size: 14.5px;
+            font-weight: 500;
+        }
+
+        .search-input::placeholder {
+            color: var(--text-muted);
+            opacity: 0.7;
+        }
+
+        .search-btn {
+            width: 38px;
+            height: 38px;
+            border: none;
+            background: linear-gradient(135deg, #3B82F6, #2563EB);
+            color: #FFFFFF;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: transform 0.15s ease, opacity 0.15s ease;
+        }
+
+        .search-btn:active {
+            transform: scale(0.92);
+        }
+
+        .search-btn svg {
+            width: 16px;
+            height: 16px;
+            stroke: currentColor;
+            stroke-width: 2.5;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        /* 书签/快捷应用磁贴网格 */
+        .bookmark-section {
+            width: 100%;
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        .bookmark-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px 10px;
+            justify-items: center;
+        }
+
+        @media (min-width: 480px) {
+            .bookmark-grid {
+                grid-template-columns: repeat(5, 1fr);
+            }
+        }
+
+        .bookmark-tile {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-decoration: none;
+            width: 68px;
+            transition: transform 0.15s ease;
+        }
+
+        .bookmark-tile:active {
+            transform: scale(0.92);
+        }
+
+        .tile-icon-wrapper {
+            width: 50px;
+            height: 50px;
+            border-radius: 16px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            box-shadow: var(--card-shadow);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .tile-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #FFFFFF;
+            font-size: 15px;
+            font-weight: 700;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+        }
+
+        .tile-title {
+            font-size: 11.5px;
+            color: var(--tile-text);
+            font-weight: 500;
+            width: 100%;
+            text-align: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 头部大时钟、日期与一言卡片 -->
+        <div class="header-widget">
+            <div class="clock-display" id="clock">--:--</div>
+            <div class="date-capsule" id="date">--月--日 周-</div>
+            <div class="quote-box" id="quote-box" onclick="loadHitokoto()" title="点击换一句">
+                <div class="quote-text" id="quote-text">纵使身在何方，我亦心向璀璨。</div>
+                <div class="quote-from" id="quote-from">——《Acid Browser》</div>
+            </div>
+        </div>
+
+        <!-- 原生集成搜索框 (提交至 acid://search) -->
+        <div class="search-container">
+            <form class="search-form" action="acid://search" method="get" onsubmit="return handleSearch(event)">
+                <svg class="search-icon" viewBox="0 0 24 24">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" class="search-input" id="search-input" name="q" placeholder="搜索或输入网址..." autocomplete="off" autocapitalize="none">
+                <button type="submit" class="search-btn" aria-label="搜索">
+                    <svg viewBox="0 0 24 24">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                        <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
+                </button>
+            </form>
+        </div>
+
+        <!-- 常用书签与快捷方式网格 -->
+        <div class="bookmark-section">
+            <div class="bookmark-grid" id="bookmark-grid">
+                <!-- 动态从 bookmarks.json 加载或展示精选默认项 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 1. 实时时钟与星期更新
+        function updateClock() {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2, '0');
+            const m = String(now.getMinutes()).padStart(2, '0');
+            const clockEl = document.getElementById('clock');
+            if (clockEl) clockEl.textContent = h + ':' + m;
+
+            const month = now.getMonth() + 1;
+            const date = now.getDate();
+            const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+            const dateEl = document.getElementById('date');
+            if (dateEl) dateEl.textContent = month + '月' + date + '日 ' + days[now.getDay()];
+        }
+        updateClock();
+        setInterval(updateClock, 1000);
+
+        // 2. 每日一言异步加载与切换 (Hitokoto API)
+        function loadHitokoto() {
+            const textEl = document.getElementById('quote-text');
+            const fromEl = document.getElementById('quote-from');
+            fetch('https://v1.hitokoto.cn/?c=a&c=b&c=c&c=d&max_length=30')
+                .then(res => res.json())
+                .then(data => {
+                    if (data && data.hitokoto) {
+                        textEl.textContent = '“ ' + data.hitokoto + ' ”';
+                        let from = data.from_who ? (data.from_who + ' · ') : '';
+                        from += data.from ? ('《' + data.from + '》') : '';
+                        fromEl.textContent = from ? ('—— ' + from) : '';
+                    }
+                })
+                .catch(() => {
+                    // 网络不可用时静默保持默认名言
+                });
+        }
+        loadHitokoto();
+
+        // 3. 搜索表单处理
+        function handleSearch(e) {
+            e.preventDefault();
+            const input = document.getElementById('search-input');
+            const q = input.value.trim();
+            if (!q) return false;
+            window.location.href = 'acid://search?q=' + encodeURIComponent(q);
+            return false;
+        }
+
+        // 4. 书签自适应加载
+        const DEFAULT_BOOKMARKS = [
+            { title: 'Google', url: 'https://www.google.com' },
+            { title: 'GitHub', url: 'https://github.com/trending' },
+            { title: '知乎', url: 'https://www.zhihu.com/billboard' },
+            { title: 'Bilibili', url: 'https://www.bilibili.com' },
+            { title: 'V2EX', url: 'https://www.v2ex.com' },
+            { title: 'HackerNews', url: 'https://news.ycombinator.com' },
+            { title: '百度', url: 'https://www.baidu.com' },
+            { title: 'Acid 靶场', url: 'file:///android_asset/home.html' }
+        ];
+
+        const PALETTE = [
+            '#3B82F6', '#10B981', '#F59E0B', '#EF4444',
+            '#8B5CF6', '#EC4899', '#06B6D4', '#6366F1'
+        ];
+
+        function getDeterministicColor(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return PALETTE[Math.abs(hash) % PALETTE.length];
+        }
+
+        function renderBookmarks(list) {
+            const grid = document.getElementById('bookmark-grid');
+            if (!grid) return;
+            grid.innerHTML = '';
+            list.forEach(item => {
+                if (!item.url || !item.title) return;
+                const tile = document.createElement('a');
+                tile.className = 'bookmark-tile';
+                tile.href = item.url;
+                tile.title = item.title;
+
+                const initial = (item.title.trim()[0] || 'A').toUpperCase();
+                const color = getDeterministicColor(item.title);
+
+                tile.innerHTML = `
+                    <div class="tile-icon-wrapper">
+                        <div class="tile-avatar" style="background:${color}">
+                            ${initial}
+                        </div>
+                    </div>
+                    <div class="tile-title">${item.title}</div>
+                `;
+                grid.appendChild(tile);
+            });
+        }
+
+        // 优先读取工作区的 bookmarks.json，若无则使用默认书签
+        fetch('../bookmarks.json')
+            .then(res => res.json())
+            .then(data => {
+                if (Array.isArray(data) && data.length > 0) {
+                    renderBookmarks(data);
+                } else {
+                    renderBookmarks(DEFAULT_BOOKMARKS);
+                }
+            })
+            .catch(() => {
+                renderBookmarks(DEFAULT_BOOKMARKS);
+            });
+    </script>
+</body>
+</html>

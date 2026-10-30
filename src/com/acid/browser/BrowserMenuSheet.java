@@ -47,6 +47,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         void onOpenMcp();
         void onToggleMcpServer();
         void onOpenUserscripts();
+        void onOpenSkills();
         void onOpenAdBlock();
         void onOpenSettings();
     }
@@ -460,6 +461,9 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         }));
         list.add(TileSpec.route(AcidIcons.ICON_FILE, "脚本管理", new Runnable() {
             @Override public void run() { if (listener != null) listener.onOpenUserscripts(); }
+        }));
+        list.add(TileSpec.route(AcidIcons.ICON_AGENT, "技能管理", new Runnable() {
+            @Override public void run() { if (listener != null) listener.onOpenSkills(); }
         }));
         list.add(TileSpec.routeWithStatus(
             AcidIcons.ICON_TERMINAL, "MCP", mMcpState,
