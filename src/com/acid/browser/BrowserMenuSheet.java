@@ -671,6 +671,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
     }
 
     private void refreshTileVisuals() {
+        if (mDarkState == null) return;
         mDarkState.syncExternal(mIsDarkMode);
         for (int i = 0; i < mSpecs.size() && i < mTileViews.size(); i++) {
             refreshSingleTile(mSpecs.get(i), mTileViews.get(i));
