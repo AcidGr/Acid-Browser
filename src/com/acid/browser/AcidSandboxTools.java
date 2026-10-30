@@ -619,6 +619,18 @@ public class AcidSandboxTools {
                 AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
                 mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
             }
+            if ("settings.json".equals(f.getName())) {
+                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadFromJsonFile();
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (reloaded) {
+                            mController.applySettingsHotReload();
+                            mController.emitLog("[SETTINGS] Live hot-reloaded browser settings from settings.json");
+                        }
+                    }
+                });
+            }
             return "Successfully wrote " + content.length() + " characters to " + f.getAbsolutePath() +
                 " (Accessible in browser via: file://" + f.getAbsolutePath() + ")";
         } catch (Exception e) {
@@ -685,6 +697,18 @@ public class AcidSandboxTools {
             if (isInsideAdBlock(f)) {
                 AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
                 mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
+            }
+            if ("settings.json".equals(f.getName())) {
+                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadFromJsonFile();
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (reloaded) {
+                            mController.applySettingsHotReload();
+                            mController.emitLog("[SETTINGS] Live hot-reloaded browser settings from settings.json");
+                        }
+                    }
+                });
             }
             return "Successfully edited " + f.getAbsolutePath();
         } catch (Exception e) {

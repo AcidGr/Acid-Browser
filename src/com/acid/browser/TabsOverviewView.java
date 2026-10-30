@@ -83,7 +83,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
             @Override
             public void onClick(View v) {
                 if (mController != null) {
-                    mController.createNewTab(BrowserController.HOME_URL, true);
+                    mController.createNewTab(mController.getHomeUrl(), true);
                 }
                 close();
             }

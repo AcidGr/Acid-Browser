@@ -33,6 +33,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -131,8 +132,20 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         View root = buildContentView();
         setContentView(root);
 
-        mController = new BrowserController(this, mWebViewContainer, mOverlayView, this, mIsDarkMode);
-        mController.setDataStore(mDataStore);
+        mController = new BrowserController(this, mWebViewContainer, mOverlayView, this, mDataStore, mIsDarkMode);
+        mDataStore.setOnSettingsChangedListener(new BrowserDataStore.OnSettingsChangedListener() {
+            @Override
+            public void onSettingsChanged() {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (mController != null) {
+                            mController.applySettingsHotReload();
+                        }
+                    }
+                });
+            }
+        });
 
         if (Build.VERSION.SDK_INT >= 23) {
             if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -444,7 +457,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
             @Override
             public void onHomeUrlChanged(int type, String customUrl) {
-                // Preferences saved in mDataStore
+                if (mController != null) {
+                    mController.loadUrl(mController.getHomeUrl());
+                }
             }
 
             @Override
@@ -838,7 +853,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (mTabsOverview != null && mTabsOverview.isShowing()) {
                     mTabsOverview.close();
                 }
-                mController.loadUrl(BrowserController.HOME_URL);
+                mController.loadUrl(mController.getHomeUrl());
             }
         });
         bar.addView(mBtnHome, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
@@ -1886,11 +1901,46 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         super.onBackPressed();
     }
 
+    @Override
+    public void onSettingsReloaded() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                updateMenuSheetCards();
+                if (mSettingsSheet != null) {
+                    mSettingsSheet.refresh();
+                }
+            }
+        });
+    }
+
+    private void deleteDirRecursively(File dir) {
+        if (dir == null || !dir.exists()) return;
+        if (dir.isDirectory()) {
+            File[] children = dir.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteDirRecursively(child);
+                }
+            }
+        }
+        dir.delete();
+    }
+
     private void clearBrowsingData(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage) {
         int count = 0;
         if (clearCache) {
             if (mController != null) {
                 mController.clearAllCache();
+            }
+            try {
+                deleteDirRecursively(getCacheDir());
+                if (Build.VERSION.SDK_INT >= 21) {
+                    File codeCache = getCodeCacheDir();
+                    if (codeCache != null) deleteDirRecursively(codeCache);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to clear disk cache", e);
             }
             count++;
         }
@@ -1907,6 +1957,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             if (mDataStore != null) {
                 mDataStore.clearHistory();
                 count++;
+            }
+            if (mController != null) {
+                mController.clearAllHistory();
             }
         }
         if (clearStorage) {
