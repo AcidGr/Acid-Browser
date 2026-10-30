@@ -285,12 +285,12 @@ public class AdBlockManager {
               ", Unique domains: " + mBlockedDomains.size() + ")");
     }
 
-    private boolean parseRuleLine(String rawLine,
-                                  Set<String> blocked,
-                                  Set<String> whiteList,
-                                  List<String> paths,
-                                  Map<String, List<String>> domainHiding,
-                                  List<String> globalHiding) {
+    static boolean parseRuleLine(String rawLine,
+                                 Set<String> blocked,
+                                 Set<String> whiteList,
+                                 List<String> paths,
+                                 Map<String, List<String>> domainHiding,
+                                 List<String> globalHiding) {
         if (rawLine == null) return false;
         String line = rawLine.trim();
         if (line.isEmpty() || line.startsWith("!") || line.startsWith("[")) {
@@ -373,19 +373,25 @@ public class AdBlockManager {
         return false;
     }
 
+    static boolean matchesDomainHierarchy(String host, Set<String> domainSet) {
+        if (host == null || domainSet == null || domainSet.isEmpty()) return false;
+        String cur = host.toLowerCase();
+        while (cur != null && !cur.isEmpty()) {
+            if (domainSet.contains(cur)) return true;
+            int dot = cur.indexOf('.');
+            if (dot < 0 || dot == cur.length() - 1) break;
+            cur = cur.substring(dot + 1);
+        }
+        return false;
+    }
+
     public boolean isWhitelisted(String host) {
         if (host == null) return false;
         String cur = host.toLowerCase();
         if (cur.contains("accounts.google.") || cur.contains("myaccount.google.") || cur.contains("apis.google.com") || cur.contains("gstatic.com") || cur.contains("googleusercontent.com")) {
             return true;
         }
-        while (cur != null && !cur.isEmpty()) {
-            if (mWhiteListDomains.contains(cur)) return true;
-            int dot = cur.indexOf('.');
-            if (dot < 0 || dot == cur.length() - 1) break;
-            cur = cur.substring(dot + 1);
-        }
-        return false;
+        return matchesDomainHierarchy(cur, mWhiteListDomains);
     }
 
     public boolean isBlocked(Uri uri) {
@@ -399,14 +405,8 @@ public class AdBlockManager {
         }
 
         // Check domain hierarchy: e.g. pos.baidu.com -> baidu.com
-        String cur = host;
-        while (cur != null && !cur.isEmpty()) {
-            if (mBlockedDomains.contains(cur)) {
-                return true;
-            }
-            int dot = cur.indexOf('.');
-            if (dot < 0 || dot == cur.length() - 1) break;
-            cur = cur.substring(dot + 1);
+        if (matchesDomainHierarchy(host, mBlockedDomains)) {
+            return true;
         }
 
         // Check URL path patterns
@@ -527,7 +527,7 @@ public class AdBlockManager {
                     conn.setConnectTimeout(15000);
                     conn.setReadTimeout(20000);
                     conn.setInstanceFollowRedirects(true);
-                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.4.4 AdBlockEngine");
+                    conn.setRequestProperty("User-Agent", "AcidBrowser/" + BuildInfo.VERSION_NAME + " AdBlockEngine");
 
                     int responseCode = conn.getResponseCode();
                     if (responseCode != HttpURLConnection.HTTP_OK) {
