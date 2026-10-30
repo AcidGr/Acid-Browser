@@ -1630,7 +1630,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     java.net.HttpURLConnection conn = (java.net.HttpURLConnection) u.openConnection();
                     conn.setConnectTimeout(8000);
                     conn.setReadTimeout(12000);
-                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.3.9");
+                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.4.3");
                     if (conn.getResponseCode() == 200) {
                         java.io.InputStream in = conn.getInputStream();
                         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
