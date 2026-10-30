@@ -599,15 +599,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         s.setAllowContentAccess(true);
         s.setAllowFileAccessFromFileURLs(true);
         s.setAllowUniversalAccessFromFileURLs(true);
+        s.setJavaScriptCanOpenWindowsAutomatically(true);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setSupportZoom(true);
         s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false);
 
+        CookieManager cm = CookieManager.getInstance();
+        cm.setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= 21) {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true);
+            cm.setAcceptThirdPartyCookies(wv, true);
         }
 
         applyIdentityToSettings(wv, mIsDesktopMode);
@@ -748,7 +751,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     view, url, UserscriptMeta.RUN_AT_START);
                 AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
                 if (mDataStore != null && mDataStore.isDoNotTrackEnabled()) {
-                    view.evaluateJavascript("try{Object.defineProperty(navigator,'doNotTrack',{get:function(){return'1';}});}catch(e){}", null);
+                    view.evaluateJavascript("try{Object.defineProperty(navigator,'doNotTrack',{get:function(){return'1';},configurable:true,enumerable:true});}catch(e){}", null);
                 }
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(url, tab.title);
@@ -763,6 +766,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 mUserscriptManager.injectRuntimeAndUserscripts(
                     view, url, UserscriptMeta.RUN_AT_END);
                 AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
+
+                if (Build.VERSION.SDK_INT >= 21) {
+                    CookieManager.getInstance().flush();
+                }
 
                 if (mDarkMode) {
                     injectDarkModeCss(view);
@@ -1018,13 +1025,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void loadUrl(String url) {
         final String finalUrl = normalizeUrl(url);
         if (mActiveTab != null) {
-            if (mDataStore != null && mDataStore.isDoNotTrackEnabled()) {
-                java.util.Map<String, String> headers = new java.util.HashMap<String, String>();
-                headers.put("DNT", "1");
-                mActiveTab.webView.loadUrl(finalUrl, headers);
-            } else {
-                mActiveTab.webView.loadUrl(finalUrl);
-            }
+            mActiveTab.webView.loadUrl(finalUrl);
         }
     }
 
