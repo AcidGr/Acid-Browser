@@ -39,6 +39,9 @@ public final class TestRunner {
         run("AcidSettings registry, BoolState reactivity & prompt schema", new TestCase() {
             @Override public void execute() throws Exception { testAcidSettingsReactivity(); }
         });
+        run("AcidTheme tokens, onColor contrast & AcidAsync cancellation", new TestCase() {
+            @Override public void execute() throws Exception { testThemeAndAsync(); }
+        });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
@@ -267,5 +270,35 @@ public final class TestRunner {
         assertTrue(!runtime.get(), "syncExternal updates state");
         assertEquals(1, Integer.valueOf(hookCalls[0]), "syncExternal bypasses hook");
         tmpFile.delete();
+    }
+
+    private static void testThemeAndAsync() throws Exception {
+        // Distinct typography hierarchy (no fake 0.5sp H3 vs H4 gap, Dialog Title < Sheet Title)
+        assertTrue(AcidTheme.SP_SHEET_TITLE > AcidTheme.SP_DIALOG_TITLE, "Sheet title > Dialog title");
+        assertTrue(AcidTheme.SP_HERO >= AcidTheme.SP_ITEM + 1.0f, "Hero headline >= 1sp above Item title");
+        assertTrue(AcidTheme.SP_FIELD_LABEL > AcidTheme.SP_OVERLINE, "Field label distinct from section overline");
+        assertEquals(Float.valueOf(58f), Float.valueOf(AcidTheme.ROW_DIVIDER_INDENT_DP), "Derived row divider indent");
+
+        // Contrast helper onColor
+        assertEquals(Integer.valueOf(android.graphics.Color.BLACK), Integer.valueOf(AcidTheme.onColor(AcidTheme.DARK_ACCENT)), "Black text on neon green");
+        assertEquals(Integer.valueOf(android.graphics.Color.WHITE), Integer.valueOf(AcidTheme.onColor(AcidTheme.LIGHT_ACCENT)), "White text on light emerald");
+        assertEquals(Integer.valueOf(android.graphics.Color.WHITE), Integer.valueOf(AcidTheme.onColor(AcidTheme.COLOR_BLUE)), "White text on sky blue");
+        assertEquals(Integer.valueOf(android.graphics.Color.WHITE), Integer.valueOf(AcidTheme.onColor(AcidTheme.COLOR_RED)), "White text on danger red");
+
+        // AcidAsync cancellation prevents callback execution
+        AcidAsync.Handle cancelled = AcidAsync.run(new AcidAsync.Task<String>() {
+            @Override public String execute() throws Exception {
+                Thread.sleep(80);
+                return "done";
+            }
+        }, new AcidAsync.Callback<String>() {
+            @Override public void onSuccess(String result) {
+                throw new AssertionError("Cancelled task must not invoke onSuccess");
+            }
+            @Override public void onError(Exception error) {}
+        });
+        cancelled.cancel();
+        assertTrue(cancelled.isCancelled(), "handle marked cancelled");
+        Thread.sleep(110);
     }
 }

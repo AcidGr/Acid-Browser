@@ -529,59 +529,24 @@ public class AdBlockManager {
     }
 
     public void downloadSubscription(final String urlStr, final AdBlockCallback callback) {
-        new Thread(new Runnable() {
+        setSubscriptionUrl(urlStr);
+        AcidAsync.run(new AcidAsync.Task<Integer>() {
             @Override
-            public void run() {
-                try {
-                    setSubscriptionUrl(urlStr);
-                    URL url = new URL(urlStr);
-                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setConnectTimeout(15000);
-                    conn.setReadTimeout(20000);
-                    conn.setInstanceFollowRedirects(true);
-                    conn.setRequestProperty("User-Agent", "AcidBrowser/" + BuildInfo.VERSION_NAME + " AdBlockEngine");
-
-                    int responseCode = conn.getResponseCode();
-                    if (responseCode != HttpURLConnection.HTTP_OK) {
-                        final String errMsg = "HTTP 错误: " + responseCode;
-                        mMainHandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                if (callback != null) callback.onError(errMsg);
-                            }
-                        });
-                        return;
-                    }
-
-                    InputStream in = conn.getInputStream();
-                    FileOutputStream out = new FileOutputStream(mSubscriptionFile);
-                    byte[] buf = new byte[8192];
-                    int len;
-                    while ((len = in.read(buf)) > 0) {
-                        out.write(buf, 0, len);
-                    }
-                    in.close();
-                    out.close();
-                    conn.disconnect();
-
-                    loadAllRulesSync();
-
-                    final int total = mBuiltinCount + mSubCount + mCustomCount;
-                    mMainHandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (callback != null) callback.onSuccess(total);
-                        }
-                    });
-                } catch (final Exception e) {
-                    mMainHandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (callback != null) callback.onError("下载失败: " + e.getMessage());
-                        }
-                    });
-                }
+            public Integer execute() throws Exception {
+                AcidHttp.downloadToFile(urlStr, mSubscriptionFile, 15000, 20000, AcidHttp.DEFAULT_MAX_BYTES);
+                loadAllRulesSync();
+                return Integer.valueOf(mBuiltinCount + mSubCount + mCustomCount);
             }
-        }).start();
+        }, new AcidAsync.Callback<Integer>() {
+            @Override
+            public void onSuccess(Integer total) {
+                if (callback != null) callback.onSuccess(total.intValue());
+            }
+
+            @Override
+            public void onError(Exception e) {
+                if (callback != null) callback.onError("下载失败: " + e.getMessage());
+            }
+        });
     }
 }

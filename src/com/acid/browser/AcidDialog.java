@@ -192,12 +192,12 @@ public final class AcidDialog {
         int padBot = AcidTheme.dp(mContext, 16);
         card.setPadding(padH, padTop, padH, padBot);
 
-        // 1. Header Title (H1 = 16sp Bold)
+        // 1. Header Title (Dialog Title = 15sp Bold)
         if (!TextUtils.isEmpty(mTitle)) {
             TextView tvTitle = new TextView(mContext);
             tvTitle.setText(mTitle);
             tvTitle.setTextColor(AcidTheme.text(mDark));
-            tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H1_SHEET);
+            tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_DIALOG_TITLE);
             tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
             tvTitle.setMaxLines(2);
             tvTitle.setEllipsize(TextUtils.TruncateAt.END);
@@ -458,7 +458,7 @@ public final class AcidDialog {
         box.setLayoutParams(bLp);
 
         final AcidIcons.SvgIconView checkIcon = new AcidIcons.SvgIconView(
-            ctx, AcidIcons.ICON_CHECK, dark ? Color.BLACK : Color.WHITE, 13
+            ctx, AcidIcons.ICON_CHECK, AcidTheme.onColor(AcidTheme.accent(dark)), 13
         );
         box.addView(checkIcon);
         row.addView(box);
@@ -477,7 +477,7 @@ public final class AcidDialog {
                 boolean checked = state[0];
                 int accent = AcidTheme.accent(dark);
                 if (checked) {
-                    box.setBackground(AcidTheme.pillBg(ctx, accent, 0, 5));
+                    box.setBackground(AcidTheme.pillBg(ctx, accent, 0, AcidTheme.RADIUS_BADGE));
                     checkIcon.setVisibility(View.VISIBLE);
                     row.setBackground(AcidTheme.interactiveBg(
                         ctx,
@@ -488,7 +488,7 @@ public final class AcidDialog {
                     ));
                 } else {
                     box.setBackground(AcidTheme.pillBg(
-                        ctx, AcidTheme.formInputBg(dark), AcidTheme.muted(dark), 5
+                        ctx, AcidTheme.formInputBg(dark), AcidTheme.muted(dark), AcidTheme.RADIUS_BADGE
                     ));
                     checkIcon.setVisibility(View.INVISIBLE);
                     row.setBackground(AcidTheme.interactiveBg(
