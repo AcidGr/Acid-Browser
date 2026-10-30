@@ -363,6 +363,9 @@ public class AdBlockManager {
     public boolean isWhitelisted(String host) {
         if (host == null) return false;
         String cur = host.toLowerCase();
+        if (cur.contains("accounts.google.") || cur.contains("myaccount.google.") || cur.contains("apis.google.com") || cur.contains("gstatic.com") || cur.contains("googleusercontent.com")) {
+            return true;
+        }
         while (cur != null && !cur.isEmpty()) {
             if (mWhiteListDomains.contains(cur)) return true;
             int dot = cur.indexOf('.');

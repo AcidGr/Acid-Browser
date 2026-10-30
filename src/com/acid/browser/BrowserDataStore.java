@@ -453,7 +453,7 @@ public class BrowserDataStore {
 
     public boolean isDoNotTrackEnabled() {
         SharedPreferences prefs = mContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
-        return prefs.getBoolean(PREF_DO_NOT_TRACK, true);
+        return prefs.getBoolean(PREF_DO_NOT_TRACK, false);
     }
 
     public void setDoNotTrackEnabled(boolean enabled) {
