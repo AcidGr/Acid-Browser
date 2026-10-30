@@ -13,7 +13,11 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -46,118 +50,223 @@ public class AcidSandboxTools {
         return mWorkspaceDir;
     }
 
+    // =========================================================================
+    // Declarative AgentTool Registry (Single Source of Truth for Schema & Dispatch)
+    // =========================================================================
+
+    public interface AgentTool {
+        String name();
+        JSONObject buildOpenAiSchema() throws Exception;
+        ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) throws Exception;
+    }
+
+    private static final List<AgentTool> TOOL_LIST = new ArrayList<AgentTool>();
+    private static final Map<String, AgentTool> TOOL_MAP = new LinkedHashMap<String, AgentTool>();
+
+    public static synchronized void registerTool(AgentTool tool) {
+        if (tool == null || tool.name() == null) return;
+        TOOL_MAP.put(tool.name(), tool);
+        TOOL_LIST.clear();
+        TOOL_LIST.addAll(TOOL_MAP.values());
+    }
+
+    public static List<String> getRegisteredToolNames() {
+        return Collections.unmodifiableList(new ArrayList<String>(TOOL_MAP.keySet()));
+    }
+
+    static {
+        // 1. browser (Unified Closed-Loop Web Automation Tool)
+        registerTool(new AgentTool() {
+            @Override
+            public String name() {
+                return "browser";
+            }
+
+            @Override
+            public JSONObject buildOpenAiSchema() throws Exception {
+                JSONObject browserProps = new JSONObject();
+                browserProps.put("action", propEnum(
+                    "string",
+                    "Action to perform on the browser:\n" +
+                    "- 'observe': Inspect current webpage semantic tree ([e1..eN] handles) and text excerpt.\n" +
+                    "- 'navigate': Load URL in current tab (supports http/https or file:/// inside workspace).\n" +
+                    "- 'click': Tap element by 'ref' (e.g. 'e3'), visible text ('text', e.g. '消息'/'发送'), CSS selector ('selector'), or pixel coordinates ('x', 'y'). Includes auto-healing if the DOM re-rendered.\n" +
+                    "- 'fill': Fill text into input/textarea/contenteditable ('ref' or 'selector'). React/Vue safe. Optional 'submit'=true.\n" +
+                    "- 'select': Choose option in <select> dropdown 'ref' by value or visible label.\n" +
+                    "- 'scroll': Scroll viewport ('direction': 'down'|'up'|'top'|'bottom', 'amount': 0.8).\n" +
+                    "- 'wait': Wait for a specific condition ('condition': 'networkidle'|'selector'|'stable'|'text'|'gone'|'ms', optional 'selector', 'text', 'quiet_ms', 'ms', 'timeout_ms'). Returns a receipt {satisfied, timed_out, elapsed_ms, error_code?} followed by the latest page observation. Always check 'satisfied' before proceeding.\n" +
+                    "- 'eval': Evaluate JavaScript ('code') on current page and return {ok, result, result_type}. Accepts an expression, multiple statements (value of the last statement is returned automatically), or a function body with explicit 'return'. Supports async/await; Promises are awaited. Syntax errors return SYNTAX_ERROR without executing.\n" +
+                    "- 'set_mode': Switch browser identity ('mode': 'desktop' for 1280px PC view or 'mobile'), or toggle 'som' (true/false).\n" +
+                    "- 'tabs': Manage tabs ('tab_action': 'list'|'new'|'switch'|'close', optional 'tab_id', 'url').\n" +
+                    "- 'back': Navigate back in current tab history.\n" +
+                    "- 'reload': Reload current webpage.\n" +
+                    "- 'request_takeover': Pause automation loop and ask human user to manually handle login/CAPTCHA ('reason').",
+                    new String[]{
+                        "observe", "navigate", "click", "fill", "select",
+                        "scroll", "wait", "eval", "set_mode", "tabs", "back", "reload", "request_takeover"
+                    }
+                ));
+                browserProps.put("url", prop("string", "Target URL for 'navigate' or 'tabs' (new)."));
+                browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'fill', 'select', or container 'scroll'. Supports auto-healing if the DOM refreshed."));
+                browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', visible element text for semantic 'click' (e.g. '消息'/'发送'), or expected text for 'wait'."));
+                browserProps.put("selector", prop("string", "CSS selector for 'click', 'fill', or 'wait' (e.g. 'a[href*=\"/user/self\"]', 'input[name=\"q\"]')."));
+                browserProps.put("exact", prop("boolean", "Whether semantic text matching requires exact full equality (default false)."));
+                browserProps.put("condition", prop("string", "Wait condition for 'wait': 'stable' (DOM quiet), 'selector' (element exists), 'text' (text present), 'gone' (element/text disappeared), 'networkidle' (page loaded), 'ms' (fixed sleep)."));
+                browserProps.put("quiet_ms", prop("integer", "Quiet threshold in ms without DOM mutations for 'stable' wait (default 300)."));
+                browserProps.put("ms", prop("integer", "Sleep duration in milliseconds for 'wait' (condition='ms')."));
+                browserProps.put("timeout_ms", prop("integer", "Maximum wait timeout in milliseconds for 'wait' (default 5000)."));
+                browserProps.put("clear", prop("boolean", "Whether to clear existing input value before 'fill' (default true)."));
+                browserProps.put("submit", prop("boolean", "Whether to press Enter / submit form after 'fill' (default false)."));
+                browserProps.put("direction", prop("string", "Scroll direction for 'scroll': 'down', 'up', 'left', 'right', 'top', 'bottom'."));
+                browserProps.put("amount", prop("number", "Scroll viewport multiplier for 'scroll' (default 0.75)."));
+                browserProps.put("code", prop("string", "JavaScript code expression to evaluate for 'eval'. Async functions and Promises are automatically awaited and resolved."));
+                browserProps.put("mode", prop("string", "Browser identity mode for 'set_mode': 'desktop' (1280px PC) or 'mobile'."));
+                browserProps.put("som", prop("boolean", "Enable or disable Set-of-Marks visual boxes on webpage."));
+                browserProps.put("tab_action", prop("string", "Sub-action for 'tabs': 'list', 'new', 'switch', 'close'."));
+                browserProps.put("tab_id", prop("integer", "Target tab ID for 'tabs' switch/close."));
+                browserProps.put("x", prop("number", "Raw X coordinate in view pixels for coordinate 'click'."));
+                browserProps.put("y", prop("number", "Raw Y coordinate in view pixels for coordinate 'click'."));
+                browserProps.put("reason", prop("string", "Explanation shown to the human user when calling 'request_takeover'."));
+
+                return makeTool(
+                    "browser",
+                    "Control the built-in Acid WebView browser. Every state-changing action (navigate, click, fill, select, scroll, set_mode, back, reload) automatically returns the updated page observation snapshot so you can immediately decide the next step.",
+                    browserProps,
+                    new String[]{"action"}
+                );
+            }
+
+            @Override
+            public ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) throws Exception {
+                return host.executeBrowserTool(args);
+            }
+        });
+
+        // 2. read
+        registerTool(new AgentTool() {
+            @Override
+            public String name() {
+                return "read";
+            }
+
+            @Override
+            public JSONObject buildOpenAiSchema() throws Exception {
+                JSONObject readProps = new JSONObject();
+                readProps.put("file_path", prop("string", "Path to read (relative paths resolve inside the app sandbox workspace, e.g. 'notes.md' or 'userscripts/custom.user.js')."));
+                readProps.put("offset", prop("integer", "1-based starting line number (default 1)."));
+                readProps.put("limit", prop("integer", "Maximum number of lines to read (default 200)."));
+                return makeTool(
+                    "read",
+                    "Read a UTF-8 text file inside the sandbox workspace and return line-numbered content.",
+                    readProps,
+                    new String[]{"file_path"}
+                );
+            }
+
+            @Override
+            public ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) {
+                return new ToolExecResult(host.executeReadTool(args), false, null);
+            }
+        });
+
+        // 3. write
+        registerTool(new AgentTool() {
+            @Override
+            public String name() {
+                return "write";
+            }
+
+            @Override
+            public JSONObject buildOpenAiSchema() throws Exception {
+                JSONObject writeProps = new JSONObject();
+                writeProps.put("file_path", prop("string",
+                    "Path to write (relative to sandbox workspace). Writing to 'userscripts/<name>.user.js' "
+                    + "installs a browser userscript; the file MUST contain a complete ==UserScript== header "
+                    + "with at least @name and @match, otherwise the install is rejected."));
+                writeProps.put("content", prop("string", "Complete UTF-8 text content to write."));
+                return makeTool(
+                    "write",
+                    "Create or overwrite a UTF-8 text file in the sandbox workspace (e.g. HTML reports, JSON data, scripts). "
+                    + "Files written under 'userscripts/' are validated and installed as browser plugins that run on the "
+                    + "sites named by their @match header.",
+                    writeProps,
+                    new String[]{"file_path", "content"}
+                );
+            }
+
+            @Override
+            public ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) {
+                return new ToolExecResult(host.executeWriteTool(args, source), false, null);
+            }
+        });
+
+        // 4. edit
+        registerTool(new AgentTool() {
+            @Override
+            public String name() {
+                return "edit";
+            }
+
+            @Override
+            public JSONObject buildOpenAiSchema() throws Exception {
+                JSONObject editProps = new JSONObject();
+                editProps.put("file_path", prop("string", "Path to the existing text file inside the sandbox workspace."));
+                editProps.put("old_string", prop("string", "Exact literal text to search for and replace."));
+                editProps.put("new_string", prop("string", "Replacement text."));
+                editProps.put("replace_all", prop("boolean", "Whether to replace all occurrences (default false)."));
+                return makeTool(
+                    "edit",
+                    "Edit an existing UTF-8 text file by replacing literal text.",
+                    editProps,
+                    new String[]{"file_path", "old_string", "new_string"}
+                );
+            }
+
+            @Override
+            public ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) {
+                return new ToolExecResult(host.executeEditTool(args), false, null);
+            }
+        });
+
+        // 5. bash
+        registerTool(new AgentTool() {
+            @Override
+            public String name() {
+                return "bash";
+            }
+
+            @Override
+            public JSONObject buildOpenAiSchema() throws Exception {
+                JSONObject bashProps = new JSONObject();
+                bashProps.put("command", prop("string", "Shell command to execute via /system/bin/sh inside the sandbox workspace directory."));
+                bashProps.put("timeout_ms", prop("integer", "Timeout in milliseconds (default 20000)."));
+                return makeTool(
+                    "bash",
+                    "Execute a shell command (`sh -c`) with working directory set to the Acid sandbox workspace (`" +
+                    "/data/user/0/com.acid.browser/files/workspace`). Returns stdout, stderr, and exit code.",
+                    bashProps,
+                    new String[]{"command"}
+                );
+            }
+
+            @Override
+            public ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) {
+                return new ToolExecResult(host.executeBashTool(args), false, null);
+            }
+        });
+    }
+
     /**
-     * Builds the OpenAI-compatible `tools` JSON array for the 5 core tools.
+     * Builds the OpenAI-compatible {@code tools} JSON array from all registered {@link AgentTool}s.
      */
     public static JSONArray buildToolsSchema() {
         JSONArray tools = new JSONArray();
-        try {
-            // 1. browser (Unified Closed-Loop Web Automation Tool)
-            JSONObject browserProps = new JSONObject();
-            browserProps.put("action", propEnum(
-                "string",
-                "Action to perform on the browser:\n" +
-                "- 'observe': Inspect current webpage semantic tree ([e1..eN] handles) and text excerpt.\n" +
-                "- 'navigate': Load URL in current tab (supports http/https or file:/// inside workspace).\n" +
-                "- 'click': Tap element by 'ref' (e.g. 'e3'), visible text ('text', e.g. '消息'/'发送'), CSS selector ('selector'), or pixel coordinates ('x', 'y'). Includes auto-healing if the DOM re-rendered.\n" +
-                "- 'fill': Fill text into input/textarea/contenteditable ('ref' or 'selector'). React/Vue safe. Optional 'submit'=true.\n" +
-                "- 'select': Choose option in <select> dropdown 'ref' by value or visible label.\n" +
-                "- 'scroll': Scroll viewport ('direction': 'down'|'up'|'top'|'bottom', 'amount': 0.8).\n" +
-                "- 'wait': Wait for a specific condition ('condition': 'networkidle'|'selector'|'stable'|'text'|'gone'|'ms', optional 'selector', 'text', 'quiet_ms', 'ms', 'timeout_ms'). Returns a receipt {satisfied, timed_out, elapsed_ms, error_code?} followed by the latest page observation. Always check 'satisfied' before proceeding.\n" +
-                "- 'eval': Evaluate JavaScript ('code') on current page and return {ok, result, result_type}. Accepts an expression, multiple statements (value of the last statement is returned automatically), or a function body with explicit 'return'. Supports async/await; Promises are awaited. Syntax errors return SYNTAX_ERROR without executing.\n" +
-                "- 'set_mode': Switch browser identity ('mode': 'desktop' for 1280px PC view or 'mobile'), or toggle 'som' (true/false).\n" +
-                "- 'tabs': Manage tabs ('tab_action': 'list'|'new'|'switch'|'close', optional 'tab_id', 'url').\n" +
-                "- 'back': Navigate back in current tab history.\n" +
-                "- 'reload': Reload current webpage.\n" +
-                "- 'request_takeover': Pause automation loop and ask human user to manually handle login/CAPTCHA ('reason').",
-                new String[]{
-                    "observe", "navigate", "click", "fill", "select",
-                    "scroll", "wait", "eval", "set_mode", "tabs", "back", "reload", "request_takeover"
-                }
-            ));
-            browserProps.put("url", prop("string", "Target URL for 'navigate' or 'tabs' (new)."));
-            browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'fill', 'select', or container 'scroll'. Supports auto-healing if the DOM refreshed."));
-            browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', visible element text for semantic 'click' (e.g. '消息'/'发送'), or expected text for 'wait'."));
-            browserProps.put("selector", prop("string", "CSS selector for 'click', 'fill', or 'wait' (e.g. 'a[href*=\"/user/self\"]', 'input[name=\"q\"]')."));
-            browserProps.put("exact", prop("boolean", "Whether semantic text matching requires exact full equality (default false)."));
-            browserProps.put("condition", prop("string", "Wait condition for 'wait': 'stable' (DOM quiet), 'selector' (element exists), 'text' (text present), 'gone' (element/text disappeared), 'networkidle' (page loaded), 'ms' (fixed sleep)."));
-            browserProps.put("quiet_ms", prop("integer", "Quiet threshold in ms without DOM mutations for 'stable' wait (default 300)."));
-            browserProps.put("ms", prop("integer", "Sleep duration in milliseconds for 'wait' (condition='ms')."));
-            browserProps.put("timeout_ms", prop("integer", "Maximum wait timeout in milliseconds for 'wait' (default 5000)."));
-            browserProps.put("clear", prop("boolean", "Whether to clear existing input value before 'fill' (default true)."));
-            browserProps.put("submit", prop("boolean", "Whether to press Enter / submit form after 'fill' (default false)."));
-            browserProps.put("direction", prop("string", "Scroll direction for 'scroll': 'down', 'up', 'left', 'right', 'top', 'bottom'."));
-            browserProps.put("amount", prop("number", "Scroll viewport multiplier for 'scroll' (default 0.75)."));
-            browserProps.put("code", prop("string", "JavaScript code expression to evaluate for 'eval'. Async functions and Promises are automatically awaited and resolved."));
-            browserProps.put("mode", prop("string", "Browser identity mode for 'set_mode': 'desktop' (1280px PC) or 'mobile'."));
-            browserProps.put("som", prop("boolean", "Enable or disable Set-of-Marks visual boxes on webpage."));
-            browserProps.put("tab_action", prop("string", "Sub-action for 'tabs': 'list', 'new', 'switch', 'close'."));
-            browserProps.put("tab_id", prop("integer", "Target tab ID for 'tabs' switch/close."));
-            browserProps.put("x", prop("number", "Raw X coordinate in view pixels for coordinate 'click'."));
-            browserProps.put("y", prop("number", "Raw Y coordinate in view pixels for coordinate 'click'."));
-            browserProps.put("reason", prop("string", "Explanation shown to the human user when calling 'request_takeover'."));
-
-            tools.put(makeTool(
-                "browser",
-                "Control the built-in Acid WebView browser. Every state-changing action (navigate, click, fill, select, scroll, set_mode, back, reload) automatically returns the updated page observation snapshot so you can immediately decide the next step.",
-                browserProps,
-                new String[]{"action"}
-            ));
-
-            // 2. read
-            JSONObject readProps = new JSONObject();
-            readProps.put("file_path", prop("string", "Path to read (relative paths resolve inside the app sandbox workspace, e.g. 'notes.md' or 'userscripts/custom.user.js')."));
-            readProps.put("offset", prop("integer", "1-based starting line number (default 1)."));
-            readProps.put("limit", prop("integer", "Maximum number of lines to read (default 200)."));
-            tools.put(makeTool(
-                "read",
-                "Read a UTF-8 text file inside the sandbox workspace and return line-numbered content.",
-                readProps,
-                new String[]{"file_path"}
-            ));
-
-            // 3. write
-            JSONObject writeProps = new JSONObject();
-            writeProps.put("file_path", prop("string",
-                "Path to write (relative to sandbox workspace). Writing to 'userscripts/<name>.user.js' "
-                + "installs a browser userscript; the file MUST contain a complete ==UserScript== header "
-                + "with at least @name and @match, otherwise the install is rejected."));
-            writeProps.put("content", prop("string", "Complete UTF-8 text content to write."));
-            tools.put(makeTool(
-                "write",
-                "Create or overwrite a UTF-8 text file in the sandbox workspace (e.g. HTML reports, JSON data, scripts). "
-                + "Files written under 'userscripts/' are validated and installed as browser plugins that run on the "
-                + "sites named by their @match header.",
-                writeProps,
-                new String[]{"file_path", "content"}
-            ));
-
-            // 4. edit
-            JSONObject editProps = new JSONObject();
-            editProps.put("file_path", prop("string", "Path to the existing text file inside the sandbox workspace."));
-            editProps.put("old_string", prop("string", "Exact literal text to search for and replace."));
-            editProps.put("new_string", prop("string", "Replacement text."));
-            editProps.put("replace_all", prop("boolean", "Whether to replace all occurrences (default false)."));
-            tools.put(makeTool(
-                "edit",
-                "Edit an existing UTF-8 text file by replacing literal text.",
-                editProps,
-                new String[]{"file_path", "old_string", "new_string"}
-            ));
-
-            // 5. bash
-            JSONObject bashProps = new JSONObject();
-            bashProps.put("command", prop("string", "Shell command to execute via /system/bin/sh inside the sandbox workspace directory."));
-            bashProps.put("timeout_ms", prop("integer", "Timeout in milliseconds (default 20000)."));
-            tools.put(makeTool(
-                "bash",
-                "Execute a shell command (`sh -c`) with working directory set to the Acid sandbox workspace (`" +
-                "/data/user/0/com.acid.browser/files/workspace`). Returns stdout, stderr, and exit code.",
-                bashProps,
-                new String[]{"command"}
-            ));
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to build the tool schema; the agent may see fewer tools", e);
+        for (int i = 0; i < TOOL_LIST.size(); i++) {
+            try {
+                tools.put(TOOL_LIST.get(i).buildOpenAiSchema());
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to build tool schema for " + TOOL_LIST.get(i).name(), e);
+            }
         }
         return tools;
     }
@@ -256,20 +365,12 @@ public class AcidSandboxTools {
 
     public ToolExecResult executeTool(String name, JSONObject args, ToolSource source) {
         if (args == null) args = new JSONObject();
+        AgentTool tool = name != null ? TOOL_MAP.get(name) : null;
+        if (tool == null) {
+            return new ToolExecResult("Error: Unknown tool '" + name + "'", false, null);
+        }
         try {
-            if ("browser".equals(name)) {
-                return executeBrowserTool(args);
-            } else if ("read".equals(name)) {
-                return new ToolExecResult(executeReadTool(args), false, null);
-            } else if ("write".equals(name)) {
-                return new ToolExecResult(executeWriteTool(args, source), false, null);
-            } else if ("edit".equals(name)) {
-                return new ToolExecResult(executeEditTool(args), false, null);
-            } else if ("bash".equals(name)) {
-                return new ToolExecResult(executeBashTool(args), false, null);
-            } else {
-                return new ToolExecResult("Error: Unknown tool '" + name + "'", false, null);
-            }
+            return tool.execute(this, args, source);
         } catch (Exception e) {
             return new ToolExecResult("Tool execution exception (" + name + "): " + e.getMessage(), false, null);
         }

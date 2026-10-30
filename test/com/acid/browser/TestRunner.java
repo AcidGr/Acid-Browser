@@ -42,6 +42,9 @@ public final class TestRunner {
         run("AcidTheme tokens, onColor contrast & AcidAsync cancellation", new TestCase() {
             @Override public void execute() throws Exception { testThemeAndAsync(); }
         });
+        run("AcidSandboxTools AgentTool registry & MCP schema generation", new TestCase() {
+            @Override public void execute() throws Exception { testAgentToolRegistry(); }
+        });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
@@ -300,5 +303,19 @@ public final class TestRunner {
         cancelled.cancel();
         assertTrue(cancelled.isCancelled(), "handle marked cancelled");
         Thread.sleep(110);
+    }
+
+    private static void testAgentToolRegistry() throws Exception {
+        List<String> names = AcidSandboxTools.getRegisteredToolNames();
+        assertEquals(5, Integer.valueOf(names.size()), "5 core tools registered");
+        assertTrue(names.contains("browser") && names.contains("read") && names.contains("write")
+            && names.contains("edit") && names.contains("bash"), "all 5 tool names present");
+
+        org.json.JSONArray openaiSchema = AcidSandboxTools.buildToolsSchema();
+        org.json.JSONArray mcpSchema = AcidSandboxTools.buildMcpToolsList();
+        assertEquals(5, Integer.valueOf(openaiSchema.length()), "5 OpenAI tool definitions");
+        assertEquals(5, Integer.valueOf(mcpSchema.length()), "5 MCP tool definitions");
+        assertEquals("browser", mcpSchema.getJSONObject(0).getString("name"), "first MCP tool is browser");
+        assertTrue(mcpSchema.getJSONObject(0).optJSONObject("inputSchema") != null, "MCP inputSchema populated");
     }
 }

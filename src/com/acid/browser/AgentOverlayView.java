@@ -156,11 +156,10 @@ public class AgentOverlayView extends View {
                 long now = SystemClock.uptimeMillis();
                 if (now - mLastToastTime > 2200) {
                     mLastToastTime = now;
-                    Toast.makeText(
+                    AcidFeedback.info(
                         getContext(),
-                        "[AI LOCK] AI 正在操作此网页，如需手动操作请点击底部 [接管]",
-                        Toast.LENGTH_SHORT
-                    ).show();
+                        "[AI LOCK] AI 正在操作此网页，如需手动操作请点击顶部 [点此接管]"
+                    );
                 }
             }
             return true; // Consume touch event so WebView isn't disrupted mid-loop
