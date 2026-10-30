@@ -15,3 +15,8 @@ via_cookies.json
 *.swp
 *.bak
 *~
+
+# Private release & deployment scripts (never commit server credentials or push hooks)
+publish*.sh
+upload*.sh
+deploy*.sh
