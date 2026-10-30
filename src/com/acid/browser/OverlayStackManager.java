@@ -4,20 +4,19 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Dynamic Z-order & Back-Stack Coordinator for all overlays in Acid Browser.
+ * Dynamic Z-order & Navigation Stack Coordinator for all overlays in Acid Browser.
  *
- * <p>Solves three structural bugs in the previous static {@code List<AcidOverlay>} design:
- * <ol>
- *   <li><b>Z-order sync</b>: Whenever an overlay is opened, it moves to the top of the active
- *       stack so {@link #handleBackPressed()} always closes the visually topmost surface first.</li>
- *   <li><b>Modal suspension chain</b>: When a secondary sheet (e.g. {@code ModelProviderConfigSheet}
- *       or {@code AdBlockSheet}) is launched from inside another sheet (e.g. {@code SettingsSheet}
- *       or {@code AgentModelSelectorSheet}), the parent sheet is suspended cleanly and restored
- *       automatically when the child sheet is closed via Back/Close/Scrim.</li>
- *   <li><b>Tier separation</b>: Full-screen modal sheets (Tier 1/2) take strict back-press
- *       priority over viewport-embedded overlays (Tier 0: {@code TabsOverviewView},
- *       {@code AgentFloatingView}).</li>
- * </ol>
+ * <p>Enforces clear, unambiguous navigation semantics across all modal tiers:
+ * <ul>
+ *   <li><b>Root modal</b> ({@link #openRootModal}): opens at L1 (no {@code [←]} button;
+ *       both Back and {@code [✕]} dismiss the sheet).</li>
+ *   <li><b>Child modal</b> ({@link #pushModal}): suspends the parent sheet and opens the child
+ *       at L2 with {@code [← Title]} automatically rendered in its header. Tapping {@code [←]}
+ *       or pressing system Back pops back to the parent sheet at its exact scroll &amp; sub-page
+ *       state; tapping {@code [✕]} or the scrim closes the entire modal flow back to the browser!</li>
+ *   <li><b>Tier separation</b>: Modal sheets (Tier 1/2) take strict Back-press priority over
+ *       viewport overlays (Tier 0: {@code TabsOverviewView}, {@code AgentFloatingView}).</li>
+ * </ul>
  */
 public final class OverlayStackManager {
 
@@ -29,9 +28,8 @@ public final class OverlayStackManager {
     /** Active viewport Z-order from bottom (0) to top (size - 1). */
     private final List<AcidOverlay> mActiveViewportOrder = new ArrayList<AcidOverlay>();
 
-    /** Suspended parent modals waiting to resume once the top modal closes. */
+    /** Suspended parent modals waiting to resume when the user navigates Back. */
     private final List<AcidOverlay> mSuspendedChain = new ArrayList<AcidOverlay>();
-    private boolean mSuppressResume = false;
 
     public void registerModal(final AcidOverlay modal) {
         if (modal == null || mRegisteredModals.contains(modal)) return;
@@ -47,15 +45,11 @@ public final class OverlayStackManager {
                 @Override
                 public void onSheetDismissed(AcidBottomSheetView sheet) {
                     mActiveModalOrder.remove(sheet);
-                    if (!mSuppressResume && mActiveModalOrder.isEmpty() && !mSuspendedChain.isEmpty()) {
-                        AcidOverlay parent = mSuspendedChain.remove(mSuspendedChain.size() - 1);
-                        if (parent != null) {
-                            parent.show();
-                            if (parent instanceof AcidBottomSheetView) {
-                                ((AcidBottomSheetView) parent).refreshActivePage();
-                            }
-                        }
-                    }
+                }
+
+                @Override
+                public void onSheetCloseAllRequested(AcidBottomSheetView sheet) {
+                    dismissAllModals();
                 }
             });
         }
@@ -67,35 +61,74 @@ public final class OverlayStackManager {
     }
 
     /**
-     * Opens a top-level modal sheet cleanly without any suspended parent chain.
+     * Opens a top-level (L1) modal sheet cleanly without any suspended parent chain.
      */
     public void openRootModal(AcidOverlay modal) {
         if (modal == null) return;
-        mSuspendedChain.clear();
+        dismissAllModals();
+        if (modal instanceof AcidBottomSheetView) {
+            ((AcidBottomSheetView) modal).setParentBackHandler(null);
+        }
         modal.show();
         mActiveModalOrder.remove(modal);
         mActiveModalOrder.add(modal);
     }
 
     /**
-     * Suspends {@code parent} and opens {@code child}; closing {@code child} automatically
-     * resumes {@code parent} at its exact previous scroll & sub-page state.
+     * Suspends {@code parent} and opens {@code child} as an L2 destination with {@code [← Title]}
+     * enabled in its header. Tapping {@code [←]} or pressing Back pops back to {@code parent};
+     * tapping {@code [✕]} or the scrim closes all modals.
      */
-    public void pushModal(AcidOverlay parent, AcidOverlay child) {
+    public void pushModal(final AcidOverlay parent, final AcidOverlay child) {
         if (child == null) return;
         if (parent != null && parent != child && parent.isShowing()) {
-            mSuppressResume = true;
-            try {
-                parent.dismiss();
-            } finally {
-                mSuppressResume = false;
-            }
+            parent.dismiss();
             mSuspendedChain.remove(parent);
             mSuspendedChain.add(parent);
+        }
+        if (child instanceof AcidBottomSheetView) {
+            final AcidBottomSheetView childSheet = (AcidBottomSheetView) child;
+            if (!mSuspendedChain.isEmpty()) {
+                childSheet.setParentBackHandler(new Runnable() {
+                    @Override
+                    public void run() {
+                        popToParentModal(childSheet);
+                    }
+                });
+            } else {
+                childSheet.setParentBackHandler(null);
+            }
         }
         child.show();
         mActiveModalOrder.remove(child);
         mActiveModalOrder.add(child);
+    }
+
+    private void popToParentModal(AcidBottomSheetView currentChild) {
+        currentChild.setParentBackHandler(null);
+        currentChild.dismiss();
+        if (!mSuspendedChain.isEmpty()) {
+            final AcidOverlay parent = mSuspendedChain.remove(mSuspendedChain.size() - 1);
+            if (parent != null) {
+                if (parent instanceof AcidBottomSheetView) {
+                    final AcidBottomSheetView parentSheet = (AcidBottomSheetView) parent;
+                    if (!mSuspendedChain.isEmpty()) {
+                        parentSheet.setParentBackHandler(new Runnable() {
+                            @Override
+                            public void run() {
+                                popToParentModal(parentSheet);
+                            }
+                        });
+                    } else {
+                        parentSheet.setParentBackHandler(null);
+                    }
+                    parentSheet.show();
+                    parentSheet.refreshActivePage();
+                } else {
+                    parent.show();
+                }
+            }
+        }
     }
 
     /**
@@ -109,48 +142,35 @@ public final class OverlayStackManager {
     }
 
     /**
-     * Dismisses every open modal and clears any suspended parent chain (used when navigating
-     * directly to a URL from inside a nested sheet).
+     * Dismisses every open modal and clears any suspended parent chain (invoked by {@code [✕]},
+     * scrim tap, or direct URL navigation).
      */
     public void dismissAllModals() {
-        mSuppressResume = true;
-        try {
-            mSuspendedChain.clear();
-            List<AcidOverlay> copy = new ArrayList<AcidOverlay>(mRegisteredModals);
-            for (AcidOverlay modal : copy) {
-                if (modal.isShowing()) {
-                    modal.dismiss();
-                }
+        mSuspendedChain.clear();
+        List<AcidOverlay> copy = new ArrayList<AcidOverlay>(mRegisteredModals);
+        for (AcidOverlay modal : copy) {
+            if (modal instanceof AcidBottomSheetView) {
+                ((AcidBottomSheetView) modal).setParentBackHandler(null);
             }
-            mActiveModalOrder.clear();
-        } finally {
-            mSuppressResume = false;
+            if (modal.isShowing()) {
+                modal.dismiss();
+            }
         }
+        mActiveModalOrder.clear();
     }
 
     /**
      * Handles system Back key in strict visual Z-order:
-     * 1. Topmost visible modal sheet (and its internal sub-page stack);
-     * 2. Most recently shown visible viewport overlay;
-     * 3. Any remaining visible registered overlay as fallback.
+     * 1. Topmost visible modal sheet (and its internal sub-page stack / parent chain);
+     * 2. Most recently shown visible viewport overlay.
      */
     public boolean handleBackPressed() {
-        // 1. Active modals in LIFO visual order
         for (int i = mActiveModalOrder.size() - 1; i >= 0; i--) {
             AcidOverlay modal = mActiveModalOrder.get(i);
             if (modal != null && modal.isShowing() && modal.handleBackPressed()) {
                 return true;
             }
         }
-        // Fallback scan in case a non-BottomSheet modal showed itself directly
-        for (int i = mRegisteredModals.size() - 1; i >= 0; i--) {
-            AcidOverlay modal = mRegisteredModals.get(i);
-            if (modal != null && modal.isShowing() && modal.handleBackPressed()) {
-                return true;
-            }
-        }
-
-        // 2. Active viewport overlays in LIFO order
         for (int i = mActiveViewportOrder.size() - 1; i >= 0; i--) {
             AcidOverlay vp = mActiveViewportOrder.get(i);
             if (vp != null && vp.isShowing() && vp.handleBackPressed()) {
