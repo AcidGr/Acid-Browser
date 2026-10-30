@@ -233,6 +233,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     private final UserscriptManager mUserscriptManager;
+    private final SkillManager mSkillManager;
     private final WebAutomationDriver mAutomationDriver;
 
     private final List<TabSession> mTabs = new ArrayList<TabSession>();
@@ -306,6 +307,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mDataStore = dataStore;
 
         mUserscriptManager = new UserscriptManager(context);
+        mSkillManager = new SkillManager(context, getWorkspaceDir());
         AdBlockManager adBlock = AdBlockManager.getInstance(context);
         adBlock.setWorkspaceDir(getWorkspaceDir());
         if (mDataStore != null) {
@@ -889,6 +891,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private boolean handleUrlIntercept(String url) {
         if (url == null) return false;
         String lower = url.toLowerCase();
+        if (lower.startsWith("acid://") || lower.startsWith("via://")) {
+            loadUrl(normalizeUrl(url));
+            return true;
+        }
         if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("file://") || lower.startsWith("about:") || lower.startsWith("javascript:")) {
             return false;
         }
@@ -1011,6 +1017,37 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if ("acid://home".equalsIgnoreCase(trimmed) || "about:home".equalsIgnoreCase(trimmed)) {
             return getHomeUrl();
         }
+
+        // Native search protocol: acid://search?q=..., about:search?q=..., via://search?q=...
+        if (trimmed.startsWith("acid://search") || trimmed.startsWith("about:search") || trimmed.startsWith("via://search")) {
+            String query = "";
+            try {
+                int qIdx = trimmed.indexOf("?q=");
+                if (qIdx < 0) qIdx = trimmed.indexOf("&q=");
+                if (qIdx < 0) qIdx = trimmed.indexOf("?wd=");
+                if (qIdx < 0) qIdx = trimmed.indexOf("&wd=");
+                if (qIdx >= 0) {
+                    int valStart = trimmed.indexOf('=', qIdx) + 1;
+                    int ampIdx = trimmed.indexOf('&', valStart);
+                    String rawVal = ampIdx > 0 ? trimmed.substring(valStart, ampIdx) : trimmed.substring(valStart);
+                    query = java.net.URLDecoder.decode(rawVal, "UTF-8").trim();
+                }
+            } catch (Exception e) {
+                query = "";
+            }
+            if (!query.isEmpty()) {
+                if (mDataStore != null) {
+                    return mDataStore.buildSearchUrl(query);
+                }
+                try {
+                    return "https://www.google.com/search?q=" + java.net.URLEncoder.encode(query, "UTF-8");
+                } catch (Exception e) {
+                    return "https://www.google.com/search?q=" + query;
+                }
+            }
+            return getHomeUrl();
+        }
+
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("file://") || trimmed.startsWith("javascript:") || trimmed.startsWith("data:") || trimmed.startsWith("about:")) {
             return trimmed;
         }
@@ -1025,6 +1062,29 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
         }
         return "https://" + trimmed;
+    }
+
+    public boolean isHomeUrl(String url) {
+        if (url == null) return false;
+        String trimmed = url.trim();
+        if (trimmed.isEmpty() || "acid://home".equalsIgnoreCase(trimmed) || "about:home".equalsIgnoreCase(trimmed)) {
+            return true;
+        }
+        if (HOME_URL.equals(trimmed)) {
+            return true;
+        }
+        String effectiveHome = getHomeUrl();
+        if (trimmed.equals(effectiveHome)) {
+            return true;
+        }
+        if (trimmed.contains("/acid_workspace/homepage/index.html") || trimmed.startsWith("workspace://homepage/index.html")) {
+            return true;
+        }
+        return false;
+    }
+
+    public SkillManager getSkillManager() {
+        return mSkillManager;
     }
 
     public String getHomeUrl() {

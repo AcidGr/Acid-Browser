@@ -19,6 +19,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         void onOpenAgentFloatingWindow();
         void onOpenAdBlock();
         void onOpenUserscripts();
+        void onOpenSkills();
         void onOpenAbout();
         void onClearDataRequested(boolean clearCache, boolean clearCookies, boolean clearHistory, boolean clearStorage, boolean clearWorkspace);
         void onClearWorkspaceOnlyRequested();
@@ -260,6 +261,16 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                             @Override
                             public void onClick(View v) {
                                 if (mListener != null) mListener.onOpenUserscripts();
+                            }
+                        }
+                    ),
+                    AcidWidgets.navRow(
+                        ctx, mIsDarkMode, AcidIcons.ICON_AGENT, AcidTheme.accent(mIsDarkMode),
+                        "技能管理 (Skills)", null,
+                        new OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                if (mListener != null) mListener.onOpenSkills();
                             }
                         }
                     )

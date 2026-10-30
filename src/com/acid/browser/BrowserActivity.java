@@ -103,6 +103,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AgentModelSelectorSheet mModelSelectorSheet;
     private ModelProviderConfigSheet mProviderConfigSheet;
     private UserscriptSheet mUserscriptSheet;
+    private SkillSheet mSkillSheet;
     private AdBlockSheet mAdBlockSheet;
     private BrowserSettingsSheet mSettingsSheet;
     private AboutSheet mAboutSheet;
@@ -384,6 +385,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         );
         attachModalSheet(mUserscriptSheet);
 
+        mSkillSheet = new SkillSheet(this, mController != null ? mController.getSkillManager() : null);
+        attachModalSheet(mSkillSheet);
+
         // 7. AdBlock Engine
         mAdBlockSheet = new AdBlockSheet(
             this,
@@ -497,6 +501,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 public void onOpenUserscripts() {
                     mUserscriptSheet.renderScripts();
                     mOverlayStack.pushModal(mSettingsSheet, mUserscriptSheet);
+                }
+
+                @Override
+                public void onOpenSkills() {
+                    mSkillSheet.showSkills();
+                    mOverlayStack.pushModal(mSettingsSheet, mSkillSheet);
                 }
 
                 @Override
@@ -666,6 +676,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onOpenUserscripts() {
                 mUserscriptSheet.renderScripts();
                 mOverlayStack.openRootModal(mUserscriptSheet);
+            }
+
+            @Override
+            public void onOpenSkills() {
+                mSkillSheet.showSkills();
+                mOverlayStack.openRootModal(mSkillSheet);
             }
 
             @Override
@@ -1319,7 +1335,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void run() {
                 if (!mEtUrl.hasFocus()) {
-                    mEtUrl.setText(BrowserController.HOME_URL.equals(url) ? "acid://home" : url);
+                    mEtUrl.setText(mController != null && mController.isHomeUrl(url) ? "acid://home" : url);
                 }
                 if (mDataStore != null) {
                     mDataStore.recordHistory(url, title, mIncognitoMode);
