@@ -242,6 +242,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private boolean mOverviewShowing = false;
 
     private boolean mIsDesktopMode = false;
+    private boolean mIncognitoMode = false;
     private boolean mSomEnabled = false;
     private boolean mDarkMode = false;
     private String mTakeoverReason = "";
@@ -305,9 +306,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mDataStore = dataStore;
 
         mUserscriptManager = new UserscriptManager(context);
-        AdBlockManager.getInstance(context).setWorkspaceDir(getWorkspaceDir());
+        AdBlockManager adBlock = AdBlockManager.getInstance(context);
+        adBlock.setWorkspaceDir(getWorkspaceDir());
         if (mDataStore != null) {
             mDataStore.setWorkspaceDir(getWorkspaceDir());
+            adBlock.bindDataStore(mDataStore);
         }
         mAutomationDriver = new WebAutomationDriver(context, this);
 
@@ -615,6 +618,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
         applyIdentityToSettings(wv, mIsDesktopMode);
         applyDarkModeToSettings(wv, mDarkMode);
+        applyIncognitoToSettings(wv, mIncognitoMode);
         boolean blockImages = mDataStore != null && mDataStore.isBlockImagesEnabled();
         s.setLoadsImagesAutomatically(!blockImages);
         s.setBlockNetworkImage(blockImages);
@@ -813,23 +817,37 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
 
             @Override
-            public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
+            public boolean onJsAlert(WebView view, String url, String message, final JsResult result) {
                 emitLog("[JS_ALERT] " + message);
-                result.confirm();
+                if (getControlMode() == AgentOverlayView.MODE_AGENT) {
+                    result.confirm();
+                    return true;
+                }
+                showHumanJsAlert(url, message, result);
                 return true;
             }
 
             @Override
-            public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
-                emitLog("[JS_CONFIRM] " + message + " -> AUTO_CONFIRM");
-                result.confirm();
+            public boolean onJsConfirm(WebView view, String url, String message, final JsResult result) {
+                if (getControlMode() == AgentOverlayView.MODE_AGENT) {
+                    emitLog("[JS_CONFIRM] " + message + " -> AUTO_CONFIRM");
+                    result.confirm();
+                    return true;
+                }
+                emitLog("[JS_CONFIRM] " + message);
+                showHumanJsConfirm(url, message, result);
                 return true;
             }
 
             @Override
-            public boolean onJsPrompt(WebView view, String url, String message, String defaultValue, JsPromptResult result) {
-                emitLog("[JS_PROMPT] " + message + " -> CONFIRM(" + defaultValue + ")");
-                result.confirm(defaultValue != null ? defaultValue : "");
+            public boolean onJsPrompt(WebView view, String url, String message, String defaultValue, final JsPromptResult result) {
+                if (getControlMode() == AgentOverlayView.MODE_AGENT) {
+                    emitLog("[JS_PROMPT] " + message + " -> CONFIRM(" + defaultValue + ")");
+                    result.confirm(defaultValue != null ? defaultValue : "");
+                    return true;
+                }
+                emitLog("[JS_PROMPT] " + message);
+                showHumanJsPrompt(url, message, defaultValue, result);
                 return true;
             }
         });
@@ -890,6 +908,165 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         s.setUserAgentString(desktopMode ? UA_DESKTOP : UA_MOBILE);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(desktopMode);
+    }
+
+    private void applyIncognitoToSettings(WebView wv, boolean incognito) {
+        if (wv == null) return;
+        WebSettings s = wv.getSettings();
+        s.setCacheMode(incognito ? WebSettings.LOAD_NO_CACHE : WebSettings.LOAD_DEFAULT);
+        s.setSaveFormData(!incognito);
+    }
+
+    public boolean isIncognitoMode() {
+        return mIncognitoMode;
+    }
+
+    public void setIncognitoMode(boolean incognito) {
+        boolean wasIncognito = mIncognitoMode;
+        mIncognitoMode = incognito;
+        for (TabSession t : mTabs) {
+            applyIncognitoToSettings(t.webView, incognito);
+        }
+        if (wasIncognito && !incognito) {
+            clearAllCache();
+            if (Build.VERSION.SDK_INT >= 21) {
+                CookieManager.getInstance().removeSessionCookies(null);
+                CookieManager.getInstance().flush();
+            }
+        }
+    }
+
+    private static String jsDialogHostTitle(String url, String fallback) {
+        if (url != null && !url.isEmpty()) {
+            try {
+                String host = Uri.parse(url).getHost();
+                if (host != null && !host.isEmpty()) {
+                    return host + " 提示";
+                }
+            } catch (Exception ignored) {}
+        }
+        return fallback;
+    }
+
+    private void showHumanJsAlert(String url, String message, final JsResult result) {
+        final boolean[] settled = new boolean[]{false};
+        try {
+            new AcidDialog(mContext, mDarkMode)
+                .setTitle(jsDialogHostTitle(url, "网页提示"))
+                .setMessage(message != null ? message : "")
+                .setPositiveButton("确定", new AcidDialog.OnActionListener() {
+                    @Override
+                    public boolean onAction(android.app.Dialog dialog) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.confirm();
+                        }
+                        return true;
+                    }
+                })
+                .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(android.content.DialogInterface d) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.cancel();
+                        }
+                    }
+                })
+                .show();
+        } catch (Exception e) {
+            if (!settled[0]) result.cancel();
+        }
+    }
+
+    private void showHumanJsConfirm(String url, String message, final JsResult result) {
+        final boolean[] settled = new boolean[]{false};
+        try {
+            new AcidDialog(mContext, mDarkMode)
+                .setTitle(jsDialogHostTitle(url, "网页确认"))
+                .setMessage(message != null ? message : "")
+                .setPositiveButton("确定", new AcidDialog.OnActionListener() {
+                    @Override
+                    public boolean onAction(android.app.Dialog dialog) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.confirm();
+                        }
+                        return true;
+                    }
+                })
+                .setNegativeButton("取消", new AcidDialog.OnActionListener() {
+                    @Override
+                    public boolean onAction(android.app.Dialog dialog) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.cancel();
+                        }
+                        return true;
+                    }
+                })
+                .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(android.content.DialogInterface d) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.cancel();
+                        }
+                    }
+                })
+                .show();
+        } catch (Exception e) {
+            if (!settled[0]) result.cancel();
+        }
+    }
+
+    private void showHumanJsPrompt(String url, String message, String defaultValue, final JsPromptResult result) {
+        final boolean[] settled = new boolean[]{false};
+        try {
+            android.widget.LinearLayout box = new android.widget.LinearLayout(mContext);
+            box.setOrientation(android.widget.LinearLayout.VERTICAL);
+            final android.widget.EditText et = AcidWidgets.inputField(
+                mContext, mDarkMode, defaultValue != null ? defaultValue : "", "", true
+            );
+            box.addView(et);
+
+            new AcidDialog(mContext, mDarkMode)
+                .setTitle(jsDialogHostTitle(url, "网页输入"))
+                .setMessage(message != null ? message : "")
+                .setCustomView(box)
+                .setPositiveButton("确定", new AcidDialog.OnActionListener() {
+                    @Override
+                    public boolean onAction(android.app.Dialog dialog) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.confirm(et.getText() != null ? et.getText().toString() : "");
+                        }
+                        return true;
+                    }
+                })
+                .setNegativeButton("取消", new AcidDialog.OnActionListener() {
+                    @Override
+                    public boolean onAction(android.app.Dialog dialog) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.cancel();
+                        }
+                        return true;
+                    }
+                })
+                .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(android.content.DialogInterface d) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.cancel();
+                        }
+                    }
+                })
+                .show();
+        } catch (Exception e) {
+            if (!settled[0]) result.cancel();
+        }
     }
 
     private void applyDarkModeToSettings(WebView wv, boolean dark) {
@@ -1033,6 +1210,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (mDataStore == null) return;
         setWebDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
         setBlockImages(mDataStore.isBlockImagesEnabled());
+        AdBlockManager.getInstance(mContext).syncFromDataStore();
         if (mDarkMode != mDataStore.isDarkMode()) {
             setDarkMode(mDataStore.isDarkMode());
         }

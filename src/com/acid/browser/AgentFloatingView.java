@@ -39,6 +39,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         void onUnreadStateChanged(boolean hasUnread, boolean running, boolean pausedForTakeover);
         void onOpenModelSelector();
         void onOpenSessionsSheet();
+        void onFloatingShown();
     }
 
     public interface HeightProvider {
@@ -51,6 +52,8 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
 
     private LinearLayout mDrawerPanel;
     private LinearLayout mAgentHeaderBar;
+    private View mHeaderDivider;
+    private View mInputDivider;
     private TextView mTvAgentSessionTitle;
     private TextView mTvAgentLoopStatus;
     private ScrollView mChatScrollView;
@@ -61,6 +64,8 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     private AcidIcons.BadgeButton mBtnSessions;
     private AcidIcons.BadgeButton mBtnNewSession;
     private View mBtnModelConfig;
+    private AcidIcons.SvgIconView mIconModelConfig;
+    private AcidIcons.SvgIconView mIconCloseDrawer;
     private LinearLayout mContextUsagePill;
     private TextView mTvContextUsageText;
     private int mLastTotalTokens = 0;
@@ -126,6 +131,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 mAgentLoop != null && mAgentLoop.isRunning(),
                 mAgentLoop != null && mAgentLoop.isPausedForTakeover()
             );
+            mHostCallback.onFloatingShown();
         }
         setVisibility(View.VISIBLE);
         bringToFront();
@@ -300,7 +306,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mTvAgentSessionTitle = new TextView(ctx);
         mTvAgentSessionTitle.setText("新对话");
         mTvAgentSessionTitle.setTextColor(AcidTheme.LIGHT_TEXT);
-        mTvAgentSessionTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        mTvAgentSessionTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H4_ITEM);
         mTvAgentSessionTitle.setTypeface(Typeface.DEFAULT_BOLD);
         mTvAgentSessionTitle.setSingleLine(true);
         mTvAgentSessionTitle.setEllipsize(TextUtils.TruncateAt.END);
@@ -309,7 +315,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mTvAgentLoopStatus = new TextView(ctx);
         mTvAgentLoopStatus.setText("DeepSeek / DeepSeek-V3 (Chat)");
         mTvAgentLoopStatus.setTextColor(AcidTheme.LIGHT_MUTED);
-        mTvAgentLoopStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        mTvAgentLoopStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
         mTvAgentLoopStatus.setSingleLine(true);
         mTvAgentLoopStatus.setEllipsize(TextUtils.TruncateAt.END);
         titleCol.addView(mTvAgentLoopStatus);
@@ -343,7 +349,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         headerRow.addView(mBtnNewSession);
 
         // Button: Model Selector
-        mBtnModelConfig = AcidIcons.createToolbarIconBtn(ctx, AcidIcons.ICON_MODEL, AcidTheme.LIGHT_MUTED, new OnClickListener() {
+        LinearLayout modelBtnBox = AcidIcons.createToolbarIconBtn(ctx, AcidIcons.ICON_MODEL, AcidTheme.LIGHT_MUTED, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (mHostCallback != null) {
@@ -351,6 +357,8 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 }
             }
         });
+        mBtnModelConfig = modelBtnBox;
+        mIconModelConfig = (AcidIcons.SvgIconView) modelBtnBox.getChildAt(0);
         headerRow.addView(mBtnModelConfig);
 
         // Context Usage & Cache Hit Rate Pill (Displayed when Agent is running/working)
@@ -394,13 +402,14 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 close();
             }
         });
+        mIconCloseDrawer = (AcidIcons.SvgIconView) btnCloseDrawer.getChildAt(0);
         headerRow.addView(btnCloseDrawer);
 
         panel.addView(headerRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        View headerDivider = new View(ctx);
-        headerDivider.setBackgroundColor(AcidTheme.LIGHT_BORDER);
-        panel.addView(headerDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, AcidTheme.dp(ctx, 1)));
+        mHeaderDivider = new View(ctx);
+        mHeaderDivider.setBackgroundColor(AcidTheme.LIGHT_BORDER);
+        panel.addView(mHeaderDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, AcidTheme.dp(ctx, 1)));
 
         // 2. Chat Stream ScrollView
         mChatScrollView = new ScrollView(ctx);
@@ -414,9 +423,9 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         ));
         panel.addView(mChatScrollView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        View inputDivider = new View(ctx);
-        inputDivider.setBackgroundColor(AcidTheme.LIGHT_BORDER);
-        panel.addView(inputDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, AcidTheme.dp(ctx, 1)));
+        mInputDivider = new View(ctx);
+        mInputDivider.setBackgroundColor(AcidTheme.LIGHT_BORDER);
+        panel.addView(mInputDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, AcidTheme.dp(ctx, 1)));
 
         // 3. Input Bar
         mAgentInputBar = new LinearLayout(ctx);
@@ -642,14 +651,14 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         TextView title = new TextView(ctx);
         title.setText("Acid Agent 自主智能体");
         title.setTextColor(textCol);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H3_CARD);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(title);
 
         TextView desc = new TextView(ctx);
         desc.setText("内置 browser (网页感知与操控)、read、write、edit、bash 五大沙盒工具。您可以直接发送指令让它跨网页调研、填写表单、编写油猴脚本或生成本地数据报告。");
         desc.setTextColor(mutedCol);
-        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         desc.setPadding(0, AcidTheme.dp(ctx, 4), 0, AcidTheme.dp(ctx, 8));
         card.addView(desc);
 
@@ -968,6 +977,8 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         private final TextView mTvStatusBadge;
         private final AcidIcons.SvgIconView mChevron;
         private final LinearLayout mDetailContainer;
+        private final TextView mLblArgs;
+        private final TextView mLblRes;
         private final TextView mTvArgsCode;
         private final TextView mTvResultCode;
 
@@ -1029,18 +1040,17 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mDetailContainer.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 8));
             mDetailContainer.setVisibility(View.GONE);
 
-            TextView lblArgs = new TextView(ctx);
-            lblArgs.setText("调用参数 (Arguments):");
-            lblArgs.setTextColor(AcidTheme.LIGHT_MUTED);
-            lblArgs.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
-            lblArgs.setTypeface(Typeface.DEFAULT_BOLD);
-            mDetailContainer.addView(lblArgs);
+            mLblArgs = new TextView(ctx);
+            mLblArgs.setText("调用参数 (Arguments)");
+            mLblArgs.setTextColor(AcidTheme.LIGHT_MUTED);
+            mLblArgs.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
+            mLblArgs.setTypeface(Typeface.DEFAULT_BOLD);
+            mDetailContainer.addView(mLblArgs);
 
             mTvArgsCode = new TextView(ctx);
             mTvArgsCode.setTypeface(Typeface.MONOSPACE);
             mTvArgsCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             mTvArgsCode.setTextColor(AcidTheme.DARK_CODE_TEXT);
-            mTvArgsCode.setBackground(AcidTheme.pillBg(ctx, AcidTheme.DARK_PANEL_BG, AcidTheme.DARK_PANEL_BORDER, 6));
             mTvArgsCode.setPadding(AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 6));
             mTvArgsCode.setTextIsSelectable(true);
             LinearLayout.LayoutParams argsLp = new LinearLayout.LayoutParams(
@@ -1050,18 +1060,17 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             argsLp.bottomMargin = AcidTheme.dp(ctx, 6);
             mDetailContainer.addView(mTvArgsCode, argsLp);
 
-            TextView lblRes = new TextView(ctx);
-            lblRes.setText("返回结果 (Output):");
-            lblRes.setTextColor(AcidTheme.LIGHT_MUTED);
-            lblRes.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
-            lblRes.setTypeface(Typeface.DEFAULT_BOLD);
-            mDetailContainer.addView(lblRes);
+            mLblRes = new TextView(ctx);
+            mLblRes.setText("返回结果 (Output)");
+            mLblRes.setTextColor(AcidTheme.LIGHT_MUTED);
+            mLblRes.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
+            mLblRes.setTypeface(Typeface.DEFAULT_BOLD);
+            mDetailContainer.addView(mLblRes);
 
             mTvResultCode = new TextView(ctx);
             mTvResultCode.setTypeface(Typeface.MONOSPACE);
             mTvResultCode.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.8f);
             mTvResultCode.setTextColor(AcidTheme.COLOR_CODE_SUCCESS);
-            mTvResultCode.setBackground(AcidTheme.pillBg(ctx, AcidTheme.DARK_PANEL_BG, AcidTheme.DARK_PANEL_BORDER, 6));
             mTvResultCode.setPadding(AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 6));
             mTvResultCode.setTextIsSelectable(true);
             LinearLayout.LayoutParams resLp = new LinearLayout.LayoutParams(
@@ -1127,6 +1136,10 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             }
 
             mChevron.setColor(mutedCol);
+            mLblArgs.setTextColor(mutedCol);
+            mLblRes.setTextColor(mutedCol);
+            mTvArgsCode.setBackground(AcidTheme.pillBg(ctx, AcidTheme.codeBlockBg(dark), AcidTheme.codeBlockBorder(dark), 6));
+            mTvResultCode.setBackground(AcidTheme.pillBg(ctx, AcidTheme.codeBlockBg(dark), AcidTheme.codeBlockBorder(dark), 6));
             mTvArgsCode.setText(item.toolArgsJson != null ? item.toolArgsJson : "{}");
             String resText = item.toolResult != null ? item.toolResult : "";
             if (resText.length() > 3500) {
@@ -1253,17 +1266,21 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         }
         if (mAgentHeaderBar != null) {
             GradientDrawable headGd = new GradientDrawable();
-            headGd.setColor(isDark ? AcidTheme.DARK_BAR : Color.WHITE);
+            headGd.setColor(AcidTheme.sheetBg(isDark));
             float hr = AcidTheme.dp(ctx, 14);
             headGd.setCornerRadii(new float[]{hr, hr, hr, hr, 0, 0, 0, 0});
             mAgentHeaderBar.setBackground(headGd);
         }
+        if (mHeaderDivider != null) mHeaderDivider.setBackgroundColor(AcidTheme.border(isDark));
+        if (mInputDivider != null) mInputDivider.setBackgroundColor(AcidTheme.border(isDark));
+        if (mIconModelConfig != null) mIconModelConfig.setColor(muted);
+        if (mIconCloseDrawer != null) mIconCloseDrawer.setColor(muted);
         if (mTvAgentSessionTitle != null) {
             mTvAgentSessionTitle.setTextColor(text);
         }
         if (mAgentInputBar != null) {
             GradientDrawable inGd = new GradientDrawable();
-            inGd.setColor(isDark ? AcidTheme.DARK_BAR : Color.WHITE);
+            inGd.setColor(AcidTheme.sheetBg(isDark));
             float ir = AcidTheme.dp(ctx, 14);
             inGd.setCornerRadii(new float[]{0, 0, 0, 0, ir, ir, ir, ir});
             mAgentInputBar.setBackground(inGd);
@@ -1279,13 +1296,6 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     }
 
     private void hideKeyboard() {
-        try {
-            InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-            if (imm != null && findFocus() != null) {
-                imm.hideSoftInputFromWindow(findFocus().getWindowToken(), 0);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to hide the soft keyboard", e);
-        }
+        AcidTheme.hideKeyboard(this);
     }
 }

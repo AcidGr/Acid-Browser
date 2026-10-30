@@ -32,6 +32,7 @@ import java.util.List;
 public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
     public interface OnTabsOverviewListener {
+        void onOverviewShown();
         void onOverviewClosed();
     }
 
@@ -68,18 +69,13 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         mTvTabsCountTitle = new TextView(context);
         mTvTabsCountTitle.setText("标签页 (1)");
         mTvTabsCountTitle.setTextColor(AcidTheme.LIGHT_TEXT);
-        mTvTabsCountTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        mTvTabsCountTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H1_SHEET);
         mTvTabsCountTitle.setTypeface(Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         mTopBar.addView(mTvTabsCountTitle, tLp);
 
         // Action: New Tab (+)
-        LinearLayout newBox = new LinearLayout(context);
-        newBox.setGravity(Gravity.CENTER);
-        newBox.setPadding(AcidTheme.dp(context, 7), AcidTheme.dp(context, 6), AcidTheme.dp(context, 7), AcidTheme.dp(context, 6));
-        mBtnNewIcon = new AcidIcons.SvgIconView(context, AcidIcons.ICON_PLUS, AcidTheme.LIGHT_ACCENT, 18);
-        newBox.addView(mBtnNewIcon);
-        newBox.setOnClickListener(new OnClickListener() {
+        LinearLayout newBox = AcidIcons.createToolbarIconBtn(context, AcidIcons.ICON_PLUS, AcidTheme.LIGHT_ACCENT, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (mController != null) {
@@ -88,38 +84,27 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
                 close();
             }
         });
+        mBtnNewIcon = (AcidIcons.SvgIconView) newBox.getChildAt(0);
         mTopBar.addView(newBox);
 
-        // Action: Clear others (Trash)
-        LinearLayout clearBox = new LinearLayout(context);
-        clearBox.setGravity(Gravity.CENTER);
-        clearBox.setPadding(AcidTheme.dp(context, 7), AcidTheme.dp(context, 6), AcidTheme.dp(context, 7), AcidTheme.dp(context, 6));
-        mBtnClearIcon = new AcidIcons.SvgIconView(context, AcidIcons.ICON_TRASH, AcidTheme.LIGHT_MUTED, 18);
-        clearBox.addView(mBtnClearIcon);
-        clearBox.setOnClickListener(new OnClickListener() {
+        // Action: Clear others (Trash) with confirmation
+        LinearLayout clearBox = AcidIcons.createToolbarIconBtn(context, AcidIcons.ICON_TRASH, AcidTheme.LIGHT_MUTED, new OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (mController != null && mController.getActiveTab() != null) {
-                    mController.closeOtherTabs(mController.getActiveTab().id);
-                    renderTabsGrid();
-                    Toast.makeText(getContext(), "已清除其他标签页", Toast.LENGTH_SHORT).show();
-                }
+                confirmCloseOtherTabs();
             }
         });
+        mBtnClearIcon = (AcidIcons.SvgIconView) clearBox.getChildAt(0);
         mTopBar.addView(clearBox);
 
         // Action: Exit overview (X)
-        LinearLayout closeBox = new LinearLayout(context);
-        closeBox.setGravity(Gravity.CENTER);
-        closeBox.setPadding(AcidTheme.dp(context, 7), AcidTheme.dp(context, 6), AcidTheme.dp(context, 7), AcidTheme.dp(context, 6));
-        mBtnCloseIcon = new AcidIcons.SvgIconView(context, AcidIcons.ICON_CLOSE, AcidTheme.LIGHT_MUTED, 18);
-        closeBox.addView(mBtnCloseIcon);
-        closeBox.setOnClickListener(new OnClickListener() {
+        LinearLayout closeBox = AcidIcons.createToolbarIconBtn(context, AcidIcons.ICON_CLOSE, AcidTheme.LIGHT_MUTED, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 close();
             }
         });
+        mBtnCloseIcon = (AcidIcons.SvgIconView) closeBox.getChildAt(0);
         mTopBar.addView(closeBox);
 
         contentCol.addView(mTopBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -154,6 +139,35 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         }
     }
 
+    public void setOnTabsOverviewListener(OnTabsOverviewListener listener) {
+        mListener = listener;
+    }
+
+    private void confirmCloseOtherTabs() {
+        if (mController == null || mController.getActiveTab() == null) return;
+        int others = mController.getTabs().size() - 1;
+        if (others <= 0) {
+            Toast.makeText(getContext(), "当前没有其他标签页可关闭", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AcidDialog(getContext(), mIsDarkMode)
+            .setTitle("关闭其他标签页")
+            .setMessage("确定关闭除当前页以外的其余 " + others + " 个标签页吗？")
+            .setDangerButton("全部关闭", new AcidDialog.OnActionListener() {
+                @Override
+                public boolean onAction(android.app.Dialog dialog) {
+                    if (mController.getActiveTab() != null) {
+                        mController.closeOtherTabs(mController.getActiveTab().id);
+                        renderTabsGrid();
+                        Toast.makeText(getContext(), "已关闭其余标签页", Toast.LENGTH_SHORT).show();
+                    }
+                    return true;
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
     @Override
     public void show() {
         if (mController != null) {
@@ -163,6 +177,9 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         renderTabsGrid();
         bringToFront();
         setVisibility(View.VISIBLE);
+        if (mListener != null) {
+            mListener.onOverviewShown();
+        }
     }
 
     public void close() {
@@ -307,7 +324,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         TextView title = new TextView(ctx);
         title.setText(tab.title);
         title.setTextColor(AcidTheme.text(mIsDarkMode));
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_LABEL);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
@@ -320,7 +337,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
             TextView aiBadge = new TextView(ctx);
             aiBadge.setText("● AI操作中");
             aiBadge.setTextColor(AcidTheme.DARK_ACCENT);
-            aiBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+            aiBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
             aiBadge.setTypeface(Typeface.DEFAULT_BOLD);
             aiBadge.setPadding(AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 1), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 1));
             aiBadge.setBackground(AcidTheme.pillBg(ctx, Color.argb(45, 16, 185, 129), 0, 4));
@@ -377,8 +394,8 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
             TextView tip = new TextView(ctx);
             tip.setText("空白页面");
-            tip.setTextColor(AcidTheme.DARK_TEXT_SECONDARY);
-            tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            tip.setTextColor(AcidTheme.muted(mIsDarkMode));
+            tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             LinearLayout.LayoutParams tipLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             tipLp.topMargin = AcidTheme.dp(ctx, 4);
             empty.addView(tip, tipLp);

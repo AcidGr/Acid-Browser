@@ -70,25 +70,25 @@ public class AgentOverlayView extends View {
         mLabelBgPaint.setColor(AcidTheme.OVERLAY_LABEL_BG);
 
         mLabelTextPaint.setColor(AcidTheme.DARK_ACCENT);
-        mLabelTextPaint.setTextSize(dp(11));
+        mLabelTextPaint.setTextSize(AcidTheme.spPx(context, AcidTheme.SP_BADGE));
         mLabelTextPaint.setFakeBoldText(true);
 
         mDimFilterPaint.setColor(Color.argb(165, 15, 23, 42)); // ~65% dark slate dim filter
-        mTipCardBgPaint.setColor(Color.argb(245, 24, 24, 27)); // rounded dark card
+        mTipCardBgPaint.setColor(Color.argb(245, 20, 20, 24)); // rounded dark card
         mTipCardBorderPaint.setStyle(Paint.Style.STROKE);
         mTipCardBorderPaint.setColor(Color.argb(180, 16, 185, 129)); // emerald green border
 
-        mTipTitlePaint.setColor(AcidTheme.DARK_ACCENT); // #10B981
-        mTipTitlePaint.setTextSize(dp(15f));
+        mTipTitlePaint.setColor(AcidTheme.DARK_ACCENT);
+        mTipTitlePaint.setTextSize(AcidTheme.spPx(context, AcidTheme.SP_H3_CARD));
         mTipTitlePaint.setFakeBoldText(true);
         mTipTitlePaint.setTextAlign(Paint.Align.CENTER);
 
-        mTipBodyPaint.setColor(Color.parseColor("#F1F5F9")); // clean light text
-        mTipBodyPaint.setTextSize(dp(12.5f));
+        mTipBodyPaint.setColor(AcidTheme.DARK_TEXT);
+        mTipBodyPaint.setTextSize(AcidTheme.spPx(context, AcidTheme.SP_BODY));
         mTipBodyPaint.setTextAlign(Paint.Align.CENTER);
 
-        mTipFootPaint.setColor(AcidTheme.COLOR_AMBER); // amber hint
-        mTipFootPaint.setTextSize(dp(11f));
+        mTipFootPaint.setColor(AcidTheme.COLOR_AMBER);
+        mTipFootPaint.setTextSize(AcidTheme.spPx(context, AcidTheme.SP_CAPTION));
         mTipFootPaint.setTextAlign(Paint.Align.CENTER);
     }
 
