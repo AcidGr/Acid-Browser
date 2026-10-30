@@ -442,7 +442,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         LinearLayout card = createCardLayout(ctx, cardBg, border);
 
         // 关于 Acid Browser
-        addClickableItem(card, AcidIcons.ICON_INFO, "关于 Acid Browser", "v0.4.3", textColor, mutedColor, accentColor, new OnClickListener() {
+        addClickableItem(card, AcidIcons.ICON_INFO, "关于 Acid Browser", "v0.4.4", textColor, mutedColor, accentColor, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 dismiss();

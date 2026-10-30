@@ -514,7 +514,7 @@ public class AdBlockManager {
                     conn.setConnectTimeout(15000);
                     conn.setReadTimeout(20000);
                     conn.setInstanceFollowRedirects(true);
-                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.4.3 AdBlockEngine");
+                    conn.setRequestProperty("User-Agent", "AcidBrowser/0.4.4 AdBlockEngine");
 
                     int responseCode = conn.getResponseCode();
                     if (responseCode != HttpURLConnection.HTTP_OK) {
