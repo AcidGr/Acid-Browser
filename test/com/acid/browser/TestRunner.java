@@ -241,12 +241,18 @@ public final class TestRunner {
         String schema = AcidSettings.describeJsonSchemaForPrompt();
         assertTrue(schema.contains("`mcp_server_enabled`: boolean"), "prompt schema includes mcp_server_enabled");
         assertTrue(schema.contains("`search_engine`: 'google'|'baidu'|'bing'|'duckduckgo'|'custom'"), "prompt schema includes enum codes");
+        assertTrue(schema.contains("`downloader_engine`: 'builtin'|'system'"), "prompt schema includes downloader_engine");
         assertTrue(!schema.contains("adblock_blocked_count"), "internal counter excluded from settings.json schema");
 
         File tmpFile = File.createTempFile("acid_reactive_test_", ".json");
         tmpFile.deleteOnExit();
 
         BrowserDataStore store = new BrowserDataStore(new InMemoryPrefs(), new InMemoryPrefs(), tmpFile);
+        assertEquals(0, Integer.valueOf(store.getDownloaderEngine()), "default engine is builtin (0)");
+        store.setDownloaderEngine(AcidSettings.DOWNLOADER_SYSTEM);
+        assertEquals(1, Integer.valueOf(store.getDownloaderEngine()), "switched engine to system (1)");
+        store.setDownloaderEngine(AcidSettings.DOWNLOADER_BUILTIN);
+
         StateSource.BoolState dntState = store.boolState(AcidSettings.DO_NOT_TRACK);
         StateSource.BoolState darkState = store.boolState(AcidSettings.DARK_MODE);
 

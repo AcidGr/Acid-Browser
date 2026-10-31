@@ -313,6 +313,19 @@ public final class AcidSettings {
         true
     ));
 
+    public static final int DOWNLOADER_BUILTIN = 0;
+    public static final int DOWNLOADER_SYSTEM = 1;
+
+    public static final EnumIndexKey DOWNLOADER_ENGINE = register(new EnumIndexKey(
+        "downloader_engine",
+        "downloader_engine",
+        0,
+        "下载引擎",
+        new String[]{"builtin", "system"},
+        new String[]{"内置高速下载器 (多线程加速 / 断点续传)", "系统默认下载管理器"},
+        new String[]{"internal", "builtin", "native", "system"}
+    ));
+
     public static final BoolKey BLOCK_IMAGES = register(new BoolKey(
         "block_images", "block_images", false, "无图省流模式", true, false
     ));

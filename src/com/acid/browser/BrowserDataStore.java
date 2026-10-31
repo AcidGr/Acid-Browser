@@ -614,6 +614,9 @@ public class BrowserDataStore {
     public int getHomeType() { return get(AcidSettings.HOME_TYPE).intValue(); }
     public void setHomeType(int type) { set(AcidSettings.HOME_TYPE, Integer.valueOf(type)); }
 
+    public int getDownloaderEngine() { return get(AcidSettings.DOWNLOADER_ENGINE).intValue(); }
+    public void setDownloaderEngine(int engine) { set(AcidSettings.DOWNLOADER_ENGINE, Integer.valueOf(engine)); }
+
     public String getCustomHomeUrl() { return get(AcidSettings.HOME_CUSTOM_URL); }
     public void setCustomHomeUrl(String url) { set(AcidSettings.HOME_CUSTOM_URL, url); }
 

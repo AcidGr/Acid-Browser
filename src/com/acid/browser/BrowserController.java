@@ -1518,6 +1518,15 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             return;
         }
 
+        int engine = (mDataStore != null) ? mDataStore.getDownloaderEngine() : AcidSettings.DOWNLOADER_BUILTIN;
+        if (engine == AcidSettings.DOWNLOADER_SYSTEM) {
+            startDownloadWithSystem(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
+        } else {
+            startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
+        }
+    }
+
+    public void startDownloadWithBuiltin(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength) {
         try {
             if (fileName == null || fileName.trim().isEmpty()) {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
@@ -1566,8 +1575,72 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             emitLog("[DOWNLOAD] Enqueued multi-thread task: " + fileName + " (id=" + task.id + ") -> /Download/");
             AcidFeedback.ok(mContext, "已开始内置多线程下载: " + fileName + "\n保存至手机 Download 目录");
         } catch (Exception e) {
-            emitLog("[DOWNLOAD] Failed to enqueue: " + e.getMessage());
-            AcidFeedback.error(mContext, "下载发起失败: " + e.getMessage());
+            emitLog("[DOWNLOAD] Failed to enqueue builtin: " + e.getMessage());
+            AcidFeedback.error(mContext, "内置下载发起失败: " + e.getMessage());
+        }
+    }
+
+    public void startDownloadWithSystem(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+        try {
+            DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm == null) {
+                AcidFeedback.warn(mContext, "系统下载管理器不可用，自动转为内置高速下载");
+                startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
+                return;
+            }
+
+            if (fileName == null || fileName.trim().isEmpty()) {
+                fileName = smartGuessFileName(url, contentDisposition, mimeType);
+            }
+            String effectiveMime = resolveMimeType(fileName, mimeType);
+
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            if (effectiveMime != null && !effectiveMime.isEmpty() && !"*/*".equals(effectiveMime)) {
+                request.setMimeType(effectiveMime);
+            }
+
+            String cookie = null;
+            try {
+                cookie = CookieManager.getInstance().getCookie(url);
+            } catch (Exception ignored) {}
+            if (cookie != null && !cookie.isEmpty()) {
+                request.addRequestHeader("Cookie", cookie);
+            }
+            if (userAgent != null && !userAgent.isEmpty()) {
+                request.addRequestHeader("User-Agent", userAgent);
+            }
+
+            request.allowScanningByMediaScanner();
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setTitle(fileName);
+            request.setDescription("Acid Browser 系统下载");
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+            long downloadId = dm.enqueue(request);
+
+            DownloadItem item = new DownloadItem(
+                downloadId,
+                fileName,
+                url,
+                effectiveMime,
+                contentLength,
+                0,
+                DownloadManager.STATUS_RUNNING,
+                System.currentTimeMillis()
+            );
+
+            synchronized (mDownloads) {
+                mDownloads.add(0, item);
+                if (mDataStore != null) {
+                    mDataStore.saveDownloads(mDownloads);
+                }
+            }
+
+            emitLog("[DOWNLOAD] Enqueued system task: " + fileName + " (id=" + downloadId + ") -> /Download/");
+            AcidFeedback.ok(mContext, "已通过系统下载管理器开始下载: " + fileName);
+        } catch (Exception e) {
+            emitLog("[DOWNLOAD] System download enqueue failed: " + e.getMessage() + ", falling back to builtin");
+            startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
         }
     }
 
