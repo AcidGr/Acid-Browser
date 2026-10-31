@@ -1573,7 +1573,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
 
             emitLog("[DOWNLOAD] Enqueued multi-thread task: " + fileName + " (id=" + task.id + ") -> /Download/");
-            AcidFeedback.ok(mContext, "已开始内置多线程下载: " + fileName + "\n保存至手机 Download 目录");
+            AcidFeedback.ok(mContext, "已开始内置下载: " + fileName + "\n保存至手机 Download 目录");
         } catch (Exception e) {
             emitLog("[DOWNLOAD] Failed to enqueue builtin: " + e.getMessage());
             AcidFeedback.error(mContext, "内置下载发起失败: " + e.getMessage());
@@ -1584,7 +1584,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         try {
             DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm == null) {
-                AcidFeedback.warn(mContext, "系统下载管理器不可用，自动转为内置高速下载");
+                AcidFeedback.warn(mContext, "系统下载器不可用，自动转为内置下载");
                 startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
                 return;
             }
@@ -1637,7 +1637,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
 
             emitLog("[DOWNLOAD] Enqueued system task: " + fileName + " (id=" + downloadId + ") -> /Download/");
-            AcidFeedback.ok(mContext, "已通过系统下载管理器开始下载: " + fileName);
+            AcidFeedback.ok(mContext, "已通过系统下载器开始下载: " + fileName);
         } catch (Exception e) {
             emitLog("[DOWNLOAD] System download enqueue failed: " + e.getMessage() + ", falling back to builtin");
             startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);

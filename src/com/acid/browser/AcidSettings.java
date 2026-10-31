@@ -322,7 +322,7 @@ public final class AcidSettings {
         0,
         "下载引擎",
         new String[]{"builtin", "system"},
-        new String[]{"内置高速下载器 (多线程加速 / 断点续传)", "系统默认下载管理器"},
+        new String[]{"内置下载器", "系统下载器"},
         new String[]{"internal", "builtin", "native", "system"}
     ));
 
