@@ -9,33 +9,6 @@
         return;
     }
 
-    // 1. Patch attachShadow so closed Shadow DOM roots remain inspectable by the agent
-    try {
-        const origAttachShadow = Element.prototype.attachShadow;
-        if (origAttachShadow && !Element.prototype.__acidPatched) {
-            Element.prototype.attachShadow = function (init) {
-                const root = origAttachShadow.call(this, init);
-                try {
-                    Object.defineProperty(this, '__acidShadowRoot', {
-                        value: root,
-                        configurable: true,
-                        enumerable: false
-                    });
-                } catch (e) {}
-                return root;
-            };
-            Element.prototype.__acidPatched = true;
-        }
-    } catch (e) {}
-
-    // 2. Hide webdriver automation flag
-    try {
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => false,
-            configurable: true
-        });
-    } catch (e) {}
-
     const SOM_OVERLAY_ID = '__acid_som_overlay__';
     let refMap = {};
     let refMetaMap = {};
@@ -95,18 +68,6 @@
             }
             return { ok: true, mode: 'mobile' };
         }
-
-        try {
-            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0, configurable: true });
-            Object.defineProperty(navigator, 'platform', { get: () => 'Win32', configurable: true });
-            Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.', configurable: true });
-            if (window.screen) {
-                Object.defineProperty(window.screen, 'width', { get: () => 1920, configurable: true });
-                Object.defineProperty(window.screen, 'height', { get: () => 1080, configurable: true });
-                Object.defineProperty(window.screen, 'availWidth', { get: () => 1920, configurable: true });
-                Object.defineProperty(window.screen, 'availHeight', { get: () => 1040, configurable: true });
-            }
-        } catch (e) {}
 
         function lockViewportMeta() {
             if (!document.head) return;

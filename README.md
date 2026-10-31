@@ -65,7 +65,7 @@
 
 ## 快速上手
 
-1. 安装 `build/Acid-broswer.apk`，首次打开即为内置流光主页。
+1. 安装 `build/Acid-browser.apk`，首次打开即为内置流光主页。
 2. 在搜索框直接输入关键词或网址；也可提交 `acid://search?q=关键词` 调用默认搜索引擎。
 3. 想用 AI 时，只需两步：**先配一个模型**（见下节），再点「Acid Agent」开始对话。
 
@@ -252,4 +252,4 @@ Agent 内建 5 个本地沙盒工具，无需任何插件即可完成闭环任�
 ./test.sh
 ```
 
-构建完成后，签名安装包输出在 `build/Acid-broswer.apk`。
+构建完成后，签名安装包输出在 `build/Acid-browser.apk`。
