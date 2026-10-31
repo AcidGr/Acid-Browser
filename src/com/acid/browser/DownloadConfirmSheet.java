@@ -125,6 +125,17 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 }));
                 infoCard.addView(pathRow);
 
+                // Engine info row
+                int curEngine = (mController != null && mController.getDataStore() != null)
+                    ? mController.getDataStore().getDownloaderEngine() : 0;
+                String engineName = (curEngine == 1) ? "系统默认下载管理器" : "内置多线程加速引擎";
+                TextView tvEngine = new TextView(ctx);
+                tvEngine.setText("下载引擎: " + engineName);
+                tvEngine.setTextColor(muted);
+                tvEngine.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+                tvEngine.setPadding(0, AcidTheme.dp(ctx, 6), 0, 0);
+                infoCard.addView(tvEngine);
+
                 // Source URL Row
                 LinearLayout urlRow = new LinearLayout(ctx);
                 urlRow.setOrientation(LinearLayout.HORIZONTAL);

@@ -152,6 +152,13 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                         new OnClickListener() {
                             @Override public void onClick(View v) { showHomepageDialog(); }
                         }
+                    ),
+                    AcidWidgets.navRow(
+                        ctx, mIsDarkMode, AcidIcons.ICON_DOWNLOAD, accent,
+                        AcidSettings.DOWNLOADER_ENGINE.title, getDownloaderEngineLabel(),
+                        new OnClickListener() {
+                            @Override public void onClick(View v) { showDownloaderEngineDialog(); }
+                        }
                     )
                 ));
 
@@ -354,6 +361,27 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
 
     private String getHomeTypeLabel() {
         return AcidSettings.HOME_TYPE.indexToLabel(mDataStore.getHomeType());
+    }
+
+    private String getDownloaderEngineLabel() {
+        return AcidSettings.DOWNLOADER_ENGINE.indexToLabel(mDataStore.getDownloaderEngine());
+    }
+
+    private void showDownloaderEngineDialog() {
+        final Context ctx = getContext();
+        final String[] items = AcidSettings.DOWNLOADER_ENGINE.displayLabels;
+        AcidDialogs.chooseSingle(
+            ctx, mIsDarkMode, "选择默认下载引擎",
+            items, mDataStore.getDownloaderEngine(),
+            new AcidDialogs.SingleChoiceCallback() {
+                @Override
+                public void onSelected(int which) {
+                    mDataStore.setDownloaderEngine(which);
+                    refreshActivePage();
+                    AcidFeedback.ok(ctx, "下载引擎已切换为: " + items[which]);
+                }
+            }
+        );
     }
 
     // =========================================================================
