@@ -2,6 +2,11 @@ package com.acid.browser;
 
 import org.json.JSONObject;
 
+import com.acid.browser.download.ChunkDivider;
+import com.acid.browser.download.DownloadChunk;
+import com.acid.browser.download.DownloadTask;
+import com.acid.browser.download.HttpProbe;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -56,6 +61,9 @@ public final class TestRunner {
         });
         run("SkillManager discovery, Prompt catalog & custom homepage priority", new TestCase() {
             @Override public void execute() throws Exception { testSkillsAndCustomHomepage(); }
+        });
+        run("AcidDownloader RFC 7233 range chunking, checkpoint resume & probe", new TestCase() {
+            @Override public void execute() throws Exception { testDownloadEngine(); }
         });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
@@ -575,5 +583,92 @@ public final class TestRunner {
         bookmarksFile.delete();
         historyFile.delete();
         tmpDir.delete();
+    }
+
+    private static void testDownloadEngine() throws Exception {
+        // 1. ChunkDivider logic
+        int c1 = ChunkDivider.determineChunkCount(1000, false, 8);
+        assertEquals(1, Integer.valueOf(c1), "No range support returns 1 chunk");
+
+        int c2 = ChunkDivider.determineChunkCount(1024 * 1024, true, 8);
+        assertEquals(1, Integer.valueOf(c2), "Files under 2MB use 1 chunk");
+
+        int c3 = ChunkDivider.determineChunkCount(100 * 1024 * 1024, true, 8);
+        assertEquals(8, Integer.valueOf(c3), "100MB file uses maxChunks (8)");
+
+        List<DownloadChunk> chunks = ChunkDivider.divide(10000000L, 4);
+        assertEquals(4, Integer.valueOf(chunks.size()), "Divided into 4 chunks");
+        assertEquals(0L, Long.valueOf(chunks.get(0).startByte), "Chunk 0 starts at 0");
+        long coveredBytes = 0;
+        for (int i = 0; i < chunks.size(); i++) {
+            DownloadChunk ch = chunks.get(i);
+            if (i > 0) {
+                assertEquals(chunks.get(i - 1).endByte + 1, ch.startByte, "Chunks must be contiguous");
+            }
+            coveredBytes += ch.getTotalBytes();
+        }
+        assertEquals(10000000L, Long.valueOf(coveredBytes), "Total chunk coverage must match content length");
+
+        // 2. DownloadChunk serialization round-trip
+        DownloadChunk origChunk = new DownloadChunk(2, 5000000L, 7499999L, 1250000L, false);
+        JSONObject chunkJson = origChunk.toJsonObject();
+        DownloadChunk restoredChunk = DownloadChunk.fromJsonObject(chunkJson);
+        assertEquals(origChunk.chunkIndex, Integer.valueOf(restoredChunk.chunkIndex), "chunk index matches");
+        assertEquals(origChunk.startByte, Long.valueOf(restoredChunk.startByte), "start byte matches");
+        assertEquals(origChunk.endByte, Long.valueOf(restoredChunk.endByte), "end byte matches");
+        assertEquals(origChunk.downloadedBytes, Long.valueOf(restoredChunk.downloadedBytes), "downloaded bytes match");
+        assertEquals(origChunk.getCurrentSeekOffset(), Long.valueOf(restoredChunk.getCurrentSeekOffset()), "seek offset matches");
+
+        // 3. DownloadTask Checkpoint Persistence & Resume
+        File tempDir = new File(System.getProperty("java.io.tmpdir"), "acid_dl_test_" + System.currentTimeMillis());
+        tempDir.mkdirs();
+        try {
+            Map<String, String> headers = new HashMap<String, String>();
+            headers.put("Cookie", "foo=bar");
+            headers.put("User-Agent", "AcidTest/1.0");
+
+            DownloadTask task = new DownloadTask(999L, "https://example.com/test.zip", "test.zip", "application/zip", tempDir, headers);
+            task.contentLength = 10000000L;
+            task.supportsRange = true;
+            task.setChunks(chunks);
+            chunks.get(0).downloadedBytes = 2500000L;
+            chunks.get(0).completed = true;
+            chunks.get(1).downloadedBytes = 1000000L;
+            task.downloadedBytes = 3500000L;
+
+            boolean saved = task.saveCheckpoint();
+            assertTrue(saved, "Checkpoint saved successfully");
+            assertTrue(task.checkpointFile.exists(), "Checkpoint file exists on disk");
+
+            // Create fresh task and load checkpoint
+            DownloadTask resumedTask = new DownloadTask(999L, "https://example.com/test.zip", "test.zip", "application/zip", tempDir, headers);
+            boolean loaded = resumedTask.loadCheckpoint();
+            assertTrue(loaded, "Checkpoint loaded successfully");
+            assertEquals(10000000L, Long.valueOf(resumedTask.contentLength), "Content length restored");
+            assertTrue(resumedTask.supportsRange, "Range support flag restored");
+            assertEquals(4, Integer.valueOf(resumedTask.chunks.size()), "All 4 chunks restored");
+            assertEquals(3500000L, Long.valueOf(resumedTask.downloadedBytes), "Downloaded bytes restored");
+            assertTrue(resumedTask.chunks.get(0).completed, "Chunk 0 completed flag restored");
+            assertEquals(1000000L, Long.valueOf(resumedTask.chunks.get(1).downloadedBytes), "Chunk 1 progress restored");
+
+            task.cleanCheckpointFile();
+            assertTrue(!task.checkpointFile.exists(), "Checkpoint file cleaned up");
+        } finally {
+            File[] files = tempDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            tempDir.delete();
+        }
+
+        // 4. HttpProbe Content-Disposition filename deduction
+        String d1 = "attachment; filename=\"custom_release.apk\"";
+        assertEquals("custom_release.apk", HttpProbe.parseFileNameFromDisposition(d1), "Standard filename parsing");
+
+        String d2 = "attachment; filename*=UTF-8''%E6%B5%8B%E8%AF%95%E5%AE%89%E8%A3%85%E5%8C%85.apk";
+        assertEquals("测试安装包.apk", HttpProbe.parseFileNameFromDisposition(d2), "RFC 5987 UTF-8 encoded filename parsing");
+
+        String d3 = "inline; filename=unquoted.png; size=12345";
+        assertEquals("unquoted.png", HttpProbe.parseFileNameFromDisposition(d3), "Unquoted filename parsing");
     }
 }

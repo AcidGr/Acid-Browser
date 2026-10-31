@@ -272,9 +272,21 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 public void onClick(View v) {
                     if (mController == null) return;
                     if (it.status == DownloadManager.STATUS_RUNNING) {
-                        AcidFeedback.info(ctx, "正在下载: " + it.fileName + " (" + it.getProgressPercent() + "%)");
+                        String speed = it.getFormattedSpeed();
+                        String speedInfo = (speed != null && !speed.isEmpty()) ? (" · " + speed) : "";
+                        String rem = it.getRemainingTime();
+                        String remInfo = (rem != null && !rem.isEmpty()) ? (" · 剩余 " + rem) : "";
+                        AcidFeedback.info(ctx, "正在多线程下载: " + it.fileName + " (" + it.getProgressPercent() + "%)" + speedInfo + remInfo);
+                    } else if (it.status == DownloadManager.STATUS_PAUSED) {
+                        mController.resumeDownload(it.downloadId);
+                        AcidFeedback.ok(ctx, "已恢复下载: " + it.fileName);
+                        updateDownloadListRows();
+                        startProgressPolling();
                     } else if (it.status == DownloadManager.STATUS_FAILED) {
-                        AcidFeedback.warn(ctx, "该任务下载失败，长按可重新下载");
+                        mController.resumeDownload(it.downloadId);
+                        AcidFeedback.info(ctx, "正在重试下载: " + it.fileName);
+                        updateDownloadListRows();
+                        startProgressPolling();
                     } else {
                         mController.openDownloadedFile(it);
                     }
@@ -305,6 +317,30 @@ public class DownloadsSheet extends AcidBottomSheetView {
     private void showDownloadContextMenu(View anchor, final BrowserController.DownloadItem it) {
         final Context ctx = getContext();
         List<AcidContextMenu.ActionItem> actions = new ArrayList<AcidContextMenu.ActionItem>();
+        if (it.status == DownloadManager.STATUS_RUNNING) {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_CLOSE, "暂停下载", new Runnable() {
+                @Override
+                public void run() {
+                    if (mController != null) {
+                        mController.pauseDownload(it.downloadId);
+                        AcidFeedback.info(ctx, "已暂停: " + it.fileName);
+                        updateDownloadListRows();
+                    }
+                }
+            }));
+        } else if (it.status == DownloadManager.STATUS_PAUSED) {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RELOAD, "继续下载", new Runnable() {
+                @Override
+                public void run() {
+                    if (mController != null) {
+                        mController.resumeDownload(it.downloadId);
+                        AcidFeedback.ok(ctx, "已恢复下载: " + it.fileName);
+                        updateDownloadListRows();
+                        startProgressPolling();
+                    }
+                }
+            }));
+        }
         actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_FILE, "打开文件", new Runnable() {
             @Override
             public void run() {
@@ -389,7 +425,12 @@ public class DownloadsSheet extends AcidBottomSheetView {
         if (it.status == DownloadManager.STATUS_RUNNING) {
             String progSize = BrowserController.DownloadItem.formatSize(it.downloadedBytes)
                 + " / " + BrowserController.DownloadItem.formatSize(it.contentLength);
-            return catTag + "正在下载 " + it.getProgressPercent() + "% · " + progSize;
+            String speedStr = it.getFormattedSpeed();
+            String speedTag = (speedStr != null && !speedStr.isEmpty()) ? " · " + speedStr : "";
+            return catTag + "正在下载 " + it.getProgressPercent() + "% · " + progSize + speedTag;
+        }
+        if (it.status == DownloadManager.STATUS_PAUSED) {
+            return catTag + "已暂停 · " + BrowserController.DownloadItem.formatSize(it.downloadedBytes);
         }
         if (it.status == DownloadManager.STATUS_PENDING) {
             return catTag + "排队等待下载...";
@@ -405,6 +446,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
 
     private int downloadSubtitleColor(BrowserController.DownloadItem it) {
         if (it.status == DownloadManager.STATUS_RUNNING) return AcidTheme.COLOR_BLUE;
+        if (it.status == DownloadManager.STATUS_PAUSED) return AcidTheme.COLOR_AMBER;
         if (it.status == DownloadManager.STATUS_PENDING) return AcidTheme.COLOR_AMBER;
         if (it.status == DownloadManager.STATUS_FAILED) return AcidTheme.COLOR_RED;
         return AcidTheme.muted(mIsDarkMode);
