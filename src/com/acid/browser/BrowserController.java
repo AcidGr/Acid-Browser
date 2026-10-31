@@ -6,6 +6,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -412,6 +413,28 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return tab;
     }
 
+    public TabSession createNewTabBlank(boolean switchToIt) {
+        final int tabId = mNextTabId++;
+        WebView wv = new WebView(mContext);
+        final TabSession tab = new TabSession(tabId, wv);
+        configureWebView(tab);
+
+        mTabs.add(tab);
+        mWebViewContainer.addView(wv, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        wv.setVisibility(android.view.View.GONE);
+
+        if (switchToIt || mActiveTab == null) {
+            switchToTab(tabId);
+        }
+
+        if (mListener != null) {
+            mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
+        }
+        return tab;
+    }
+
     public void captureActiveTabSnapshot() {
         if (mActiveTab == null || mActiveTab.webView == null) return;
         try {
@@ -605,6 +628,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         s.setAllowFileAccessFromFileURLs(true);
         s.setAllowUniversalAccessFromFileURLs(true);
         s.setJavaScriptCanOpenWindowsAutomatically(true);
+        s.setSupportMultipleWindows(true);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setSupportZoom(true);
@@ -614,7 +638,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= 21) {
-            s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
             cm.setAcceptThirdPartyCookies(wv, true);
         }
 
@@ -624,7 +648,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         boolean blockImages = mDataStore != null && mDataStore.isBlockImagesEnabled();
         s.setLoadsImagesAutomatically(!blockImages);
         s.setBlockNetworkImage(blockImages);
-        wv.addJavascriptInterface(mAutomationDriver.getNativeHostBridge(), "__acidNativeHost");
+        // Do not inject __acidNativeHost into standard web pages to preserve clean environment
 
         // Track touch coordinates for floating element context menu (PopupWindow)
         final float[] lastTouch = new float[2];
@@ -852,6 +876,34 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 showHumanJsPrompt(url, message, defaultValue, result);
                 return true;
             }
+
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
+                if (resultMsg == null) return false;
+                try {
+                    TabSession newTab = createNewTabBlank(true);
+                    WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
+                    if (transport != null) {
+                        transport.setWebView(newTab.webView);
+                        resultMsg.sendToTarget();
+                        return true;
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to handle onCreateWindow", e);
+                }
+                return false;
+            }
+
+            @Override
+            public void onCloseWindow(WebView window) {
+                if (window == null) return;
+                for (TabSession t : mTabs) {
+                    if (t.webView == window) {
+                        closeTab(t.id);
+                        break;
+                    }
+                }
+            }
         });
 
         wv.setDownloadListener(new DownloadListener() {
@@ -899,6 +951,40 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             return false;
         }
 
+        // Support intent scheme with app launch or browser_fallback_url
+        if (lower.startsWith("intent:")) {
+            try {
+                Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
+                if (intent != null) {
+                    PackageManager pm = mContext.getPackageManager();
+                    if (pm.resolveActivity(intent, 0) != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        mContext.startActivity(intent);
+                        return true;
+                    }
+                    String fallbackUrl = intent.getStringExtra("browser_fallback_url");
+                    if (fallbackUrl != null && !fallbackUrl.isEmpty()) {
+                        loadUrl(fallbackUrl);
+                        return true;
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to parse/launch intent: " + url, e);
+            }
+        }
+
+        // Support standard auth & communication schemes (OTP, mailto, tel)
+        if (lower.startsWith("otpauth:") || lower.startsWith("mailto:") || lower.startsWith("tel:")) {
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                mContext.startActivity(intent);
+                return true;
+            } catch (Exception e) {
+                Log.w(TAG, "No activity to handle uri: " + url, e);
+            }
+        }
+
         mBlockedDeepLinks++;
         mLastBlockedDeepLink = url;
         emitLog("[HIJACK_SHIELD] Blocked DeepLink -> " + url + " (Total: " + mBlockedDeepLinks + ")");
@@ -909,9 +995,34 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return true;
     }
 
+    private String mDefaultUserAgent = null;
+
+    public String getDefaultUserAgent() {
+        if (mDefaultUserAgent == null && mContext != null) {
+            try {
+                String raw = WebSettings.getDefaultUserAgent(mContext);
+                if (raw != null) {
+                    // Standardize to standalone Chrome: strip embedded WebView markers "; wv" and "Version/X.X"
+                    raw = raw.replace("; wv", "").replaceAll("Version/\\d+\\.\\d+\\s*", "");
+                }
+                mDefaultUserAgent = raw;
+            } catch (Exception e) {
+                mDefaultUserAgent = UA_MOBILE;
+            }
+        }
+        return mDefaultUserAgent != null ? mDefaultUserAgent : UA_MOBILE;
+    }
+
     private void applyIdentityToSettings(WebView wv, boolean desktopMode) {
+        if (wv == null) return;
         WebSettings s = wv.getSettings();
-        s.setUserAgentString(desktopMode ? UA_DESKTOP : UA_MOBILE);
+        if (desktopMode) {
+            s.setUserAgentString(UA_DESKTOP);
+        } else {
+            // Restore genuine native WebView default UA - "do not spoof, just be yourself"
+            String defaultUa = getDefaultUserAgent();
+            s.setUserAgentString(defaultUa != null ? defaultUa : null);
+        }
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(desktopMode);
     }

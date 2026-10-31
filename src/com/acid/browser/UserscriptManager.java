@@ -148,12 +148,6 @@ public class UserscriptManager {
     public void injectRuntimeAndUserscripts(WebView wv, String url, String runAt) {
         if (wv == null) return;
         try {
-            // The bridge must exist before any script can call into it, and it is idempotent
-            // on the page side, so every phase injects it.
-            if (!mBridgeJs.isEmpty()) {
-                wv.evaluateJavascript(mBridgeJs, null);
-            }
-
             for (UserscriptMeta meta : loadedScripts()) {
                 if (!meta.enabled) continue;
                 if (!runAt.equals(meta.runAt)) continue;
@@ -161,7 +155,7 @@ public class UserscriptManager {
                 injectOne(wv, meta);
             }
         } catch (Exception e) {
-            Log.w(TAG, "Failed to inject bridge/userscripts at " + runAt, e);
+            Log.w(TAG, "Failed to inject userscripts at " + runAt, e);
         }
     }
 

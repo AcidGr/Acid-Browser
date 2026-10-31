@@ -36,7 +36,7 @@ public final class BuildInfo {
 }
 EOF
 
-echo "[Acid-broswer] 1. Generating R.java and initial package with aapt (v${VERSION_NAME} / ${VERSION_CODE})..."
+echo "[Acid-browser] 1. Generating R.java and initial package with aapt (v${VERSION_NAME} / ${VERSION_CODE})..."
 "$AAPT" package -f -m -0 arsc \
     -S res \
     -J build/gen \
@@ -44,7 +44,7 @@ echo "[Acid-broswer] 1. Generating R.java and initial package with aapt (v${VERS
     -I "$ANDROID_JAR" \
     -F build/apk/unaligned.apk
 
-echo "[Acid-broswer] 2. Compiling Java sources..."
+echo "[Acid-browser] 2. Compiling Java sources..."
 javac -proc:none -encoding UTF-8 -source 1.8 -target 1.8 -Xlint:-options \
     -cp "$ANDROID_JAR" \
     $(find src build/gen -name "*.java") \
@@ -54,12 +54,12 @@ if [ "${SKIP_TESTS:-0}" != "1" ] && [ -x "./test.sh" ]; then
     FROM_BUILD_SH=1 ./test.sh
 fi
 
-echo "[Acid-broswer] 3. Converting classes to classes.dex (minSdk=24)..."
+echo "[Acid-browser] 3. Converting classes to classes.dex (minSdk=24)..."
 cd build/classes
 "$DX" --dex --min-sdk-version=24 --output=../classes.dex $(find . -name "*.class")
 cd "$SCRIPT_DIR"
 
-echo "[Acid-broswer] 4. Adding classes.dex and assets to APK..."
+echo "[Acid-browser] 4. Adding classes.dex and assets to APK..."
 cd build
 "$AAPT" add "apk/unaligned.apk" "classes.dex"
 cd "$SCRIPT_DIR"
@@ -67,10 +67,10 @@ for a in $(find assets -type f); do
     "$AAPT" add "build/apk/unaligned.apk" "$a"
 done
 
-echo "[Acid-broswer] 5. Zipaligning APK to 4-byte boundary..."
+echo "[Acid-browser] 5. Zipaligning APK to 4-byte boundary..."
 "$ZIPALIGN" -p -f 4 "build/apk/unaligned.apk" "build/apk/aligned.apk"
 
-echo "[Acid-broswer] 6. Signing APK..."
+echo "[Acid-browser] 6. Signing APK..."
 if [ ! -f "$KEYSTORE_FILE" ]; then
     keytool -genkey -v -keystore "$KEYSTORE_FILE" \
         -storepass "$KEYSTORE_PASS" -alias "$KEY_ALIAS" -keypass "$KEY_PASS" \
@@ -82,8 +82,12 @@ fi
     --ks-pass "pass:$KEYSTORE_PASS" \
     --ks-key-alias "$KEY_ALIAS" \
     --key-pass "pass:$KEY_PASS" \
-    --out "build/Acid-broswer.apk" \
+    --out "build/Acid-browser.apk" \
     "build/apk/aligned.apk"
 
-echo "[Acid-broswer] Build successful: build/Acid-broswer.apk"
-ls -lh build/Acid-broswer.apk
+# Backward compatibility alias for the legacy typo filename
+cp -f "build/Acid-browser.apk" "build/Acid-broswer.apk"
+cp -f "build/Acid-browser.apk.idsig" "build/Acid-broswer.apk.idsig" 2>/dev/null || true
+
+echo "[Acid-browser] Build successful: build/Acid-browser.apk (alias: build/Acid-broswer.apk)"
+ls -lh build/Acid-browser.apk
