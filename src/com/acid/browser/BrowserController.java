@@ -39,9 +39,15 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import com.acid.browser.download.AcidDownloader;
+import com.acid.browser.download.DownloadChunk;
+import com.acid.browser.download.DownloadTask;
+
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Core controller managing Tab sessions, WebView lifecycle, Mobile/Desktop identity,
@@ -93,6 +99,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         public long downloadedBytes;
         public int status;
         public final long timestamp;
+
+        public volatile long speedBytesPerSec = 0;
+        public volatile String formattedSpeed = "";
+        public volatile String remainingTime = "";
+
+        public String getFormattedSpeed() {
+            return formattedSpeed != null ? formattedSpeed : "";
+        }
+
+        public String getRemainingTime() {
+            return remainingTime != null ? remainingTime : "";
+        }
 
         public DownloadItem(long downloadId, String fileName, String url, String mimeType, long contentLength, long downloadedBytes, int status, long timestamp) {
             this.downloadId = downloadId;
@@ -251,6 +269,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private int mBlockedDeepLinks = 0;
     private String mLastBlockedDeepLink = "";
     private final List<DownloadItem> mDownloads = new ArrayList<DownloadItem>();
+    private final AcidDownloader mDownloader;
     private BrowserDataStore mDataStore = null;
     /** Guards against stacking overlapping DownloadManager passes. */
     private volatile boolean mSyncInFlight = false;
@@ -316,6 +335,34 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             adBlock.bindDataStore(mDataStore);
         }
         mAutomationDriver = new WebAutomationDriver(context, this);
+        mDownloader = AcidDownloader.getInstance();
+        mDownloader.addListener(new AcidDownloader.DownloaderListener() {
+            @Override
+            public void onTaskStarted(DownloadTask task) {
+                updateDownloadItemFromTask(task);
+            }
+
+            @Override
+            public void onTaskProgress(DownloadTask task) {
+                updateDownloadItemFromTask(task);
+            }
+
+            @Override
+            public void onTaskPaused(DownloadTask task) {
+                updateDownloadItemFromTask(task);
+            }
+
+            @Override
+            public void onTaskCompleted(DownloadTask task) {
+                updateDownloadItemFromTask(task);
+                onDownloadCompleted(task.id);
+            }
+
+            @Override
+            public void onTaskFailed(DownloadTask task, String error) {
+                updateDownloadItemFromTask(task);
+            }
+        });
 
         if (mOverlayView != null) {
             mOverlayView.setTabStateProvider(new AgentOverlayView.TabStateProvider() {
@@ -1438,6 +1485,32 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
+    public AcidDownloader getDownloader() {
+        return mDownloader;
+    }
+
+    private void updateDownloadItemFromTask(DownloadTask task) {
+        if (task == null) return;
+        boolean changed = false;
+        synchronized (mDownloads) {
+            for (DownloadItem it : mDownloads) {
+                if (it.downloadId == task.id) {
+                    it.downloadedBytes = task.downloadedBytes;
+                    if (task.contentLength > 0) it.contentLength = task.contentLength;
+                    it.status = task.status;
+                    it.speedBytesPerSec = task.currentSpeedBytesPerSec;
+                    it.formattedSpeed = task.getFormattedSpeed();
+                    it.remainingTime = task.getEstimatedRemainingTime();
+                    changed = true;
+                    break;
+                }
+            }
+            if (changed && mDataStore != null) {
+                mDataStore.saveDownloads(mDownloads);
+            }
+        }
+    }
+
     public void startDownload(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength) {
         if (url == null || url.isEmpty()) return;
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -1446,48 +1519,41 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
 
         try {
-            DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm == null) {
-                AcidFeedback.warn(mContext, "系统下载管理器不可用");
-                return;
-            }
-
             if (fileName == null || fileName.trim().isEmpty()) {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
-
             String effectiveMime = resolveMimeType(fileName, mimeType);
 
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-            if (effectiveMime != null && !effectiveMime.isEmpty() && !"*/*".equals(effectiveMime)) {
-                request.setMimeType(effectiveMime);
+            File destDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (destDir == null || (!destDir.exists() && !destDir.mkdirs())) {
+                File extFiles = mContext.getExternalFilesDir(null);
+                destDir = new File(extFiles != null ? extFiles : mContext.getFilesDir(), "Download");
+                destDir.mkdirs();
             }
 
-            String cookie = CookieManager.getInstance().getCookie(url);
+            Map<String, String> headers = new HashMap<String, String>();
+            String cookie = null;
+            try {
+                cookie = CookieManager.getInstance().getCookie(url);
+            } catch (Exception ignored) {}
             if (cookie != null && !cookie.isEmpty()) {
-                request.addRequestHeader("Cookie", cookie);
+                headers.put("Cookie", cookie);
             }
             if (userAgent != null && !userAgent.isEmpty()) {
-                request.addRequestHeader("User-Agent", userAgent);
+                headers.put("User-Agent", userAgent);
             }
 
-            request.allowScanningByMediaScanner();
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setTitle(fileName);
-            request.setDescription("Acid Browser 下载");
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-
-            long downloadId = dm.enqueue(request);
+            final DownloadTask task = mDownloader.enqueue(url, fileName, effectiveMime, destDir, headers);
 
             DownloadItem item = new DownloadItem(
-                downloadId,
-                fileName,
+                task.id,
+                task.fileName,
                 url,
                 effectiveMime,
                 contentLength,
                 0,
-                DownloadManager.STATUS_RUNNING,
-                System.currentTimeMillis()
+                DownloadTask.STATUS_RUNNING,
+                task.createdAt
             );
 
             synchronized (mDownloads) {
@@ -1497,12 +1563,32 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 }
             }
 
-            emitLog("[DOWNLOAD] Enqueued: " + fileName + " (id=" + downloadId + ") -> /Download/");
-            AcidFeedback.ok(mContext, "已开始下载: " + fileName + "\n保存至手机 Download 目录");
+            emitLog("[DOWNLOAD] Enqueued multi-thread task: " + fileName + " (id=" + task.id + ") -> /Download/");
+            AcidFeedback.ok(mContext, "已开始内置多线程下载: " + fileName + "\n保存至手机 Download 目录");
         } catch (Exception e) {
             emitLog("[DOWNLOAD] Failed to enqueue: " + e.getMessage());
             AcidFeedback.error(mContext, "下载发起失败: " + e.getMessage());
         }
+    }
+
+    public boolean pauseDownload(long downloadId) {
+        return mDownloader.pause(downloadId);
+    }
+
+    public boolean resumeDownload(long downloadId) {
+        DownloadTask task = mDownloader.getTask(downloadId);
+        if (task != null) {
+            return mDownloader.resume(downloadId);
+        }
+        synchronized (mDownloads) {
+            for (DownloadItem it : mDownloads) {
+                if (it.downloadId == downloadId) {
+                    startDownload(it.url, it.fileName, null, null, it.mimeType, it.contentLength);
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public void onDownloadCompleted(long downloadId) {
@@ -1570,8 +1656,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
      * @return true when at least one row is still running or pending.
      */
     private boolean syncDownloadStatusOffMainThread() {
-        DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-        if (dm == null) return false;
+        DownloadManager dm = null;
+        try {
+            dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+        } catch (Exception ignored) {}
 
         boolean changed = false;
         boolean anyActive = false;
@@ -1579,10 +1667,34 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         synchronized (mDownloads) {
             for (DownloadItem it : mDownloads) {
                 if (it.downloadId <= 0) {
-                    // A record with no system id can never advance; treat it as finished
-                    // so the poller stops instead of spinning forever.
                     continue;
                 }
+
+                // Check AcidDownloader in-process task first
+                DownloadTask task = mDownloader.getTask(it.downloadId);
+                if (task != null) {
+                    if (it.downloadedBytes != task.downloadedBytes) {
+                        it.downloadedBytes = task.downloadedBytes;
+                        changed = true;
+                    }
+                    if (task.contentLength > 0 && it.contentLength != task.contentLength) {
+                        it.contentLength = task.contentLength;
+                        changed = true;
+                    }
+                    if (it.status != task.status) {
+                        it.status = task.status;
+                        changed = true;
+                    }
+                    it.speedBytesPerSec = task.currentSpeedBytesPerSec;
+                    it.formattedSpeed = task.getFormattedSpeed();
+                    it.remainingTime = task.getEstimatedRemainingTime();
+                    if (it.status == DownloadTask.STATUS_RUNNING || it.status == DownloadTask.STATUS_PENDING) {
+                        anyActive = true;
+                    }
+                    continue;
+                }
+
+                if (dm == null) continue;
                 DownloadManager.Query q = new DownloadManager.Query();
                 q.setFilterById(it.downloadId);
                 Cursor c = null;
@@ -1652,6 +1764,13 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         try {
             File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             File file = new File(dir, it.fileName);
+            if (!file.exists()) {
+                File fallbackDir = new File(mContext.getExternalFilesDir(null), "Download");
+                File fallbackFile = new File(fallbackDir, it.fileName);
+                if (fallbackFile.exists()) {
+                    file = fallbackFile;
+                }
+            }
 
             Uri uri = null;
             if (file.exists()) {
@@ -1743,6 +1862,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public boolean deleteDownload(long downloadId, boolean deletePhysicalFile) {
         boolean removed = false;
         DownloadItem target = null;
+        mDownloader.cancel(downloadId, deletePhysicalFile);
+
         synchronized (mDownloads) {
             for (int i = 0; i < mDownloads.size(); i++) {
                 DownloadItem it = mDownloads.get(i);
@@ -1760,6 +1881,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 File file = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), target.fileName);
                 if (file.exists()) {
                     file.delete();
+                } else {
+                    File fallback = new File(new File(mContext.getExternalFilesDir(null), "Download"), target.fileName);
+                    if (fallback.exists()) fallback.delete();
                 }
                 DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
                 if (dm != null && downloadId > 0) {
