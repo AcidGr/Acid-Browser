@@ -128,7 +128,7 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 // Engine info row
                 int curEngine = (mController != null && mController.getDataStore() != null)
                     ? mController.getDataStore().getDownloaderEngine() : 0;
-                String engineName = (curEngine == 1) ? "系统默认下载管理器" : "内置多线程加速引擎";
+                String engineName = (curEngine == 1) ? "系统下载器" : "内置下载器";
                 TextView tvEngine = new TextView(ctx);
                 tvEngine.setText("下载引擎: " + engineName);
                 tvEngine.setTextColor(muted);
