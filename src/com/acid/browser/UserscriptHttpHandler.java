@@ -130,64 +130,115 @@ public class UserscriptHttpHandler {
         String responseType = details.optString("responseType", "text").toLowerCase();
         boolean isBinary = "blob".equals(responseType) || "arraybuffer".equals(responseType) || "stream".equals(responseType);
 
-        URL url = new URL(urlStr);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        flight.conn = conn;
-        conn.setRequestMethod(method);
-        conn.setConnectTimeout(timeout);
-        conn.setReadTimeout(timeout);
-        conn.setInstanceFollowRedirects(true);
-
-        // Inject default user-agent or caller user-agent
         String ua = details.optString("v_ua", "");
         if (ua.isEmpty()) {
             ua = AcidHttp.userAgent();
         }
-        conn.setRequestProperty("User-Agent", ua);
 
-        // Inject site cookies if available
+        JSONObject headers = details.optJSONObject("headers");
+        String data = details.optString("data", null);
+
+        String currentUrl = urlStr;
+        HttpURLConnection conn = null;
+        int statusCode = 0;
+        String statusText = "";
+        Map<String, List<String>> headerFields = null;
+
+        for (int redirects = 0; redirects < 5; redirects++) {
+            URL url = new URL(currentUrl);
+            conn = (HttpURLConnection) url.openConnection();
+            flight.conn = conn;
+            conn.setRequestMethod(method);
+            conn.setConnectTimeout(timeout);
+            conn.setReadTimeout(timeout);
+            conn.setInstanceFollowRedirects(true);
+            conn.setRequestProperty("User-Agent", ua);
+
+            // Inject site cookies if available
+            try {
+                CookieManager cm = CookieManager.getInstance();
+                if (cm != null) {
+                    String cookie = cm.getCookie(currentUrl);
+                    if (cookie != null && !cookie.isEmpty()) {
+                        conn.setRequestProperty("Cookie", cookie);
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            // Custom headers
+            if (headers != null) {
+                Iterator<?> keys = headers.keys();
+                while (keys.hasNext()) {
+                    String key = (String) keys.next();
+                    conn.setRequestProperty(key, headers.optString(key));
+                }
+            }
+
+            // Request body for POST / PUT / PATCH
+            if (data != null && ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method))) {
+                conn.setDoOutput(true);
+                byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
+                conn.setFixedLengthStreamingMode(bytes.length);
+                OutputStream out = conn.getOutputStream();
+                try {
+                    out.write(bytes);
+                    out.flush();
+                } finally {
+                    out.close();
+                }
+            }
+
+            statusCode = conn.getResponseCode();
+            statusText = conn.getResponseMessage();
+            if (statusText == null) statusText = "";
+
+            // Synchronize Set-Cookie headers back to CookieManager
+            headerFields = conn.getHeaderFields();
+            if (headerFields != null) {
+                for (Map.Entry<String, List<String>> entry : headerFields.entrySet()) {
+                    String key = entry.getKey();
+                    if (key != null && "set-cookie".equalsIgnoreCase(key)) {
+                        for (String val : entry.getValue()) {
+                            try {
+                                CookieManager cm = CookieManager.getInstance();
+                                if (cm != null && val != null) {
+                                    cm.setCookie(currentUrl, val);
+                                }
+                            } catch (Throwable ignored) {}
+                        }
+                    }
+                }
+            }
+
+            // Handle cross-protocol redirects or when followRedirects fails
+            if (statusCode == HttpURLConnection.HTTP_MOVED_PERM ||
+                statusCode == HttpURLConnection.HTTP_MOVED_TEMP ||
+                statusCode == HttpURLConnection.HTTP_SEE_OTHER ||
+                statusCode == 307 || statusCode == 308) {
+                String loc = conn.getHeaderField("Location");
+                if (loc != null && !loc.trim().isEmpty()) {
+                    currentUrl = new URL(new URL(currentUrl), loc.trim()).toString();
+                    conn.disconnect();
+                    if (statusCode == HttpURLConnection.HTTP_SEE_OTHER) {
+                        method = "GET";
+                        data = null;
+                    }
+                    continue;
+                }
+            }
+            break;
+        }
+
         try {
             CookieManager cm = CookieManager.getInstance();
             if (cm != null) {
-                String cookie = cm.getCookie(urlStr);
-                if (cookie != null && !cookie.isEmpty()) {
-                    conn.setRequestProperty("Cookie", cookie);
-                }
+                cm.flush();
             }
         } catch (Throwable ignored) {}
 
-        // Custom headers
-        JSONObject headers = details.optJSONObject("headers");
-        if (headers != null) {
-            Iterator<?> keys = headers.keys();
-            while (keys.hasNext()) {
-                String key = (String) keys.next();
-                conn.setRequestProperty(key, headers.optString(key));
-            }
-        }
-
-        // Request body for POST / PUT / PATCH
-        String data = details.optString("data", null);
-        if (data != null && ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method))) {
-            conn.setDoOutput(true);
-            byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
-            conn.setFixedLengthStreamingMode(bytes.length);
-            OutputStream out = conn.getOutputStream();
-            try {
-                out.write(bytes);
-                out.flush();
-            } finally {
-                out.close();
-            }
-        }
-
-        int statusCode = conn.getResponseCode();
-        String statusText = conn.getResponseMessage();
-        if (statusText == null) statusText = "";
-
         // Extract response headers
         StringBuilder rawHeaders = new StringBuilder();
-        Map<String, List<String>> headerFields = conn.getHeaderFields();
+        headerFields = conn.getHeaderFields();
         String contentType = "application/octet-stream";
         if (headerFields != null) {
             for (Map.Entry<String, List<String>> entry : headerFields.entrySet()) {
@@ -273,43 +324,10 @@ public class UserscriptHttpHandler {
             public void run() {
                 try {
                     String name = JSONObject.quote(cbName);
-                    String js = "(function(){\n" +
-                        "try {\n" +
-                        "  var obj = " + responseObj.toString() + ";\n" +
-                        "  if (obj && obj.responseType) {\n" +
-                        "    var type = obj.responseType;\n" +
-                        "    if (type == 'json') {\n" +
-                        "      try { obj.response = JSON.parse(obj.responseText); } catch(e){ obj.response = null; }\n" +
-                        "    } else if (type == 'document') {\n" +
-                        "      try { obj.response = new DOMParser().parseFromString(obj.responseText, 'text/html'); } catch(e){}\n" +
-                        "    } else if (type == 'blob' || type == 'arraybuffer' || type == 'stream') {\n" +
-                        "      if (obj.responseDataUrl) {\n" +
-                        "        var parts = obj.responseDataUrl.split(',');\n" +
-                        "        var mimeMatch = parts[0].match(/data:([^;]+)/);\n" +
-                        "        var mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';\n" +
-                        "        var decoded = atob(parts[1]);\n" +
-                        "        var bytes = new Uint8Array(decoded.length);\n" +
-                        "        for (var i = 0; i < decoded.length; i++) { bytes[i] = decoded.charCodeAt(i); }\n" +
-                        "        if (type == 'blob') {\n" +
-                        "          obj.response = new Blob([bytes], { type: mime });\n" +
-                        "        } else if (type == 'stream') {\n" +
-                        "          obj.response = new ReadableStream({ start: function(c) { c.enqueue(bytes); c.close(); } });\n" +
-                        "        } else {\n" +
-                        "          obj.response = bytes.buffer;\n" +
-                        "        }\n" +
-                        "        delete obj.responseDataUrl;\n" +
-                        "      }\n" +
-                        "    } else {\n" +
-                        "      obj.response = obj.responseText;\n" +
-                        "    }\n" +
-                        "  }\n" +
-                        "  var n = " + name + ";\n" +
-                        "  var fn = window[n];\n" +
-                        "  if (typeof fn === 'function') {\n" +
-                        "    " + (last ? "delete window[n]; " : "") + "fn(obj);\n" +
-                        "  }\n" +
-                        "} catch(e) { console.error('[AcidUserscriptHttpCallbackError]', e); }\n" +
-                        "})();";
+                    String js = "try{if(window.__acid_dispatch_http_cb){window.__acid_dispatch_http_cb("
+                        + name + "," + responseObj.toString() + "," + last + ");}else{var _f=window["
+                        + name + "];if(typeof _f==='function'){" + (last ? "delete window[" + name + "];" : "")
+                        + "_f(" + responseObj.toString() + ");}}}catch(e){console.error('[AcidUserscriptHttpCallbackError]',e);}";
                     webView.evaluateJavascript(js, null);
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to dispatch userscript HTTP callback", e);
