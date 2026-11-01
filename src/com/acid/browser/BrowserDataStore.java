@@ -524,6 +524,9 @@ public class BrowserDataStore {
     public boolean isAdBlockEnabled() { return get(AcidSettings.ADBLOCK_ENABLED).booleanValue(); }
     public void setAdBlockEnabled(boolean enabled) { set(AcidSettings.ADBLOCK_ENABLED, Boolean.valueOf(enabled)); }
 
+    public int getAppLaunchPolicy() { return get(AcidSettings.APP_LAUNCH_POLICY).intValue(); }
+    public void setAppLaunchPolicy(int policy) { set(AcidSettings.APP_LAUNCH_POLICY, Integer.valueOf(policy)); }
+
     public int getAdBlockBlockedCount() { return get(AcidSettings.ADBLOCK_BLOCKED_COUNT).intValue(); }
     public void setAdBlockBlockedCount(int count) { set(AcidSettings.ADBLOCK_BLOCKED_COUNT, Integer.valueOf(count)); }
 
@@ -549,7 +552,7 @@ public class BrowserDataStore {
             }
         }
         if (TextUtils.isEmpty(template)) {
-            template = SEARCH_ENGINE_URLS[SEARCH_GOOGLE];
+            template = SEARCH_ENGINE_URLS[SEARCH_BING];
         }
 
         try {

@@ -238,6 +238,17 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
             }
         }
 
+        public void goToPageImmediate(int page) {
+            mCurrentPage = page;
+            int pw = (mPageWidth > 0) ? mPageWidth : getWidth();
+            if (pw > 0) {
+                scrollTo(page * pw, 0);
+            }
+            if (mPageListener != null) {
+                mPageListener.onPageChanged(mCurrentPage);
+            }
+        }
+
         private void initVelocityTrackerIfNotExists() {
             if (mVelocityTracker == null) {
                 mVelocityTracker = VelocityTracker.obtain();
@@ -652,7 +663,8 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
     @Override
     public void show() {
         refreshTileVisuals();
-        switchPage(0);
+        mHorizontalPager.goToPageImmediate(mCurrentPage);
+        updateIndicator(mCurrentPage);
         super.show();
     }
 

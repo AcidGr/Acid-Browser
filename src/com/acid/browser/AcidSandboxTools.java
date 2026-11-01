@@ -709,6 +709,12 @@ public class AcidSandboxTools {
         int limit = Math.max(1, Math.min(2000, args.optInt("limit", 200)));
 
         File f = resolveSandboxFile(pathStr);
+        if (f.exists() && f.isDirectory() && isInsideSkills(f) && mController != null && mController.getSkillManager() != null) {
+            File resolved = mController.getSkillManager().resolveSkillFile(pathStr);
+            if (resolved != null && resolved.exists() && resolved.isFile()) {
+                f = resolved;
+            }
+        }
         if (!f.exists() || !f.isFile()) {
             return "Error: File not found: " + f.getAbsolutePath();
         }
@@ -722,6 +728,23 @@ public class AcidSandboxTools {
             int endIdx = Math.min(startIdx + limit, lines.length);
             for (int i = startIdx; i < endIdx; i++) {
                 sb.append(i + 1).append(": ").append(lines[i]).append("\n");
+            }
+            if (endIdx < lines.length) {
+                sb.append("\n(Showing lines ").append(startIdx + 1).append("-").append(endIdx)
+                  .append(" of ").append(lines.length).append(". Use offset=").append(endIdx + 1)
+                  .append(" to continue.)\n");
+            } else if (isInsideSkills(f) && mController != null && mController.getSkillManager() != null) {
+                SkillManager.SkillMeta meta = mController.getSkillManager().findSkillMetaForFile(f);
+                if (meta != null && meta.isDirectoryPackage && !meta.companionFiles.isEmpty()) {
+                    File entryFile = mController.getSkillManager().resolveSkillFile(meta.fileName);
+                    if (entryFile != null && entryFile.getAbsolutePath().equals(f.getAbsolutePath())) {
+                        sb.append("\n[Skill Package Companion Files in skills/").append(meta.packageDirName).append("/]\n");
+                        for (String comp : meta.companionFiles) {
+                            sb.append("- skills/").append(meta.packageDirName).append("/").append(comp).append("\n");
+                        }
+                        sb.append("(Use `read` to inspect companion reference docs or `bash` to run bundled scripts.)\n");
+                    }
+                }
             }
             return sb.toString();
         } catch (Exception e) {
@@ -774,6 +797,13 @@ public class AcidSandboxTools {
             mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
             return;
         }
+        if (isInsideSkills(f)) {
+            if (mController != null && mController.getSkillManager() != null) {
+                mController.getSkillManager().notifyExternalMutation();
+                mController.emitLog("[SKILLS] Reloaded skills catalog after updating " + f.getName());
+            }
+            return;
+        }
         final BrowserDataStore store = mController.getDataStore();
         if (store == null) return;
         String name = f.getName();
@@ -819,6 +849,18 @@ public class AcidSandboxTools {
             File dir = new File(mWorkspaceDir, "adblock").getCanonicalFile();
             File target = f.getCanonicalFile();
             return target.getParentFile() != null && target.getParentFile().equals(dir);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** True when {@code f} lives inside the skills directory (including subdirectories). */
+    private boolean isInsideSkills(File f) {
+        if (f == null) return false;
+        try {
+            String skillsCanon = new File(mWorkspaceDir, "skills").getCanonicalPath();
+            String targetCanon = f.getCanonicalPath();
+            return targetCanon.equals(skillsCanon) || targetCanon.startsWith(skillsCanon + File.separator);
         } catch (Exception e) {
             return false;
         }

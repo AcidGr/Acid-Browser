@@ -199,6 +199,16 @@ public class AdBlockManager {
         mDataStore.setAdBlockSubscriptionUrl(url);
     }
 
+    public int getAppLaunchPolicy() {
+        return mDataStore != null ? mDataStore.getAppLaunchPolicy() : AcidSettings.APP_LAUNCH_ASK;
+    }
+
+    public void setAppLaunchPolicy(int policy) {
+        if (mDataStore != null) {
+            mDataStore.setAppLaunchPolicy(policy);
+        }
+    }
+
     public void loadAllRulesAsync(final Runnable onLoaded) {
         AcidAsync.run(new AcidAsync.Task<Void>() {
             @Override
