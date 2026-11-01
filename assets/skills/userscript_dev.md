@@ -56,17 +56,23 @@ To create a new browser script, call `write` targeting a `.user.js` file inside 
 
 ---
 
-## 3. Runtime Boundaries & Android WebView Constraints
+## 3. Runtime Features & Tampermonkey Compatibility
 
-Acid Browser runs scripts directly inside the Android WebView page context (`evaluateJavascript`). Understand the following runtime boundaries:
+Acid Browser embeds a full-featured GreaseMonkey / Tampermonkey compatibility runtime:
 
-1. **NO `GM_*` APIs**:
-   - There is NO Tampermonkey extension sandbox (`GM_xmlhttpRequest`, `GM_setValue`, `GM_getValue`, `GM_addStyle`, `GM_setClipboard`, etc. are **UNDEFINED**).
-   - Use standard Web APIs: `window.localStorage`, `window.sessionStorage`, `window.fetch`, and `navigator.clipboard`.
-2. **NO `@require` or `@resource`**:
-   - External script CDNs (such as external jQuery bundles) are not pre-fetched. Write clean vanilla JavaScript.
+1. **Native `GM_*` and Promise-based `GM.*` APIs Supported**:
+   - `GM_setValue`, `GM_getValue`, `GM_deleteValue`, `GM_listValues`: Sandboxed persistent key-value storage per script.
+   - `GM_xmlhttpRequest` / `GM.xmlHttpRequest`: Cross-origin HTTP requests bypassing WebView CORS restrictions (supports text, JSON, and binary Blob/ArrayBuffer responses).
+   - `GM_addStyle`: Dynamic CSS style injection.
+   - `GM_addElement`: Safe DOM element creation and attachment.
+   - `GM_setClipboard`: System clipboard access.
+   - `GM_registerMenuCommand` / `GM_unregisterMenuCommand`: Page-level custom action commands.
+   - `GM_info`: Script metadata object (`name`, `version`, `description`, etc.).
+   - `unsafeWindow` / `window.wrappedJSObject`: Wrapped page window object.
+2. **`@require` and `@resource` Support**:
+   - External library CDNs (e.g. jQuery, Lodash, Vue) declared with `@require` are automatically downloaded and cached locally upon installation, then bundled seamlessly before execution.
 3. **Script Size Limit**:
-   - Maximum script size is **20 MB** (`MAX_SCRIPT_BYTES`). Easily accommodates heavy frontend bundles, UI component libraries, and embedded offline resources.
+   - Maximum script size is **20 MB** (`MAX_SCRIPT_BYTES`). Easily accommodates heavy frontend bundles and UI component libraries.
 4. **Lifecycle (`@run-at`) Differences**:
    - `document-idle` (Default): Runs after DOM and subresources finish loading. Safest for element removal, text modifications, and event listeners.
    - `document-start`: Runs at `onPageStarted` when DOM is not yet constructed. **Cannot access `document.body`**. Only use to patch `window`/`navigator` globals, intercept `window.fetch`, or append styles to `document.documentElement`.

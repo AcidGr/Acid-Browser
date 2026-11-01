@@ -77,6 +77,12 @@ public final class TestRunner {
         run("AcidIo UTF-8 file/stream round-trip & DownloadItem classification", new TestCase() {
             @Override public void execute() throws Exception { testAcidIoAndDownloadItem(); }
         });
+        run("FaviconManager host extraction, magic byte detection & disk caching", new TestCase() {
+            @Override public void execute() throws Exception { testFaviconManager(); }
+        });
+        run("Userscript full GM_* runtime, storage isolation & require bundler", new TestCase() {
+            @Override public void execute() throws Exception { testUserscriptFullRuntime(); }
+        });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
@@ -161,6 +167,83 @@ public final class TestRunner {
         assertEquals("raw_tool", fallback.name, "fallback strips .user.js");
         assertEquals(UserscriptMeta.RUN_AT_IDLE, fallback.runAt, "fallback runAt");
         assertTrue(fallback.appliesTo("https://any.example.org/a"), "unrestricted applies everywhere");
+    }
+
+    private static void testUserscriptFullRuntime() throws Exception {
+        // 1. Meta parsing for @require, @resource, @grant, @noframes
+        String fullScript = "// ==UserScript==\n"
+            + "// @name         全功能测试脚本\n"
+            + "// @version      2.0.0\n"
+            + "// @require      https://cdn.example.com/jquery.min.js\n"
+            + "// @require      https://cdn.example.com/lodash.min.js\n"
+            + "// @resource     customCss https://cdn.example.com/theme.css\n"
+            + "// @grant        GM_setValue\n"
+            + "// @grant        GM_getValue\n"
+            + "// @grant        GM_xmlhttpRequest\n"
+            + "// @noframes\n"
+            + "// @match        *://*.example.com/*\n"
+            + "// ==/UserScript==\n"
+            + "console.log(GM_info.script.name);";
+
+        UserscriptMeta meta = UserscriptMeta.parse("full_feature.user.js", fullScript);
+        assertTrue(meta.hasMetadata, "hasMetadata");
+        assertEquals("全功能测试脚本", meta.name, "name");
+        assertEquals(2, Integer.valueOf(meta.requires.size()), "2 requires parsed");
+        assertEquals("https://cdn.example.com/jquery.min.js", meta.requires.get(0), "first require");
+        assertEquals(1, Integer.valueOf(meta.resources.size()), "1 resource parsed");
+        assertEquals(3, Integer.valueOf(meta.grants.size()), "3 grants parsed");
+        assertTrue(meta.noFrames, "noFrames enabled");
+
+        // 2. UserscriptStorage isolated persistence
+        File tmpDir = File.createTempFile("acid_us_test_", "_dir");
+        tmpDir.delete();
+        tmpDir.mkdirs();
+        tmpDir.deleteOnExit();
+
+        UserscriptStorage storage = new UserscriptStorage(tmpDir);
+        storage.setValue("script_a", "theme", "dark");
+        storage.setValue("script_a", "count", 42);
+        storage.setValue("script_b", "theme", "light");
+
+        assertEquals("dark", storage.getValue("script_a", "theme", "default"), "script_a theme");
+        assertEquals(Integer.valueOf(42), storage.getValue("script_a", "count", 0), "script_a count");
+        assertEquals("light", storage.getValue("script_b", "theme", "default"), "script_b theme isolated");
+        assertTrue(storage.listValues("script_a").contains("theme"), "script_a listValues contains theme");
+        assertTrue(storage.listValues("script_a").contains("count"), "script_a listValues contains count");
+
+        // Verify disk reload
+        UserscriptStorage storage2 = new UserscriptStorage(tmpDir);
+        assertEquals("dark", storage2.getValue("script_a", "theme", "default"), "reloaded storage_a theme");
+        storage2.deleteValue("script_a", "theme");
+        assertEquals("default", storage2.getValue("script_a", "theme", "default"), "deleted key returns default");
+
+        // 3. UserscriptDependencyResolver resource extraction & naming
+        String resUrl = UserscriptDependencyResolver.extractResourceUrl("myStyle https://example.org/style.css");
+        assertEquals("https://example.org/style.css", resUrl, "extract resource url");
+
+        // 4. UserscriptShaper closure bundling & GM shims
+        List<String> fakeRequires = new ArrayList<String>();
+        fakeRequires.add("window.fakeJQuery = '3.6.0';");
+        String shaped = UserscriptShaper.shape(meta, fakeRequires);
+        assertTrue(shaped.contains("window.__acidInjectedUserscripts"), "contains re-entrance guard");
+        assertTrue(shaped.contains("unsafeWindow"), "contains unsafeWindow definition");
+        assertTrue(shaped.contains("GM_setValue"), "contains GM_setValue shim");
+        assertTrue(shaped.contains("GM_getValue"), "contains GM_getValue shim");
+        assertTrue(shaped.contains("GM_xmlhttpRequest"), "contains GM_xmlhttpRequest shim");
+        assertTrue(shaped.contains("GM_addStyle"), "contains GM_addStyle shim");
+        assertTrue(shaped.contains("GM_setClipboard"), "contains GM_setClipboard shim");
+        assertTrue(shaped.contains("GM_registerMenuCommand"), "contains GM_registerMenuCommand shim");
+        assertTrue(shaped.contains("window.fakeJQuery = '3.6.0';"), "contains bundled @require dependency");
+        assertTrue(shaped.contains("console.log(GM_info.script.name);"), "contains script body");
+
+        // 5. UserscriptNativeBridge RPC Dispatcher
+        UserscriptNativeBridge bridge = new UserscriptNativeBridge(null, storage, null);
+        String setResp = bridge.call("setValue", "{\"scriptId\":\"script_c\",\"name\":\"status\",\"value\":\"active\"}");
+        assertEquals("true", setResp, "bridge setValue response");
+        assertEquals("active", storage.getValue("script_c", "status", ""), "storage got bridge setValue");
+
+        String getResp = bridge.call("getValue", "{\"scriptId\":\"script_c\",\"name\":\"status\"}");
+        assertTrue(getResp.contains("active"), "bridge getValue response has value");
     }
 
     private static void testAdBlockRuleParsing() {
@@ -1018,5 +1101,37 @@ public final class TestRunner {
         List<DownloadItem> loadedList = store.loadDownloads();
         assertEquals(Integer.valueOf(1), Integer.valueOf(loadedList.size()), "DownloadItem persisted in BrowserDataStore");
         assertEquals("video.mp4", loadedList.get(0).fileName, "persisted fileName matches");
+    }
+
+    private static void testFaviconManager() throws Exception {
+        // 1. Host extraction & normalization (with non-default port preservation)
+        assertEquals("www.google.com", FaviconManager.extractHost("https://www.google.com/search?q=test"), "extract full URL host");
+        assertEquals("github.com", FaviconManager.extractHost("https://GitHub.com:443/acid/repo"), "extract mixed case with port 443 stripped");
+        assertEquals("example.com", FaviconManager.extractHost("http://example.com:80/home"), "default port 80 stripped");
+        assertEquals("127.0.0.1:8317", FaviconManager.extractHost("http://127.0.0.1:8317/management.html#/"), "preserve 127.0.0.1 port 8317");
+        assertEquals("127.0.0.1:9090", FaviconManager.extractHost("http://127.0.0.1:9090/ui"), "preserve 127.0.0.1 port 9090");
+        assertEquals("192.168.1.1:8080", FaviconManager.extractHost("http://192.168.1.1:8080/admin"), "preserve LAN IP port 8080");
+        assertEquals("localhost:3000", FaviconManager.extractHost("http://localhost:3000/app"), "preserve localhost port 3000");
+        assertEquals("bilibili.com", FaviconManager.extractHost("bilibili.com/video"), "extract host with path");
+        assertEquals("zhihu.com", FaviconManager.extractHost("zhihu.com"), "extract bare host");
+        assertEquals("", FaviconManager.extractHost(""), "extract empty string");
+
+        // 1b. Local & IP host detection for accurate HTTP probe without leaking to external icon services
+        assertTrue(FaviconManager.isLocalOrIpHost("127.0.0.1:8317"), "127.0.0.1 with port recognized as local/ip");
+        assertTrue(FaviconManager.isLocalOrIpHost("127.0.0.1"), "127.0.0.1 recognized as local/ip");
+        assertTrue(FaviconManager.isLocalOrIpHost("localhost:3000"), "localhost with port recognized as local");
+        assertTrue(FaviconManager.isLocalOrIpHost("192.168.1.1:8080"), "LAN IP recognized as local/ip");
+        assertTrue(!FaviconManager.isLocalOrIpHost("google.com"), "public domain recognized as non-local");
+
+        // 2. Favicon magic byte validation
+        byte[] pngBytes = new byte[]{(byte) 0x89, (byte) 'P', (byte) 'N', (byte) 'G', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        byte[] icoBytes = new byte[]{0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        byte[] garbage = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
+
+        assertTrue(FaviconManager.isValidFaviconBytes(pngBytes), "PNG magic bytes recognized");
+        assertTrue(FaviconManager.isValidFaviconBytes(icoBytes), "ICO magic bytes recognized");
+        assertTrue(!FaviconManager.isValidFaviconBytes(garbage), "garbage bytes rejected");
+        assertEquals("image/png", FaviconManager.detectFaviconMime(pngBytes), "detect PNG mime");
+        assertEquals("image/x-icon", FaviconManager.detectFaviconMime(icoBytes), "detect ICO mime");
     }
 }

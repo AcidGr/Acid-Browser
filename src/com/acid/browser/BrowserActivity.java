@@ -149,6 +149,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (mBookmarksHistorySheet != null && mBookmarksHistorySheet.isShowing()) {
                     mBookmarksHistorySheet.refreshActivePage();
                 }
+                if (mController != null) {
+                    mController.pushBookmarksToActiveHomeTabs();
+                }
             }
         });
         mDataStore.setOnHistoryChangedListener(new BrowserDataStore.OnHistoryChangedListener() {

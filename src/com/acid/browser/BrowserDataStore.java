@@ -106,6 +106,7 @@ public class BrowserDataStore {
     private File mWorkspaceDir = null;
     private OnSettingsChangedListener mSettingsChangedListener = null;
     private OnBookmarksChangedListener mBookmarksChangedListener = null;
+    private Runnable mBookmarksMutatedListener = null;
     private OnHistoryChangedListener mHistoryChangedListener = null;
     private CallbackDispatcher mDispatcher = null;
     private FileObserver mFileObserver = null;
@@ -173,7 +174,14 @@ public class BrowserDataStore {
         if (mWorkspaceDir == null || mContext == null) return;
         File homepageDir = new File(mWorkspaceDir, "homepage");
         File targetIndex = new File(homepageDir, "index.html");
-        if (!targetIndex.exists() || targetIndex.length() == 0) {
+        boolean shouldSync = !targetIndex.exists() || targetIndex.length() == 0;
+        if (!shouldSync) {
+            String existing = AcidIo.readFileUtf8OrEmpty(targetIndex, 256 * 1024);
+            if (existing.contains("<!-- ACID_DEFAULT_HOMEPAGE -->") || existing.contains("id=\"quote-text\">你可以让Agent帮你自定义主页</div>")) {
+                shouldSync = true;
+            }
+        }
+        if (shouldSync) {
             String html = AcidIo.readAssetUtf8OrEmpty(mContext, "homepage/index.html");
             if (!html.isEmpty()) {
                 AcidIo.writeFileUtf8Safe(targetIndex, html);
@@ -230,6 +238,10 @@ public class BrowserDataStore {
 
     public void setOnBookmarksChangedListener(OnBookmarksChangedListener l) {
         mBookmarksChangedListener = l;
+    }
+
+    public void setOnBookmarksMutatedListener(Runnable l) {
+        mBookmarksMutatedListener = l;
     }
 
     public void setOnHistoryChangedListener(OnHistoryChangedListener l) {
@@ -797,7 +809,10 @@ public class BrowserDataStore {
             list.add(new EntryItem("知乎", "https://www.zhihu.com"));
             list.add(new EntryItem("Hacker News", "https://news.ycombinator.com"));
             list.add(new EntryItem("百度", "https://www.baidu.com"));
-            saveBookmarks(list);
+            saveBookmarks(list, false);
+            if (mBookmarksJsonFile != null) {
+                saveBookmarksToJsonFile();
+            }
         }
         return list;
     }
@@ -831,6 +846,9 @@ public class BrowserDataStore {
 
         if (syncFile && mBookmarksJsonFile != null) {
             saveBookmarksToJsonFile();
+        }
+        if (mBookmarksMutatedListener != null) {
+            dispatchCallback(mBookmarksMutatedListener);
         }
     }
 
