@@ -1698,7 +1698,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        if (mController != null && mController.getUserscriptManager() != null) {
+            try {
+                mController.getUserscriptManager().getStorage().flushSync();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Override
     protected void onDestroy() {
+        if (mController != null && mController.getUserscriptManager() != null) {
+            try {
+                mController.getUserscriptManager().getStorage().flushSync();
+            } catch (Exception ignored) {}
+        }
         if (mDataStore != null && mDataStore.isClearOnExit()) {
             mDataStore.clearBrowsingData(mController, true, true, false, true, false);
         }
