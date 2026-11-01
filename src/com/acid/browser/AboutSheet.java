@@ -16,7 +16,7 @@ import android.widget.TextView;
  */
 public class AboutSheet extends AcidBottomSheetView {
 
-    public static final String GITHUB_REPO_URL = "https://github.com/AcidGr";
+    public static final String GITHUB_REPO_URL = "https://github.com/AcidGr/Acid-Browser";
 
     public interface OnAboutActionListener {
         void onNavigateToUrl(String url);
@@ -118,7 +118,7 @@ public class AboutSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.groupCard(
                     ctx, mIsDarkMode,
                     AcidWidgets.valueRow(ctx, mIsDarkMode, AcidIcons.ICON_AGENT, accent, "开发者", "酸小明", null),
-                    AcidWidgets.navRow(ctx, mIsDarkMode, AcidIcons.ICON_GLOBE, blue, "GitHub 主页", "AcidGr", new OnClickListener() {
+                    AcidWidgets.navRow(ctx, mIsDarkMode, AcidIcons.ICON_GLOBE, blue, "GitHub 开源仓库", "AcidGr/Acid-Browser", new OnClickListener() {
                         @Override
                         public void onClick(View v) {
                             if (mListener != null) {
@@ -170,10 +170,14 @@ public class AboutSheet extends AcidBottomSheetView {
                 @Override
                 public boolean onAction(Dialog dialog) {
                     if (mListener != null) {
-                        mListener.onStartApkDownload(
-                            info.downloadUrl,
-                            "Acid-browser-v" + info.remoteVersionName + ".apk"
-                        );
+                        if (info.downloadUrl != null && info.downloadUrl.toLowerCase().endsWith(".apk")) {
+                            mListener.onStartApkDownload(
+                                info.downloadUrl,
+                                "Acid-browser-v" + info.remoteVersionName + ".apk"
+                            );
+                        } else {
+                            mListener.onNavigateToUrl(info.downloadUrl);
+                        }
                     }
                     return true;
                 }

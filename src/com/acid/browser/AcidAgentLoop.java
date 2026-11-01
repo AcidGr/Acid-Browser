@@ -936,7 +936,11 @@ public class AcidAgentLoop {
             return act;
         }
         if ("read".equals(name) || "write".equals(name) || "edit".equals(name)) {
-            return args.optString("file_path", "");
+            String fp = args.optString("file_path", "");
+            if ("read".equals(name) && (fp.startsWith("skills/") || fp.contains("/skills/"))) {
+                return "加载技能 · " + fp;
+            }
+            return fp;
         }
         if ("bash".equals(name)) {
             String cmd = args.optString("command", "");

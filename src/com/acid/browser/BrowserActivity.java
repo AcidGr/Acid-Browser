@@ -1535,6 +1535,41 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
+    public void onAppLaunchConfirmRequested(final String url, final String appName, final Intent launchIntent) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing()) return;
+                String shortUrl = url != null && url.length() > 90 ? url.substring(0, 90) + "..." : (url != null ? url : "");
+                new AcidDialog(BrowserActivity.this, mIsDarkMode)
+                    .setTitle("允许打开第三方应用？")
+                    .setMessage("当前网页请求唤起外部应用「" + appName + "」\n\n目标链接: " + shortUrl)
+                    .setPositiveButton("确定", new AcidDialog.OnActionListener() {
+                        @Override
+                        public boolean onAction(android.app.Dialog dialog) {
+                            try {
+                                startActivity(launchIntent);
+                            } catch (Exception e) {
+                                AcidFeedback.warn(BrowserActivity.this, "无法启动应用: " + appName);
+                            }
+                            return true;
+                        }
+                    })
+                    .setNegativeButton("取消", new AcidDialog.OnActionListener() {
+                        @Override
+                        public boolean onAction(android.app.Dialog dialog) {
+                            if (mController != null) {
+                                mController.recordBlockedDeepLink(url);
+                            }
+                            return true;
+                        }
+                    })
+                    .show();
+            }
+        });
+    }
+
+    @Override
     public void onTabsChanged(final int tabCount, final int activeTabId) {
         runOnUiThread(new Runnable() {
             @Override

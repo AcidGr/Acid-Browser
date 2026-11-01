@@ -322,6 +322,66 @@ public final class TestRunner {
         runtime.syncExternal(false);
         assertTrue(!runtime.get(), "syncExternal updates state");
         assertEquals(1, Integer.valueOf(hookCalls[0]), "syncExternal bypasses hook");
+
+        // 3-Level External App Launch Policy & Agent-Mode Forced Block Override
+        assertEquals(Integer.valueOf(BrowserDataStore.SEARCH_BING), Integer.valueOf(store.getSearchEngineIndex()), "default search engine is Bing (2)");
+        assertEquals(Integer.valueOf(AcidSettings.APP_LAUNCH_ASK), Integer.valueOf(store.getAppLaunchPolicy()), "default app launch policy is ASK (1)");
+        store.setAppLaunchPolicy(AcidSettings.APP_LAUNCH_BLOCK);
+        assertEquals(Integer.valueOf(AcidSettings.APP_LAUNCH_BLOCK), Integer.valueOf(store.getAppLaunchPolicy()), "app launch policy updated to BLOCK (0)");
+        store.setAppLaunchPolicy(AcidSettings.APP_LAUNCH_ALLOW);
+        assertEquals(Integer.valueOf(AcidSettings.APP_LAUNCH_ALLOW), Integer.valueOf(store.getAppLaunchPolicy()), "app launch policy updated to ALLOW (2)");
+
+        // GitHub Releases Update Checker JSON parsing & semver comparison
+        String mockGhRelease = "{"
+            + "\"tag_name\":\"v0.4.13\","
+            + "\"body\":\"1. 新增 GitHub Releases 更新检查\\n2. 优化默认配置\","
+            + "\"html_url\":\"https://github.com/AcidGr/Acid-Browser/releases/tag/v0.4.13\","
+            + "\"assets\":[{"
+            + "\"name\":\"Acid-browser-v0.4.13.apk\","
+            + "\"size\":386048,"
+            + "\"browser_download_url\":\"https://github.com/AcidGr/Acid-Browser/releases/download/v0.4.13/Acid-browser-v0.4.13.apk\""
+            + "}]"
+            + "}";
+        AppUpdateChecker.UpdateInfo upInfo = AppUpdateChecker.parseReleaseJson(mockGhRelease, "0.4.12", 232);
+        assertTrue(upInfo.hasUpdate, "GitHub Release v0.4.13 detected as newer than 0.4.12");
+        assertEquals("0.4.13", upInfo.remoteVersionName, "remote version name extracted from tag_name");
+        assertEquals("377 KB", upInfo.apkSize, "APK size formatted from GitHub asset size");
+        assertTrue(upInfo.downloadUrl.endsWith("Acid-browser-v0.4.13.apk"), "APK browser_download_url extracted");
+        AppUpdateChecker.UpdateInfo sameVer = AppUpdateChecker.parseReleaseJson(mockGhRelease, "0.4.13", 233);
+        assertTrue(!sameVer.hasUpdate, "same version v0.4.13 does not trigger update");
+
+        // Verify Agent mode always overrides ASK or ALLOW to BLOCK (0)
+        assertEquals(
+            Integer.valueOf(AcidSettings.APP_LAUNCH_ALLOW),
+            Integer.valueOf(BrowserController.resolveEffectiveAppLaunchPolicy(AcidSettings.APP_LAUNCH_ALLOW, AgentOverlayView.MODE_HUMAN, -1)),
+            "Human mode respects configured ALLOW policy"
+        );
+        assertEquals(
+            Integer.valueOf(AcidSettings.APP_LAUNCH_ASK),
+            Integer.valueOf(BrowserController.resolveEffectiveAppLaunchPolicy(AcidSettings.APP_LAUNCH_ASK, AgentOverlayView.MODE_HUMAN, -1)),
+            "Human mode respects configured ASK policy"
+        );
+        assertEquals(
+            Integer.valueOf(AcidSettings.APP_LAUNCH_BLOCK),
+            Integer.valueOf(BrowserController.resolveEffectiveAppLaunchPolicy(AcidSettings.APP_LAUNCH_ALLOW, AgentOverlayView.MODE_AGENT, 1)),
+            "Agent mode temporarily forces BLOCK even when configured to ALLOW"
+        );
+        assertEquals(
+            Integer.valueOf(AcidSettings.APP_LAUNCH_BLOCK),
+            Integer.valueOf(BrowserController.resolveEffectiveAppLaunchPolicy(AcidSettings.APP_LAUNCH_ASK, AgentOverlayView.MODE_AGENT, -1)),
+            "Agent mode temporarily forces BLOCK even when configured to ASK"
+        );
+        assertEquals(
+            Integer.valueOf(AcidSettings.APP_LAUNCH_ASK),
+            Integer.valueOf(BrowserController.resolveEffectiveAppLaunchPolicy(AcidSettings.APP_LAUNCH_ASK, AgentOverlayView.MODE_TAKEOVER_REQUESTED, 1)),
+            "Restores user ASK policy immediately when Agent pauses for human takeover or exits MODE_AGENT"
+        );
+        assertEquals(
+            Integer.valueOf(AcidSettings.APP_LAUNCH_ALLOW),
+            Integer.valueOf(BrowserController.resolveEffectiveAppLaunchPolicy(AcidSettings.APP_LAUNCH_ALLOW, AgentOverlayView.MODE_HUMAN, 1)),
+            "Restores user ALLOW policy immediately when manually switched back to MODE_HUMAN"
+        );
+
         tmpFile.delete();
     }
 
@@ -567,6 +627,78 @@ public final class TestRunner {
         assertTrue(SkillManager.isBuiltin("homepage_dev.md"), "homepage_dev.md recognized as builtin");
         assertTrue(SkillManager.isBuiltin("userscript_dev.md"), "userscript_dev.md recognized as builtin");
         assertTrue(!SkillManager.isBuiltin("third_party.md"), "third_party.md recognized as custom");
+
+        // 1b. Full SkillManager verification: YAML frontmatter, multi-file packages, enable/disable, GitHub URLs & ZIP import
+        SkillManager sm = new SkillManager(null, tmpDir);
+        assertEquals(3, sm.getSkills().size(), "3 builtin skills synced from assets/skills/");
+
+        // Create a directory-based multi-file skill package with standard YAML frontmatter
+        String yamlSkillMd = "---\n"
+            + "name: webapp-testing\n"
+            + "description: >\n"
+            + "  Toolkit for testing local web applications and APIs.\n"
+            + "---\n\n"
+            + "# WebApp Testing Skill\n\n"
+            + "Use companion references and scripts when testing.\n";
+        assertTrue(sm.saveSkill("webapp-testing/SKILL.md", yamlSkillMd), "save directory skill SKILL.md");
+        assertTrue(sm.saveSkill("webapp-testing/references/api_spec.md", "# API Reference\nDetails..."), "save companion reference doc");
+        assertTrue(sm.saveSkill("webapp-testing/scripts/helper.sh", "#!/bin/sh\necho ok"), "save companion helper script");
+
+        SkillManager.SkillMeta pkgMeta = sm.findSkillMetaForFile(new File(skillsDir, "webapp-testing/SKILL.md"));
+        assertTrue(pkgMeta != null, "directory skill package discovered");
+        assertTrue(pkgMeta.isDirectoryPackage, "marked as directory package");
+        assertEquals("webapp-testing", pkgMeta.name, "YAML name parsed");
+        assertEquals("WebApp Testing Skill", pkgMeta.title, "Markdown heading title parsed alongside YAML");
+        assertEquals("Toolkit for testing local web applications and APIs.", pkgMeta.description, "YAML folded description parsed");
+        assertEquals(2, pkgMeta.companionFiles.size(), "2 companion files discovered");
+        assertTrue(pkgMeta.companionFiles.contains("references/api_spec.md"), "companion reference doc listed");
+        assertTrue(pkgMeta.companionFiles.contains("scripts/helper.sh"), "companion script listed");
+
+        String catalog = sm.buildSystemPromptCatalog();
+        assertTrue(catalog.contains("skills/webapp-testing/SKILL.md"), "catalog includes directory skill entry");
+        assertTrue(catalog.contains("references/api_spec.md"), "catalog mentions companion files");
+
+        // Test enable/disable toggle & persistence across instances
+        sm.setSkillEnabled("webapp-testing/SKILL.md", false);
+        assertTrue(!sm.isSkillEnabled("webapp-testing"), "skill disabled in manager");
+        assertTrue(!sm.buildSystemPromptCatalog().contains("skills/webapp-testing/SKILL.md"), "disabled skill omitted from System Prompt catalog");
+
+        SkillManager smReloaded = new SkillManager(null, tmpDir);
+        assertTrue(!smReloaded.isSkillEnabled("webapp-testing/SKILL.md"), "disabled state persisted across SkillManager reload");
+        smReloaded.setSkillEnabled("webapp-testing", true);
+        assertTrue(smReloaded.buildSystemPromptCatalog().contains("skills/webapp-testing/SKILL.md"), "re-enabled skill restored to catalog");
+
+        // Test GitHub URL parsing (tree folder, blob SKILL.md auto-upgraded to folder, and blob regular file)
+        SkillManager.GitHubSkillCoordinates ghTree = SkillManager.parseGitHubUrl("https://github.com/anthropics/skills/tree/main/skills/frontend-design");
+        assertTrue(ghTree != null, "GitHub tree URL parsed");
+        assertEquals("anthropics", ghTree.owner, "GitHub owner parsed");
+        assertEquals("skills", ghTree.repo, "GitHub repo parsed");
+        assertEquals("main", ghTree.branch, "GitHub branch parsed");
+        assertEquals("skills/frontend-design", ghTree.path, "GitHub sub-path parsed");
+        assertTrue(ghTree.isTreeOrFolder, "GitHub tree recognized as folder");
+
+        SkillManager.GitHubSkillCoordinates ghBlobSkill = SkillManager.parseGitHubUrl("https://github.com/anthropics/skills/blob/main/skills/pdf/SKILL.md");
+        assertTrue(ghBlobSkill != null, "GitHub blob SKILL.md URL parsed");
+        assertEquals("skills/pdf", ghBlobSkill.path, "GitHub blob SKILL.md parent folder extracted");
+        assertTrue(ghBlobSkill.isTreeOrFolder, "GitHub blob SKILL.md upgraded to folder package fetch");
+
+        // Test ZIP archive skill package import
+        java.io.ByteArrayOutputStream zipBos = new java.io.ByteArrayOutputStream();
+        java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(zipBos);
+        zos.putNextEntry(new java.util.zip.ZipEntry("my-zip-skill/SKILL.md"));
+        zos.write("---\nname: zip-skill\ndescription: Imported from ZIP bundle\n---\n# ZIP Skill Title\n".getBytes(StandardCharsets.UTF_8));
+        zos.closeEntry();
+        zos.putNextEntry(new java.util.zip.ZipEntry("my-zip-skill/references/guide.md"));
+        zos.write("Reference guide content".getBytes(StandardCharsets.UTF_8));
+        zos.closeEntry();
+        zos.close();
+
+        SkillManager.ImportResult zipRes = smReloaded.importFromZipBytes(zipBos.toByteArray(), "my-zip-skill");
+        assertTrue(zipRes.success, "ZIP skill package imported successfully");
+        assertEquals(2, zipRes.fileCount, "ZIP imported 2 files");
+        assertEquals("ZIP Skill Title", zipRes.title, "ZIP skill title parsed");
+        assertTrue(smReloaded.deleteSkill("webapp-testing/SKILL.md"), "delete directory skill webapp-testing");
+        assertTrue(smReloaded.deleteSkill(zipRes.skillFileName), "delete imported zip skill");
 
         // 2. Custom homepage priority
         // Initially index.html does not exist in workspace homepage/

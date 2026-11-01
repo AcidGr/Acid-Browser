@@ -53,6 +53,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         void onProgressChanged(int progress, boolean isLoading);
         void onModeChanged(boolean isDesktopMode, int controlMode, boolean somEnabled);
         void onDeepLinkBlocked(String blockedUri, int totalBlocked);
+        void onAppLaunchConfirmRequested(String url, String appName, Intent launchIntent);
         void onTabsChanged(int tabCount, int activeTabId);
         void onDownloadRequested(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength);
         void onUserscriptInstallRequested(String url, String fileName);
@@ -100,6 +101,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private String mTakeoverReason = "";
     private int mBlockedDeepLinks = 0;
     private String mLastBlockedDeepLink = "";
+    private String mLastAskedAppLaunchUrl = "";
+    private long mLastAskedAppLaunchTimeMs = 0L;
     private volatile int mTriggeredDownloads = 0;
     private volatile String mLastTriggeredDownloadInfo = "";
     private View mCustomView = null;
@@ -827,6 +830,31 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mLastTriggeredDownloadInfo;
     }
 
+    public static int resolveEffectiveAppLaunchPolicy(int configuredPolicy, int controlMode, int agentBoundTabId) {
+        if (controlMode == AgentOverlayView.MODE_AGENT) {
+            return AcidSettings.APP_LAUNCH_BLOCK;
+        }
+        if (configuredPolicy < AcidSettings.APP_LAUNCH_BLOCK || configuredPolicy > AcidSettings.APP_LAUNCH_ALLOW) {
+            return AcidSettings.APP_LAUNCH_BLOCK;
+        }
+        return configuredPolicy;
+    }
+
+    public int getEffectiveAppLaunchPolicy() {
+        int configured = mDataStore != null ? mDataStore.getAppLaunchPolicy() : AcidSettings.APP_LAUNCH_BLOCK;
+        int controlMode = mOverlayView != null ? mOverlayView.getControlMode() : AgentOverlayView.MODE_HUMAN;
+        return resolveEffectiveAppLaunchPolicy(configured, controlMode, mAgentBoundTabId);
+    }
+
+    public void recordBlockedDeepLink(String url) {
+        mBlockedDeepLinks++;
+        mLastBlockedDeepLink = url != null ? url : "";
+        emitLog("[HIJACK_SHIELD] Blocked DeepLink -> " + url + " (Total: " + mBlockedDeepLinks + ")");
+        if (mListener != null) {
+            mListener.onDeepLinkBlocked(url, mBlockedDeepLinks);
+        }
+    }
+
     private boolean handleUrlIntercept(String url) {
         if (url == null) return false;
         String lower = url.toLowerCase();
@@ -839,50 +867,88 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             requestDownload(url, null, null, null, null, -1);
             return true;
         }
-        if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("file://") || lower.startsWith("about:") || lower.startsWith("javascript:")) {
+        if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("file://")
+                || lower.startsWith("about:") || lower.startsWith("javascript:")
+                || lower.startsWith("data:") || lower.startsWith("blob:")) {
             return false;
         }
 
-        // Support intent scheme with app launch or browser_fallback_url
-        if (lower.startsWith("intent:")) {
-            try {
-                Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
+        // Parse external app Intent (supports both intent:// URI_INTENT_SCHEME and custom schemes like bilibili://, bdnetdisk://, etc.)
+        Intent intent = null;
+        String fallbackUrl = null;
+        try {
+            if (lower.startsWith("intent:")) {
+                intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
                 if (intent != null) {
-                    PackageManager pm = mContext.getPackageManager();
-                    if (pm.resolveActivity(intent, 0) != null) {
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        mContext.startActivity(intent);
-                        return true;
-                    }
-                    String fallbackUrl = intent.getStringExtra("browser_fallback_url");
-                    if (fallbackUrl != null && !fallbackUrl.isEmpty()) {
-                        loadUrl(fallbackUrl);
-                        return true;
-                    }
+                    fallbackUrl = intent.getStringExtra("browser_fallback_url");
                 }
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to parse/launch intent: " + url, e);
+            } else {
+                intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
             }
-        }
-
-        // Support standard auth & communication schemes (OTP, mailto, tel)
-        if (lower.startsWith("otpauth:") || lower.startsWith("mailto:") || lower.startsWith("tel:")) {
-            try {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            if (intent != null) {
+                intent.addCategory(Intent.CATEGORY_BROWSABLE);
+                intent.setComponent(null);
+                if (Build.VERSION.SDK_INT >= 15) {
+                    intent.setSelector(null);
+                }
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                mContext.startActivity(intent);
-                return true;
-            } catch (Exception e) {
-                Log.w(TAG, "No activity to handle uri: " + url, e);
             }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to parse external app URI: " + url, e);
         }
 
-        mBlockedDeepLinks++;
-        mLastBlockedDeepLink = url;
-        emitLog("[HIJACK_SHIELD] Blocked DeepLink -> " + url + " (Total: " + mBlockedDeepLinks + ")");
+        int policy = getEffectiveAppLaunchPolicy();
 
+        // Level 1: Complete Block (also enforced automatically whenever Agent mode is active)
+        if (policy == AcidSettings.APP_LAUNCH_BLOCK) {
+            recordBlockedDeepLink(url);
+            return true;
+        }
+
+        // Check if an installed app on the device can handle this Intent
+        PackageManager pm = mContext != null ? mContext.getPackageManager() : null;
+        android.content.pm.ResolveInfo ri = (intent != null && pm != null) ? pm.resolveActivity(intent, 0) : null;
+        if (ri == null) {
+            if (fallbackUrl != null && (fallbackUrl.startsWith("http://") || fallbackUrl.startsWith("https://"))) {
+                loadUrl(fallbackUrl);
+                return true;
+            }
+            recordBlockedDeepLink(url);
+            return true;
+        }
+
+        String appName = "";
+        try {
+            CharSequence label = ri.loadLabel(pm);
+            if (label != null) appName = label.toString().trim();
+        } catch (Exception ignored) {}
+        if (appName.isEmpty()) {
+            String scheme = Uri.parse(url).getScheme();
+            appName = scheme != null ? scheme : "第三方应用";
+        }
+
+        // Level 3: Allow Without Blocking
+        if (policy == AcidSettings.APP_LAUNCH_ALLOW) {
+            try {
+                mContext.startActivity(intent);
+                emitLog("[HIJACK_SHIELD] Allowed launching external app (" + appName + ") -> " + url);
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to launch external app: " + url, e);
+            }
+            return true;
+        }
+
+        // Level 2: Ask Confirmation Dialog ("确定" / "取消")
+        long now = System.currentTimeMillis();
+        if (url.equals(mLastAskedAppLaunchUrl) && (now - mLastAskedAppLaunchTimeMs) < 1500) {
+            return true;
+        }
+        mLastAskedAppLaunchUrl = url;
+        mLastAskedAppLaunchTimeMs = now;
         if (mListener != null) {
-            mListener.onDeepLinkBlocked(url, mBlockedDeepLinks);
+            mListener.onAppLaunchConfirmRequested(url, appName, intent);
+        } else {
+            recordBlockedDeepLink(url);
         }
         return true;
     }

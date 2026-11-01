@@ -163,6 +163,52 @@ public class AdBlockSheet extends AcidBottomSheetView {
                 statusCard.addView(pillRow);
                 container.addView(statusCard);
 
+                // 1b. 3-Level External App Launch Interception Section (阻止调用第三方 APP)
+                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "阻止调用第三方 APP"));
+                LinearLayout appLaunchCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
+                appLaunchCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "外部应用唤起拦截等级"));
+
+                final int currentPolicy = mManager.getAppLaunchPolicy();
+                String[] policyLabels = new String[] { "完全拦截", "弹窗询问", "完全不拦截" };
+                appLaunchCard.addView(AcidWidgets.segmentedTabs(
+                    ctx,
+                    mIsDarkMode,
+                    policyLabels,
+                    currentPolicy,
+                    accentColor,
+                    new AcidWidgets.OnTabSelectedListener() {
+                        @Override
+                        public void onTabSelected(int index) {
+                            if (mManager.getAppLaunchPolicy() == index) return;
+                            mManager.setAppLaunchPolicy(index);
+                            String toastText;
+                            if (index == AcidSettings.APP_LAUNCH_BLOCK) {
+                                toastText = "已切换为「一级：完全拦截第三方 APP」";
+                            } else if (index == AcidSettings.APP_LAUNCH_ASK) {
+                                toastText = "已切换为「二级：唤起第三方 APP 时弹窗询问」";
+                            } else {
+                                toastText = "已切换为「三级：允许直接打开第三方 APP」";
+                            }
+                            AcidFeedback.info(ctx, toastText);
+                            refreshActivePage();
+                        }
+                    }
+                ));
+
+                String policyDesc;
+                if (currentPolicy == AcidSettings.APP_LAUNCH_BLOCK) {
+                    policyDesc = "当前为「一级：完全拦截」—— 严禁网页自动拉起任何外部应用，强制留在浏览器内浏览。";
+                } else if (currentPolicy == AcidSettings.APP_LAUNCH_ASK) {
+                    policyDesc = "当前为「二级：弹窗询问」—— 当网页试图打开外部应用时，弹出小窗口询问，由您选择「确定」或「取消」。";
+                } else {
+                    policyDesc = "当前为「三级：完全不拦截」—— 允许网页直接唤起手机上已安装的第三方客户端。";
+                }
+                policyDesc += "\n注：当 AI Agent 处于运行接管状态时，将自动临时锁定为「完全拦截」，任务结束后恢复您的设置。";
+                TextView tvPolicyDesc = AcidWidgets.descriptionText(ctx, mIsDarkMode, policyDesc);
+                tvPolicyDesc.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
+                appLaunchCard.addView(tvPolicyDesc);
+                container.addView(appLaunchCard);
+
                 // 2. Online Subscription Section
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "在线规则订阅"));
                 LinearLayout subCard = AcidWidgets.contentCard(ctx, mIsDarkMode);

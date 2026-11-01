@@ -2,12 +2,17 @@ package com.acid.browser;
 
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.graphics.Typeface;
+import android.text.InputType;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.View;
+import android.widget.CompoundButton;
 import android.widget.LinearLayout;
+import android.widget.Switch;
 import android.widget.TextView;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -15,12 +20,15 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Skill Management Sheet supporting Level-1 list, Level-2 detail viewing/editing,
- * and importing third-party Markdown skills into {@code acid_workspace/skills/}.
+ * Skill Management Sheet supporting Level-1 list (with enable/disable switches),
+ * Level-2 detail viewing/editing (including multi-file Skill Package companion files),
+ * Level-3 companion file inspection/editing, and importing skills from GitHub folders,
+ * GitHub files, ZIP archives, or Markdown URLs into {@code acid_workspace/skills/}.
  */
 public class SkillSheet extends AcidBottomSheetView {
 
     private final SkillManager mManager;
+    private boolean mSuppressRefreshOnToggle = false;
 
     public SkillSheet(Context context, SkillManager manager) {
         super(context);
@@ -32,6 +40,7 @@ public class SkillSheet extends AcidBottomSheetView {
                     post(new Runnable() {
                         @Override
                         public void run() {
+                            if (mSuppressRefreshOnToggle) return;
                             if (isShowing()) {
                                 if (getPageDepth() <= 1) {
                                     setRootPage(buildSkillsListPage());
@@ -80,7 +89,7 @@ public class SkillSheet extends AcidBottomSheetView {
 
                 if (skills.isEmpty()) {
                     container.addView(AcidWidgets.emptyState(
-                        ctx, mIsDarkMode, AcidIcons.ICON_AGENT, "暂无任何技能，点击右上角可添加"
+                        ctx, mIsDarkMode, AcidIcons.ICON_AGENT, "暂无任何技能，点击右上角可添加或从 GitHub 导入"
                     ));
                     return;
                 }
@@ -100,7 +109,7 @@ public class SkillSheet extends AcidBottomSheetView {
                 }
 
                 if (!customs.isEmpty()) {
-                    container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "自定义扩展技能 (" + customs.size() + ")"));
+                    container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "自定义与导入技能 (" + customs.size() + ")"));
                     for (SkillManager.SkillMeta m : customs) {
                         container.addView(buildSkillRow(ctx, m));
                     }
@@ -109,32 +118,140 @@ public class SkillSheet extends AcidBottomSheetView {
         }).withAction(AcidIcons.ICON_PLUS, "添加技能", new OnClickListener() {
             @Override
             public void onClick(View v) {
-                showAddSkillDialog();
+                showAddOrImportSkillPicker();
             }
         });
     }
 
-    private View buildSkillRow(final Context ctx, final SkillManager.SkillMeta meta) {
-        int iconCol = meta.isBuiltin ? AcidTheme.accent(mIsDarkMode) : AcidTheme.icon(mIsDarkMode);
-        String subtitle = meta.description;
-        if (meta.isBuiltin) {
-            subtitle = "[官方核心] " + subtitle;
+    private static String formatSkillSubtitle(SkillManager.SkillMeta meta) {
+        StringBuilder sb = new StringBuilder();
+        if (!meta.enabled) {
+            sb.append("已停用 · ");
         }
+        if (meta.isBuiltin) {
+            sb.append("[官方核心] ");
+        } else if (meta.isDirectoryPackage && !meta.companionFiles.isEmpty()) {
+            sb.append("[技能包 · ").append(meta.companionFiles.size() + 1).append("个文件] ");
+        } else if (meta.isDirectoryPackage) {
+            sb.append("[技能包] ");
+        }
+        sb.append(meta.description);
+        return sb.toString();
+    }
 
-        return AcidWidgets.navRow(
-            ctx, mIsDarkMode, AcidIcons.ICON_AGENT, iconCol,
-            meta.title, subtitle,
-            new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    pushPage(buildSkillDetailPage(meta));
+    private View buildSkillRow(final Context ctx, final SkillManager.SkillMeta meta) {
+        final Switch sw = new Switch(ctx);
+        sw.setChecked(meta.enabled);
+        AcidWidgets.styleSwitch(sw, mIsDarkMode, meta.enabled);
+
+        int activeIconCol = meta.isBuiltin ? AcidTheme.accent(mIsDarkMode) : AcidTheme.COLOR_BLUE;
+        final AcidWidgets.ListRow rowBuilder = new AcidWidgets.ListRow()
+            .leadingIcon(
+                AcidIcons.ICON_AGENT,
+                meta.enabled ? activeIconCol : AcidTheme.iconDisabled(mIsDarkMode),
+                19
+            )
+            .title(meta.title)
+            .subtitle(formatSkillSubtitle(meta))
+            .dimmed(!meta.enabled)
+            .trailingView(sw);
+
+        final LinearLayout card = rowBuilder.build(ctx, mIsDarkMode);
+
+        sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                AcidWidgets.styleSwitch(sw, mIsDarkMode, isChecked);
+                if (mManager != null && meta.enabled != isChecked) {
+                    mSuppressRefreshOnToggle = true;
+                    try {
+                        mManager.setSkillEnabled(meta.fileName, isChecked);
+                    } finally {
+                        mSuppressRefreshOnToggle = false;
+                    }
+                    meta.enabled = isChecked;
+                    if (rowBuilder.iconView != null) {
+                        rowBuilder.iconView.setColor(
+                            isChecked ? activeIconCol : AcidTheme.iconDisabled(mIsDarkMode)
+                        );
+                    }
+                    if (rowBuilder.titleView != null) {
+                        rowBuilder.titleView.setTextColor(
+                            isChecked ? AcidTheme.text(mIsDarkMode) : AcidTheme.muted(mIsDarkMode)
+                        );
+                        rowBuilder.titleView.setTypeface(isChecked ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                    }
+                    if (rowBuilder.subtitleView != null) {
+                        rowBuilder.subtitleView.setText(formatSkillSubtitle(meta));
+                    }
+                    card.setAlpha(isChecked ? 1f : 0.75f);
+                    AcidFeedback.info(ctx, (isChecked ? "已启用技能「" : "已停用技能「") + meta.title + "」");
                 }
             }
-        );
+        });
+
+        card.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                pushPage(buildSkillDetailPage(meta));
+            }
+        });
+
+        card.setOnLongClickListener(new OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                showSkillContextMenu(card, meta);
+                return true;
+            }
+        });
+
+        return card;
+    }
+
+    private void showSkillContextMenu(View anchor, final SkillManager.SkillMeta meta) {
+        final Context ctx = getContext();
+        List<AcidContextMenu.ActionItem> actions = new ArrayList<AcidContextMenu.ActionItem>();
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_INFO, "查看技能详情", new Runnable() {
+            @Override
+            public void run() {
+                pushPage(buildSkillDetailPage(meta));
+            }
+        }));
+        actions.add(new AcidContextMenu.ActionItem(
+            AcidIcons.ICON_CHECK,
+            meta.enabled ? "停用技能" : "启用技能",
+            new Runnable() {
+                @Override
+                public void run() {
+                    if (mManager != null) {
+                        boolean next = !meta.enabled;
+                        mManager.setSkillEnabled(meta.fileName, next);
+                        meta.enabled = next;
+                        refreshActivePage();
+                    }
+                }
+            }
+        ));
+        if (meta.isBuiltin) {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RELOAD, "重置为官方默认", new Runnable() {
+                @Override
+                public void run() {
+                    confirmResetBuiltin(meta);
+                }
+            }));
+        } else {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_TRASH, "删除技能", true, new Runnable() {
+                @Override
+                public void run() {
+                    confirmDelete(meta);
+                }
+            }));
+        }
+        AcidContextMenu.showForAnchor(ctx, anchor, mIsDarkMode, meta.title, actions);
     }
 
     // =========================================================================
-    // LEVEL 2: Skill Detail Page
+    // LEVEL 2: Skill Detail Page (with Bundled Companion Files Support)
     // =========================================================================
 
     private SheetPage buildSkillDetailPage(final SkillManager.SkillMeta meta) {
@@ -144,14 +261,23 @@ public class SkillSheet extends AcidBottomSheetView {
                 final Context ctx = getContext();
                 final String content = mManager != null ? mManager.readSkill(meta.fileName) : "";
 
-                // Metadata Card
+                // 1. Metadata Card
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "技能元数据"));
                 LinearLayout metaCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
                 TextView tvMeta = new TextView(ctx);
                 StringBuilder sb = new StringBuilder();
-                sb.append("文件名称: ").append(meta.fileName).append("\n");
-                sb.append("技能类型: ").append(meta.isBuiltin ? "官方核心预置 (Core Builtin)" : "自定义扩展 (Custom)").append("\n");
-                sb.append("文件大小: ").append(String.format(Locale.getDefault(), "%.1f KB", meta.fileSize / 1024.0)).append("\n");
+                sb.append("技能标识 (Name): ").append(meta.name).append("\n");
+                sb.append("入口路径: skills/").append(meta.fileName).append("\n");
+                sb.append("技能状态: ").append(meta.enabled ? "已启用 (按需注入 Agent)" : "已停用 (不注入 System Prompt)").append("\n");
+                if (meta.isBuiltin) {
+                    sb.append("技能类型: 官方核心预置 (Core Builtin)\n");
+                } else if (meta.isDirectoryPackage) {
+                    sb.append("技能类型: 标准多文件技能包 (含 ")
+                      .append(meta.companionFiles.size()).append(" 个附属文件)\n");
+                } else {
+                    sb.append("技能类型: 单文件扩展技能 (Markdown)\n");
+                }
+                sb.append("总计大小: ").append(String.format(Locale.getDefault(), "%.1f KB", meta.fileSize / 1024.0)).append("\n");
                 SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
                 sb.append("最后修改: ").append(sdf.format(new Date(meta.lastModified)));
                 tvMeta.setText(sb.toString());
@@ -161,11 +287,48 @@ public class SkillSheet extends AcidBottomSheetView {
                 metaCard.addView(tvMeta);
                 container.addView(metaCard);
 
-                // Code/Markdown Preview Box
-                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "Markdown 规则全文"));
-                container.addView(AcidWidgets.codePreviewBox(ctx, mIsDarkMode, content, 5000));
+                // 2. Companion Files Section (for Directory Skill Packages)
+                if (meta.isDirectoryPackage && !meta.companionFiles.isEmpty()) {
+                    container.addView(AcidWidgets.sectionHeader(
+                        ctx, mIsDarkMode,
+                        "附属参考文档与脚本 (" + meta.companionFiles.size() + ")"
+                    ));
+                    LinearLayout compGroup = AcidWidgets.cardGroup(ctx, mIsDarkMode);
+                    for (int i = 0; i < meta.companionFiles.size(); i++) {
+                        final String compRel = meta.companionFiles.get(i);
+                        final String fullRelUnderSkills = meta.packageDirName + "/" + compRel;
+                        File compFile = mManager != null ? mManager.resolveSkillFile(fullRelUnderSkills) : null;
+                        long compLen = compFile != null && compFile.exists() ? compFile.length() : 0L;
+                        String sub = String.format(Locale.getDefault(), "skills/%s · %.1f KB", fullRelUnderSkills, compLen / 1024.0);
+                        if (i > 0) {
+                            AcidWidgets.addDivider(ctx, mIsDarkMode, compGroup);
+                        }
+                        compGroup.addView(AcidWidgets.navRow(
+                            ctx, mIsDarkMode,
+                            compRel.startsWith("scripts/") || compRel.endsWith(".sh") || compRel.endsWith(".js") || compRel.endsWith(".py")
+                                ? AcidIcons.ICON_TERMINAL : AcidIcons.ICON_FILE,
+                            AcidTheme.icon(mIsDarkMode),
+                            compRel,
+                            sub,
+                            new OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    pushPage(buildCompanionFilePage(meta, compRel, fullRelUnderSkills));
+                                }
+                            }
+                        ));
+                    }
+                    container.addView(compGroup);
+                }
 
-                // Footer Buttons
+                // 3. Entry Markdown Preview Box
+                container.addView(AcidWidgets.sectionHeader(
+                    ctx, mIsDarkMode,
+                    meta.isDirectoryPackage ? "主入口文档 (SKILL.md)" : "Markdown 规则全文"
+                ));
+                container.addView(AcidWidgets.codePreviewBox(ctx, mIsDarkMode, content, 6000));
+
+                // 4. Footer Buttons
                 TextView btnCopy = AcidWidgets.secondaryButton(
                     ctx, mIsDarkMode, "复制全文", AcidTheme.text(mIsDarkMode),
                     new OnClickListener() {
@@ -181,7 +344,7 @@ public class SkillSheet extends AcidBottomSheetView {
                     new OnClickListener() {
                         @Override
                         public void onClick(View v) {
-                            showEditSkillDialog(meta, content);
+                            showEditSkillDialog(meta.fileName, content);
                         }
                     }
                 );
@@ -209,6 +372,52 @@ public class SkillSheet extends AcidBottomSheetView {
         return page;
     }
 
+    // =========================================================================
+    // LEVEL 3: Companion File Viewer & Editor Page
+    // =========================================================================
+
+    private SheetPage buildCompanionFilePage(
+        final SkillManager.SkillMeta parentMeta,
+        final String companionRelPath,
+        final String fullRelUnderSkills
+    ) {
+        return new SheetPage(companionRelPath, new FullPageRenderer() {
+            @Override
+            public void render(LinearLayout pinned, LinearLayout container, LinearLayout footer) {
+                final Context ctx = getContext();
+                final String content = mManager != null ? mManager.readSkill(fullRelUnderSkills) : "";
+
+                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "附属文件路径"));
+                container.addView(AcidWidgets.descriptionText(ctx, mIsDarkMode, "skills/" + fullRelUnderSkills));
+
+                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "文件内容"));
+                container.addView(AcidWidgets.codePreviewBox(ctx, mIsDarkMode, content, 6000));
+
+                TextView btnCopy = AcidWidgets.secondaryButton(
+                    ctx, mIsDarkMode, "复制内容", AcidTheme.text(mIsDarkMode),
+                    new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            AcidIo.copyToClipboard(ctx, companionRelPath, content, "已复制附属文件内容");
+                        }
+                    }
+                );
+
+                TextView btnEdit = AcidWidgets.primaryButton(
+                    ctx, mIsDarkMode, "编辑文件", AcidTheme.accent(mIsDarkMode),
+                    new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            showEditSkillDialog(fullRelUnderSkills, content);
+                        }
+                    }
+                );
+
+                footer.addView(AcidWidgets.buttonRow(ctx, btnCopy, btnEdit));
+            }
+        });
+    }
+
     private void confirmResetBuiltin(final SkillManager.SkillMeta meta) {
         final Context ctx = getContext();
         AcidDialogs.confirmDanger(
@@ -229,10 +438,13 @@ public class SkillSheet extends AcidBottomSheetView {
 
     private void confirmDelete(final SkillManager.SkillMeta meta) {
         final Context ctx = getContext();
+        String msg = meta.isDirectoryPackage
+            ? "确定删除技能包「" + meta.title + "」(skills/" + meta.packageDirName + "/ 及其全部附属文件) 吗？"
+            : "确定删除技能「" + meta.title + "」(" + meta.fileName + ") 吗？";
         AcidDialogs.confirmDanger(
             ctx, mIsDarkMode,
             "删除技能",
-            "确定删除技能「" + meta.title + "」(" + meta.fileName + ") 吗？",
+            msg,
             "删除",
             new Runnable() {
                 @Override
@@ -246,8 +458,86 @@ public class SkillSheet extends AcidBottomSheetView {
     }
 
     // =========================================================================
-    // Dialogs: Add & Edit Skill
+    // Dialogs: Import from GitHub / URL or Paste / Create Skill
     // =========================================================================
+
+    private void showAddOrImportSkillPicker() {
+        final Context ctx = getContext();
+        String[] options = new String[] {
+            "从 GitHub / 外部链接导入 (支持文件夹/单文件/ZIP)",
+            "手动粘贴 / 编写 Markdown 技能"
+        };
+        AcidDialogs.chooseSingle(
+            ctx, mIsDarkMode,
+            "添加或导入技能",
+            options,
+            -1,
+            new AcidDialogs.SingleChoiceCallback() {
+                @Override
+                public void onSelected(int index) {
+                    if (index == 0) {
+                        showImportFromUrlDialog();
+                    } else if (index == 1) {
+                        showAddSkillDialog();
+                    }
+                }
+            }
+        );
+    }
+
+    private void showImportFromUrlDialog() {
+        final Context ctx = getContext();
+        String initialUrl = "";
+        ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip() != null && cm.getPrimaryClip().getItemCount() > 0) {
+            CharSequence text = cm.getPrimaryClip().getItemAt(0).getText();
+            if (text != null) {
+                String clip = text.toString().trim();
+                if (clip.startsWith("http://") || clip.startsWith("https://") || clip.startsWith("github.com/")) {
+                    initialUrl = clip;
+                }
+            }
+        }
+
+        AcidDialogs.inputSingleLine(
+            ctx, mIsDarkMode,
+            "从 GitHub / 外部链接导入技能",
+            "支持 GitHub 技能目录链接 (tree/... 自動拉取整包附属文件)、单文件链接 (SKILL.md) 或 .zip 链接",
+            initialUrl,
+            "https://github.com/owner/repo/tree/main/skills/my-skill",
+            InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI,
+            "立即导入",
+            "请输入有效的 GitHub 或技能文件链接",
+            new AcidDialogs.InputSubmitListener() {
+                @Override
+                public boolean onSubmit(final String url) {
+                    if (mManager == null) return true;
+                    AcidFeedback.info(ctx, "正在从远程拉取技能及附属文件...");
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            final SkillManager.ImportResult res = mManager.importSkillFromUrl(url);
+                            post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (res.success) {
+                                        String msg = res.fileCount > 1
+                                            ? "已导入技能包「" + res.title + "」(共 " + res.fileCount + " 个文件)"
+                                            : "已导入技能「" + res.title + "」";
+                                        AcidFeedback.ok(ctx, msg);
+                                        setRootPage(buildSkillsListPage());
+                                    } else {
+                                        AcidFeedback.error(ctx, res.errorMessage);
+                                    }
+                                }
+                            });
+                        }
+                    }, "AcidSkillUrlImporter").start();
+                    return true;
+                }
+            }
+        );
+    }
 
     private void showAddSkillDialog() {
         final Context ctx = getContext();
@@ -255,38 +545,42 @@ public class SkillSheet extends AcidBottomSheetView {
         ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
         if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip() != null && cm.getPrimaryClip().getItemCount() > 0) {
             CharSequence text = cm.getPrimaryClip().getItemAt(0).getText();
-            if (text != null && text.length() > 0 && (text.toString().startsWith("#") || text.toString().contains("Skill"))) {
-                initialContent = text.toString();
+            if (text != null && text.length() > 0) {
+                String clip = text.toString();
+                if (clip.startsWith("---") || clip.startsWith("#") || clip.contains("Skill")) {
+                    initialContent = clip;
+                }
             }
         }
 
         AcidDialogs.inputMultiLine(
             ctx, mIsDarkMode,
             "添加自定义技能 (Markdown)",
-            "粘贴完整的 Skill Markdown 规则...",
+            "支持标准 YAML Frontmatter (--- name / description ---) 或 Markdown 标题格式...",
             initialContent,
-            "# Skill: ...\n\n> 简短描述...\n",
+            "---\nname: my-skill\ndescription: 简短描述何时触发该技能...\n---\n\n# 技能详细指南\n...",
             5, 12,
-            "保存技能",
+            "下一步",
             "内容不能为空",
             new AcidDialogs.InputSubmitListener() {
                 @Override
                 public boolean onSubmit(final String content) {
-                    // Ask for file name
                     AcidDialogs.inputSingleLine(
                         ctx, mIsDarkMode,
-                        "输入技能文件名",
-                        "文件名 (如 my_skill.md)",
+                        "输入技能路径或名称",
+                        "支持单文件名 (如 my_skill.md) 或技能包路径 (如 my-skill/SKILL.md)",
                         "custom_skill.md",
-                        "custom_skill.md",
-                        android.text.InputType.TYPE_CLASS_TEXT,
+                        "custom_skill.md 或 my-skill/SKILL.md",
+                        InputType.TYPE_CLASS_TEXT,
                         "保存",
-                        "文件名不能为空",
+                        "技能名不能为空",
                         new AcidDialogs.InputSubmitListener() {
                             @Override
                             public boolean onSubmit(String fileName) {
                                 String cleanName = fileName.trim();
-                                if (!cleanName.endsWith(".md")) cleanName += ".md";
+                                if (!cleanName.contains("/") && !cleanName.toLowerCase(Locale.US).endsWith(".md")) {
+                                    cleanName += ".md";
+                                }
                                 boolean ok = mManager != null && mManager.saveSkill(cleanName, content);
                                 if (ok) {
                                     AcidFeedback.ok(ctx, "技能「" + cleanName + "」已保存");
@@ -305,12 +599,12 @@ public class SkillSheet extends AcidBottomSheetView {
         );
     }
 
-    private void showEditSkillDialog(final SkillManager.SkillMeta meta, String currentContent) {
+    private void showEditSkillDialog(final String relSkillPath, String currentContent) {
         final Context ctx = getContext();
         AcidDialogs.inputMultiLine(
             ctx, mIsDarkMode,
-            "编辑技能: " + meta.fileName,
-            "编辑 Markdown 规则...",
+            "编辑: " + relSkillPath,
+            "编辑文件内容...",
             currentContent,
             "",
             6, 15,
@@ -319,9 +613,9 @@ public class SkillSheet extends AcidBottomSheetView {
             new AcidDialogs.InputSubmitListener() {
                 @Override
                 public boolean onSubmit(String content) {
-                    boolean ok = mManager != null && mManager.saveSkill(meta.fileName, content);
+                    boolean ok = mManager != null && mManager.saveSkill(relSkillPath, content);
                     if (ok) {
-                        AcidFeedback.ok(ctx, "技能已更新");
+                        AcidFeedback.ok(ctx, "已更新 " + relSkillPath);
                         refreshActivePage();
                         return true;
                     } else {

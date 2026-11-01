@@ -278,7 +278,7 @@ public final class AcidSettings {
     public static final EnumIndexKey SEARCH_ENGINE = register(new EnumIndexKey(
         "search_engine",
         "search_engine",
-        0,
+        2,
         "默认搜索引擎",
         new String[]{"google", "baidu", "bing", "duckduckgo", "custom"},
         new String[]{"Google", "百度 (Baidu)", "必应 (Bing)", "DuckDuckGo", "自定义"},
@@ -352,6 +352,20 @@ public final class AcidSettings {
 
     public static final BoolKey ADBLOCK_ENABLED = register(new BoolKey(
         "adblock_enabled", "adblock_enabled", true, "广告拦截", true, false
+    ));
+
+    public static final int APP_LAUNCH_BLOCK = 0; // 一级：完全拦截
+    public static final int APP_LAUNCH_ASK   = 1; // 二级：弹窗询问
+    public static final int APP_LAUNCH_ALLOW = 2; // 三级：完全不拦截
+
+    public static final EnumIndexKey APP_LAUNCH_POLICY = register(new EnumIndexKey(
+        "app_launch_policy",
+        "app_launch_policy",
+        APP_LAUNCH_ASK,
+        "阻止调用第三方 APP",
+        new String[]{"block", "ask", "allow"},
+        new String[]{"完全拦截", "弹窗询问", "完全不拦截"},
+        new String[]{"deny", "block", "prompt", "ask", "permit", "allow"}
     ));
 
     public static final BoolKey MCP_ENABLED = register(new BoolKey(
