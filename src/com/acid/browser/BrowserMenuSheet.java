@@ -483,7 +483,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
             }
         ));
         list.add(new TileSpec(
-            AcidIcons.ICON_FULLSCREEN, AcidIcons.ICON_FULLSCREEN_EXIT, "全屏模式", "退出全屏", false, mFullscreenState,
+            AcidIcons.ICON_FULLSCREEN, AcidIcons.ICON_FULLSCREEN, "全屏模式", "全屏模式", false, mFullscreenState,
             new Runnable() {
                 @Override public void run() { if (listener != null) listener.onToggleFullscreenMode(); }
             }
