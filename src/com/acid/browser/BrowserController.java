@@ -112,6 +112,14 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void setDataStore(BrowserDataStore dataStore) {
         mDataStore = dataStore;
         mDownloadCoordinator.setDataStore(dataStore);
+        if (mDataStore != null) {
+            mDataStore.setOnBookmarksMutatedListener(new Runnable() {
+                @Override
+                public void run() {
+                    pushBookmarksToActiveHomeTabs();
+                }
+            });
+        }
         if (mDataStore != null && Build.VERSION.SDK_INT >= 19) {
             try {
                 WebView.setWebContentsDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
@@ -487,7 +495,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         boolean blockImages = mDataStore != null && mDataStore.isBlockImagesEnabled();
         s.setLoadsImagesAutomatically(!blockImages);
         s.setBlockNetworkImage(blockImages);
-        // Do not inject __acidNativeHost into standard web pages to preserve clean environment
+        // Attach Userscript Native Bridge for GM_* API support
+        if (mUserscriptManager != null) {
+            mUserscriptManager.attachToWebView(wv);
+        }
 
         // Track touch coordinates for floating element context menu (PopupWindow)
         final float[] lastTouch = new float[2];
@@ -562,7 +573,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 if (request != null && request.getUrl() != null) {
-                    WebResourceResponse resp = AdBlockManager.getInstance(mContext).shouldIntercept(request.getUrl());
+                    Uri u = request.getUrl();
+                    if ("acid-favicon.local".equalsIgnoreCase(u.getHost())) {
+                        return interceptFaviconRequest(u);
+                    }
+                    WebResourceResponse resp = AdBlockManager.getInstance(mContext).shouldIntercept(u);
                     if (resp != null) {
                         return resp;
                     }
@@ -574,7 +589,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
                 if (url != null) {
-                    WebResourceResponse resp = AdBlockManager.getInstance(mContext).shouldIntercept(Uri.parse(url));
+                    Uri u = Uri.parse(url);
+                    if ("acid-favicon.local".equalsIgnoreCase(u.getHost())) {
+                        return interceptFaviconRequest(u);
+                    }
+                    WebResourceResponse resp = AdBlockManager.getInstance(mContext).shouldIntercept(u);
                     if (resp != null) {
                         return resp;
                     }
@@ -644,6 +663,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     injectDarkModeCss(view);
                 }
 
+                if (url != null && (url.equals(HOME_URL) || url.endsWith("/homepage/index.html"))) {
+                    pushBookmarksToActiveHomeTabs();
+                }
+
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(url, tab.title);
                     mListener.onProgressChanged(100, false);
@@ -678,6 +701,14 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 tab.title = (title != null && !title.isEmpty()) ? title : tab.url;
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(tab.url, tab.title);
+                }
+            }
+
+            @Override
+            public void onReceivedIcon(WebView view, Bitmap icon) {
+                super.onReceivedIcon(view, icon);
+                if (icon != null && view != null && view.getUrl() != null && !mIncognitoMode) {
+                    FaviconManager.getInstance(mContext).cacheVisitedFavicon(view.getUrl(), icon);
                 }
             }
 
@@ -1175,6 +1206,69 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public SkillManager getSkillManager() {
         return mSkillManager;
+    }
+
+    private WebResourceResponse interceptFaviconRequest(Uri reqUri) {
+        if (reqUri == null) return null;
+        String path = reqUri.getPath();
+        if (path != null && path.endsWith("/preload.js")) {
+            String js = "window.__INITIAL_BOOKMARKS=" + buildBookmarksJsonWithCachedIcons().toString() + ";";
+            byte[] jsBytes = js.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            WebResourceResponse resp = new WebResourceResponse(
+                "application/javascript", "UTF-8", new java.io.ByteArrayInputStream(jsBytes)
+            );
+            if (Build.VERSION.SDK_INT >= 21) {
+                java.util.Map<String, String> headers = new java.util.HashMap<String, String>();
+                headers.put("Cache-Control", "no-store");
+                headers.put("Access-Control-Allow-Origin", "*");
+                resp.setResponseHeaders(headers);
+            }
+            return resp;
+        }
+        return FaviconManager.getInstance(mContext).interceptFaviconWebRequest(reqUri);
+    }
+    private org.json.JSONArray buildBookmarksJsonWithCachedIcons() {
+        org.json.JSONArray arr = new org.json.JSONArray();
+        if (mDataStore == null) return arr;
+        List<BrowserDataStore.EntryItem> items = mDataStore.loadBookmarks();
+        FaviconManager fm = FaviconManager.getInstance(mContext);
+        if (items != null) {
+            for (BrowserDataStore.EntryItem it : items) {
+                if (it == null) continue;
+                try {
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("title", it.title);
+                    o.put("url", it.url);
+                    String dataUri = fm.getFaviconDataUriFast(it.url);
+                    if (dataUri != null) {
+                        o.put("cachedIcon", dataUri);
+                    }
+                    arr.put(o);
+                } catch (Exception ignored) {}
+            }
+        }
+        return arr;
+    }
+
+    public void pushBookmarksToActiveHomeTabs() {
+        if (mDataStore == null) return;
+        org.json.JSONArray arr = buildBookmarksJsonWithCachedIcons();
+        final String js = "try{if(window.__updateAcidBookmarks){window.__updateAcidBookmarks(" + arr.toString() + ");}}catch(e){}";
+        mMainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                for (TabSession t : mTabs) {
+                    if (t != null && t.webView != null && t.url != null
+                            && (t.url.equals(HOME_URL) || t.url.endsWith("/homepage/index.html"))) {
+                        if (Build.VERSION.SDK_INT >= 19) {
+                            t.webView.evaluateJavascript(js, null);
+                        } else {
+                            t.webView.loadUrl("javascript:" + js);
+                        }
+                    }
+                }
+            }
+        });
     }
 
     public String getHomeUrl() {

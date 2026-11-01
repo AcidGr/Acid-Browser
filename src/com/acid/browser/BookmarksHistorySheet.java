@@ -2,6 +2,7 @@ package com.acid.browser;
 
 import android.app.Dialog;
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -9,6 +10,7 @@ import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
 import java.text.SimpleDateFormat;
@@ -287,9 +289,33 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             .subtitle(item.url);
 
         if (isBookmarks) {
-            rowBuilder.leadingAvatar(ctx, item.title, item.url);
+            FaviconManager fm = FaviconManager.getInstance(ctx);
+            Bitmap fastBmp = fm.getFaviconFast(item.url);
+            final FrameLayout avatar = AcidWidgets.createFaviconAvatar(
+                ctx, mIsDarkMode, fastBmp, item.title, item.url
+            );
+            rowBuilder.leadingCustomView(avatar);
+
+            if (fastBmp == null) {
+                fm.loadFaviconAsync(item.url, new FaviconManager.FaviconCallback() {
+                    @Override
+                    public void onFaviconLoaded(String host, Bitmap bitmap) {
+                        if (bitmap != null && !bitmap.isRecycled()) {
+                            AcidWidgets.updateFaviconAvatarView(
+                                avatar, ctx, mIsDarkMode, bitmap, item.title, item.url
+                            );
+                        }
+                    }
+                });
+            }
         } else {
-            rowBuilder.leadingIcon(AcidIcons.ICON_HISTORY, AcidTheme.COLOR_AMBER, 18);
+            FaviconManager fm = FaviconManager.getInstance(ctx);
+            Bitmap fastBmp = fm.getFaviconFast(item.url);
+            if (fastBmp != null) {
+                rowBuilder.leadingFavicon(ctx, mIsDarkMode, fastBmp, item.title, item.url);
+            } else {
+                rowBuilder.leadingIcon(AcidIcons.ICON_HISTORY, AcidTheme.COLOR_AMBER, 18);
+            }
             if (item.time > 0) {
                 rowBuilder.trailingText(ctx, mIsDarkMode, formatTimestamp(item.time));
             }

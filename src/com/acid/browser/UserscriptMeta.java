@@ -41,6 +41,10 @@ public class UserscriptMeta {
     public final List<String> matches = new ArrayList<String>();
     public final List<String> includes = new ArrayList<String>();
     public final List<String> excludes = new ArrayList<String>();
+    public final List<String> requires = new ArrayList<String>();
+    public final List<String> resources = new ArrayList<String>();
+    public final List<String> grants = new ArrayList<String>();
+    public boolean noFrames = false;
     public String runAt = RUN_AT_IDLE;
     /** Whether this script is active. Can be toggled on/off in the userscripts sheet. */
     public boolean enabled = true;
@@ -131,6 +135,14 @@ public class UserscriptMeta {
             if (!value.isEmpty()) includes.add(value);
         } else if ("exclude".equals(key)) {
             if (!value.isEmpty()) excludes.add(value);
+        } else if ("require".equals(key)) {
+            if (!value.isEmpty()) requires.add(value);
+        } else if ("resource".equals(key)) {
+            if (!value.isEmpty()) resources.add(value);
+        } else if ("grant".equals(key)) {
+            if (!value.isEmpty()) grants.add(value);
+        } else if ("noframes".equals(key)) {
+            noFrames = true;
         } else if ("run-at".equals(key)) {
             String v = value.toLowerCase();
             if (RUN_AT_START.equals(v) || RUN_AT_END.equals(v) || RUN_AT_IDLE.equals(v)) {
@@ -256,9 +268,19 @@ public class UserscriptMeta {
             o.put("scope", describeScope());
             o.put("enabled", enabled);
             o.put("hasMetadata", hasMetadata);
+            o.put("noFrames", noFrames);
             JSONArray m = new JSONArray();
             for (String s : matches) m.put(s);
             o.put("matches", m);
+            JSONArray req = new JSONArray();
+            for (String s : requires) req.put(s);
+            o.put("requires", req);
+            JSONArray res = new JSONArray();
+            for (String s : resources) res.put(s);
+            o.put("resources", res);
+            JSONArray gr = new JSONArray();
+            for (String s : grants) gr.put(s);
+            o.put("grants", gr);
         } catch (Exception e) {
             Log.w(TAG, "Failed to serialize userscript metadata for " + fileName, e);
         }

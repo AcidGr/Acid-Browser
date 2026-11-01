@@ -87,6 +87,7 @@ The Acid WebView sandbox permits cross-origin network requests (`fetch`) from `f
 - Primary entry point: **`homepage/index.html`** (relative to sandbox workspace).
 - Supporting files (optional): `homepage/style.css`, `homepage/app.js`, `homepage/bg.jpg`.
 - The `homepage/` directory is permanently protected in Acid Browser and will **NEVER** be deleted during workspace temp cleanup.
+- **Official Default Marker Removal (MANDATORY UPON CUSTOMIZATION)**: The official default template contains `<!-- ACID_DEFAULT_HOMEPAGE -->` on its first line. Whenever you create, edit, or customize `homepage/index.html` for the user, you **MUST REMOVE/DESTROY** the `<!-- ACID_DEFAULT_HOMEPAGE -->` header comment. Removing this marker declares ownership to the browser and guarantees the user's customized homepage will **NEVER** be overwritten by official default template syncs during future browser version updates or app restarts.
 
 ### Viewport & Theme Declarations
 Always declare modern mobile viewport and color-scheme in `<head>`:
@@ -112,12 +113,13 @@ Or via standard form:
 </form>
 ```
 
-### Bookmark Data Integration
-Before writing `homepage/index.html`, call `read(file_path='bookmarks.json')` to inspect existing bookmarks.
-Render bookmarks into a responsive grid:
-- Colorful circular icon badge (using the first character of the title or domain name with a deterministic pastel background).
-- Site title.
-- Link anchor (`<a href="...">`) to the target URL.
+### Bookmark Data Integration & Favicon Caching
+- **Real-Time Bookmark Sync**: Acid Browser automatically injects live bookmark updates into any open homepage tab via `window.__updateAcidBookmarks(bookmarksArray)` and also stores bookmarks at `../bookmarks.json`.
+  - Always implement `window.__updateAcidBookmarks = function(list) { renderBookmarks(list); }` AND load `../bookmarks.json` via `XMLHttpRequest` on startup/focus so adding or deleting a bookmark updates the homepage grid in real time without hardcoding static links.
+- **Scrollable Bookmark Region**: Keep the top header and search bar fixed (`flex-shrink: 0` inside a `height: 100%; overflow: hidden` container) and make the bookmark grid container independently scrollable (`flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;`).
+- **Favicon Caching**:
+  - Cache verified working favicon URLs per hostname in `localStorage` (`acid_favicon_verified_v1`) so subsequent loads hit the WebView disk cache on the first request without repeating 404 probes, and fall back to a colorful letter avatar if offline.
+  - You may also download custom icons into `homepage/icons/<domain>.png` if needed.
 
 ### Dark Mode Adaptation
 Always use CSS variables and `@media (prefers-color-scheme: dark)`:

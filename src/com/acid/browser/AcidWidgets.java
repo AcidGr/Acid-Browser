@@ -2,8 +2,10 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -12,7 +14,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -548,10 +552,20 @@ public final class AcidWidgets {
             return this;
         }
 
+        public ListRow leadingCustomView(View view) {
+            mLeadingCustomView = view;
+            return this;
+        }
+
         public ListRow leadingAvatar(Context ctx, String title, String url) {
             mLeadingCustomView = AcidIcons.createLetterAvatar(
                 ctx, title, url, 34, AcidTheme.avatarColor(title), Color.WHITE
             );
+            return this;
+        }
+
+        public ListRow leadingFavicon(Context ctx, boolean dark, android.graphics.Bitmap favicon, String title, String url) {
+            mLeadingCustomView = createFaviconAvatar(ctx, dark, favicon, title, url);
             return this;
         }
 
@@ -719,6 +733,69 @@ public final class AcidWidgets {
                 card.setOnLongClickListener(mOnLongClick);
             }
             return card;
+        }
+    }
+
+    /**
+     * Builds a unified 34x34dp Favicon container view. If {@code favicon} is non-null, renders
+     * the bitmap inside a crisp rounded plate; otherwise renders the letter avatar fallback.
+     */
+    public static FrameLayout createFaviconAvatar(
+        Context ctx,
+        boolean dark,
+        Bitmap favicon,
+        String title,
+        String url
+    ) {
+        int sizeDp = 34;
+        float d = ctx.getResources().getDisplayMetrics().density;
+        int sizePx = Math.round(sizeDp * d);
+
+        FrameLayout container = new FrameLayout(ctx);
+        container.setLayoutParams(new LinearLayout.LayoutParams(sizePx, sizePx));
+
+        updateFaviconAvatarView(container, ctx, dark, favicon, title, url);
+        return container;
+    }
+
+    /**
+     * Smoothly updates a {@link #createFaviconAvatar} container in-place when a Favicon bitmap finishes loading.
+     */
+    public static void updateFaviconAvatarView(
+        FrameLayout container,
+        Context ctx,
+        boolean dark,
+        Bitmap favicon,
+        String title,
+        String url
+    ) {
+        if (container == null || ctx == null) return;
+        container.removeAllViews();
+        float d = ctx.getResources().getDisplayMetrics().density;
+
+        if (favicon != null && !favicon.isRecycled()) {
+            GradientDrawable bg = new GradientDrawable();
+            bg.setShape(GradientDrawable.RECTANGLE);
+            bg.setCornerRadius(AcidTheme.dp(ctx, 8));
+            bg.setColor(AcidTheme.searchBg(dark));
+            bg.setStroke(AcidTheme.dp(ctx, 1), AcidTheme.border(dark));
+            container.setBackground(bg);
+
+            ImageView iv = new ImageView(ctx);
+            int iconPx = Math.round(22 * d);
+            FrameLayout.LayoutParams ivLp = new FrameLayout.LayoutParams(
+                iconPx, iconPx, Gravity.CENTER
+            );
+            iv.setLayoutParams(ivLp);
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            iv.setImageBitmap(favicon);
+            container.addView(iv);
+        } else {
+            container.setBackground(null);
+            TextView letter = AcidIcons.createLetterAvatar(
+                ctx, title, url, 34, AcidTheme.avatarColor(title), Color.WHITE
+            );
+            container.addView(letter);
         }
     }
 

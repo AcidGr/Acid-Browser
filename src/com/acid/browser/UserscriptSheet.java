@@ -241,6 +241,17 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 sb.append("状态: ").append(meta.enabled ? "已启用 (随匹配页面自动执行)" : "已停用").append("\n");
                 sb.append("生效范围: ").append(meta.describeScope()).append("\n");
                 sb.append("注入时机: ").append(meta.runAt).append("\n");
+                if (!meta.requires.isEmpty()) {
+                    sb.append("依赖脚本: ").append(meta.requires.size()).append(" 个外部库\n");
+                }
+                if (!meta.grants.isEmpty()) {
+                    sb.append("权限声明: ");
+                    for (int i = 0; i < meta.grants.size(); i++) {
+                        if (i > 0) sb.append(", ");
+                        sb.append(meta.grants.get(i));
+                    }
+                    sb.append("\n");
+                }
                 if (!TextUtils.isEmpty(meta.version)) sb.append("版本: v").append(meta.version).append("\n");
                 sb.append("文件名: ").append(meta.fileName);
                 info.setText(sb.toString());
@@ -401,8 +412,23 @@ public class UserscriptSheet extends AcidBottomSheetView {
             box.addView(tvDesc);
         }
 
+        StringBuilder scopeSb = new StringBuilder();
+        scopeSb.append("生效范围: ").append(meta.describeScope())
+            .append("\n注入时机: ").append(meta.runAt);
+        if (!meta.requires.isEmpty()) {
+            scopeSb.append("\n外部依赖: ").append(meta.requires.size()).append(" 个库 (安装后自动后台缓存)");
+        }
+        if (!meta.grants.isEmpty()) {
+            scopeSb.append("\n权限声明: ");
+            for (int i = 0; i < meta.grants.size(); i++) {
+                if (i > 0) scopeSb.append(", ");
+                scopeSb.append(meta.grants.get(i));
+            }
+        }
+        scopeSb.append("\n脚本来源: ").append(sourceLabel);
+
         TextView tvScope = new TextView(ctx);
-        tvScope.setText("生效范围: " + meta.describeScope() + "\n注入时机: " + meta.runAt + "\n脚本来源: " + sourceLabel);
+        tvScope.setText(scopeSb.toString());
         tvScope.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         tvScope.setTextColor(AcidTheme.muted(mIsDarkMode));
         tvScope.setLineSpacing(AcidTheme.dp(ctx, 2.5f), 1f);

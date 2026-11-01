@@ -36,6 +36,10 @@ public class UserscriptManager {
     private final Context mContext;
     private final File mWorkspaceDir;
     private final File mUserscriptsDir;
+    private final UserscriptStorage mStorage;
+    private final UserscriptHttpHandler mHttpHandler;
+    private final UserscriptNativeBridge mNativeBridge;
+    private final UserscriptDependencyResolver mDepResolver;
     private String mBridgeJs = "";
 
     /**
@@ -55,6 +59,10 @@ public class UserscriptManager {
         if (!mUserscriptsDir.exists()) {
             mUserscriptsDir.mkdirs();
         }
+        mStorage = new UserscriptStorage(mWorkspaceDir);
+        mHttpHandler = new UserscriptHttpHandler();
+        mNativeBridge = new UserscriptNativeBridge(mContext, mStorage, mHttpHandler);
+        mDepResolver = new UserscriptDependencyResolver(mUserscriptsDir);
         loadBridgeAndDefaultUserscripts();
     }
 
@@ -64,6 +72,28 @@ public class UserscriptManager {
 
     public File getUserscriptsDir() {
         return mUserscriptsDir;
+    }
+
+    public UserscriptStorage getStorage() {
+        return mStorage;
+    }
+
+    public UserscriptDependencyResolver getDependencyResolver() {
+        return mDepResolver;
+    }
+
+    public UserscriptNativeBridge getNativeBridge() {
+        return mNativeBridge;
+    }
+
+    public void attachToWebView(WebView wv) {
+        if (wv == null) return;
+        try {
+            wv.addJavascriptInterface(mNativeBridge, UserscriptNativeBridge.JS_INTERFACE_NAME);
+            mNativeBridge.attachWebView(wv);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to attach UserscriptNativeBridge to WebView", e);
+        }
     }
 
     private void loadBridgeAndDefaultUserscripts() {
@@ -180,21 +210,12 @@ public class UserscriptManager {
      * {@code <script>} element, which keeps working on pages with a strict CSP.
      */
     private void injectOne(WebView wv, UserscriptMeta meta) {
-        String code = meta.body;
-        if (code == null || code.trim().isEmpty()) return;
-
-        String guardKey = JSONObject.quote(meta.fileName);
-        String injectPlugin = "(function(){\n" +
-            "try {\n" +
-            "  window.__acidInjectedUserscripts = window.__acidInjectedUserscripts || {};\n" +
-            "  if (!window.__acidInjectedUserscripts[" + guardKey + "]) {\n" +
-            "    window.__acidInjectedUserscripts[" + guardKey + "] = true;\n" +
-            code + "\n" +
-            "  }\n" +
-            "} catch(e) { console.error('[AcidUserscriptError]', e); }\n" +
-            "})();";
+        if (wv == null || meta == null || meta.body == null || meta.body.trim().isEmpty()) return;
+        attachToWebView(wv);
+        List<String> requires = mDepResolver.loadRequiresForScript(meta);
+        String shapedJs = UserscriptShaper.shape(meta, requires);
         try {
-            wv.evaluateJavascript(injectPlugin, null);
+            wv.evaluateJavascript(shapedJs, null);
         } catch (Exception e) {
             Log.w(TAG, "Failed to inject " + meta.fileName, e);
         }
@@ -230,6 +251,7 @@ public class UserscriptManager {
         if (!AcidIo.writeFileUtf8Safe(f, content)) {
             return "写入文件失败: " + f.getAbsolutePath();
         }
+        mDepResolver.prefetchDependenciesAsync(meta, null);
         invalidateCache();
         Log.i(TAG, "Installed " + safeName + " (" + meta.describeScope() + ")");
         return null;
