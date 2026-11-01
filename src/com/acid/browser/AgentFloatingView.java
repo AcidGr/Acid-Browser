@@ -660,11 +660,12 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         desc.setPadding(0, AcidTheme.dp(ctx, 4), 0, AcidTheme.dp(ctx, 8));
         card.addView(desc);
 
-        // 3 Quick Start chips
+        // Quick Start chips
         String[] samples = new String[]{
-            "打开 Hacker News 总结前 3 条科技新闻",
-            "在当前网页提取所有带链接的标题",
-            "在沙盒中编写一个解除网页复制限制的 userscript"
+            "帮我下载网盘里的这个文件",
+            "帮我做一个贪吃蛇游戏并直接展示在页面上",
+            "帮我去掉当前页面上的广告",
+            "帮我下载当前页面上的媒体内容"
         };
         for (final String sample : samples) {
             TextView chip = new TextView(ctx);
