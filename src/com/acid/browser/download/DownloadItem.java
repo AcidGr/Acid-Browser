@@ -23,6 +23,9 @@ public class DownloadItem {
     public volatile String formattedSpeed = "";
     public volatile String remainingTime = "";
 
+    /** Saved in download manager for on-demand download (collapsed from confirm sheet). */
+    public static final int STATUS_SAVED = 0;
+
     public static final int CAT_ALL = 0;
     public static final int CAT_APK = 1;
     public static final int CAT_ARCHIVE = 2;

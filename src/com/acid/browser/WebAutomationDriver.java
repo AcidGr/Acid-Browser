@@ -41,6 +41,8 @@ public class WebAutomationDriver {
         boolean isSomEnabled();
         int getBlockedDeepLinksCount();
         String getLastBlockedDeepLink();
+        int getTriggeredDownloadsCount();
+        String getLastTriggeredDownloadInfo();
     }
 
     private final Context mContext;
@@ -443,6 +445,11 @@ public class WebAutomationDriver {
                     String lastBlocked = mHost.getLastBlockedDeepLink();
                     if (lastBlocked != null && !lastBlocked.isEmpty()) {
                         obj.put("lastBlockedDeepLink", lastBlocked);
+                    }
+                    obj.put("triggeredDownloads", mHost.getTriggeredDownloadsCount());
+                    String lastDl = mHost.getLastTriggeredDownloadInfo();
+                    if (lastDl != null && !lastDl.isEmpty()) {
+                        obj.put("lastTriggeredDownload", lastDl);
                     }
                     if (includeScreenshot) {
                         String b64 = captureScreenshotBase64Sync(75);

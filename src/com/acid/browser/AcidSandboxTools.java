@@ -378,9 +378,30 @@ public class AcidSandboxTools {
     // 1. Browser Tool Implementation (Closed-Loop Observation)
     // =========================================================================
 
+    private String awaitAndFormatDownloadNotice(int dlCountBefore, long maxWaitMs) {
+        if (mController == null) return "";
+        long waited = 0;
+        while (mController.getTriggeredDownloadsCount() <= dlCountBefore && waited < maxWaitMs) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            waited += 100;
+        }
+        if (mController.getTriggeredDownloadsCount() > dlCountBefore) {
+            String info = mController.getLastTriggeredDownloadInfo();
+            return "[DOWNLOAD SHEET OPENED] File: " + info
+                + " — Native download confirmation dialog is now open on screen for the user to tap '立即下载' (Download Now) or '先收起' (Save for Later). Do NOT re-trigger this download.\n\n";
+        }
+        return "";
+    }
+
     private ToolExecResult executeBrowserTool(final JSONObject args) throws Exception {
         String action = args.optString("action", "observe").toLowerCase().trim();
         final WebAutomationDriver driver = mController.getAutomationDriver();
+        final int dlBefore = mController != null ? mController.getTriggeredDownloadsCount() : 0;
 
         if ("observe".equals(action)) {
             boolean som = args.has("som") ? args.optBoolean("som", mController.isSomEnabled()) : mController.isSomEnabled();
@@ -401,7 +422,8 @@ public class AcidSandboxTools {
                 }
             }
             JSONObject obs = driver.navigateSync(url, 3800);
-            return new ToolExecResult(formatObservationWithActionHeader("NAVIGATE -> " + url, null, obs), false, null);
+            String dlNotice = awaitAndFormatDownloadNotice(dlBefore, 400);
+            return new ToolExecResult(dlNotice + formatObservationWithActionHeader("NAVIGATE -> " + url, null, obs), false, null);
         }
 
         if ("click".equals(action)) {
@@ -419,8 +441,9 @@ public class AcidSandboxTools {
                 return new ToolExecResult("Error: browser click requires 'ref' (e.g. 'e1'), semantic 'text', 'selector', or ('x', 'y') coordinates.", false, null);
             }
             Thread.sleep(380); // Let page animations/DOM settle after click
+            String dlNotice = awaitAndFormatDownloadNotice(dlBefore, 500);
             JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
-            return new ToolExecResult(formatObservationWithActionHeader("CLICK", clickRes, obs), false, null);
+            return new ToolExecResult(dlNotice + formatObservationWithActionHeader("CLICK", clickRes, obs), false, null);
         }
 
         if ("fill".equals(action)) {
@@ -484,7 +507,9 @@ public class AcidSandboxTools {
             String code = args.optString("code", "");
             long timeout = args.optLong("timeout_ms", 10000);
             String raw = driver.evaluateJsAsync(code, timeout);
-            return new ToolExecResult("=== [BROWSER ACTION: EVAL] ===\n" + raw, false, null);
+            long pollWait = (code.contains("location") || code.contains(".click(") || code.contains("download")) ? 1800 : 0;
+            String dlNotice = awaitAndFormatDownloadNotice(dlBefore, pollWait);
+            return new ToolExecResult(dlNotice + "=== [BROWSER ACTION: EVAL] ===\n" + raw, false, null);
         }
 
         if ("set_mode".equals(action)) {

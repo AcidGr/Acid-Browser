@@ -683,7 +683,7 @@ public final class TestRunner {
             tempDir.delete();
         }
 
-        // 4. HttpProbe Content-Disposition filename deduction
+        // 4. HttpProbe Content-Disposition filename deduction & universal percent-decoding
         String d1 = "attachment; filename=\"custom_release.apk\"";
         assertEquals("custom_release.apk", HttpProbe.parseFileNameFromDisposition(d1), "Standard filename parsing");
 
@@ -692,6 +692,27 @@ public final class TestRunner {
 
         String d3 = "inline; filename=unquoted.png; size=12345";
         assertEquals("unquoted.png", HttpProbe.parseFileNameFromDisposition(d3), "Unquoted filename parsing");
+
+        // Real-world UC Netdisk & Baidu Netdisk multi-part Content-Disposition headers
+        String ucDisp = "attachment; filename=\"%E4%BA%8E%E5%AB%A3%E5%8D%95%E6%B3%89%E6%B0%B4%E4%B8%8A%E5%B8%9D.zip\"; filename*=utf-8''%E4%BA%8E%E5%AB%A3%E5%8D%95%E6%B3%89%E6%B0%B4%E4%B8%8A%E5%B8%9D.zip";
+        assertEquals("于嫣单泉水上帝.zip",
+            com.acid.browser.download.DownloadCoordinator.smartGuessFileName("https://dl-pc-zb.drive.uc.cn/file", ucDisp, "application/zip"),
+            "UC Netdisk Content-Disposition decoded cleanly");
+
+        String baiduDisp = "attachment;filename=\"%E7%A0%94%E7%A9%B6%E7%94%9F%E8%AF%81%E6%98%8E%E6%96%87%E4%BB%B6_%E4%BD%95%E4%BD%B3%E9%94%8B.zip\";filename*=UTF-8''%E7%A0%94%E7%A9%B6%E7%94%9F%E8%AF%81%E6%98%8E%E6%96%87%E4%BB%B6_%E4%BD%95%E4%BD%B3%E9%94%8B.zip";
+        assertEquals("研究生证明文件_何佳锋.zip",
+            com.acid.browser.download.DownloadCoordinator.smartGuessFileName("https://appall01.baidupcs.com/file/abc", baiduDisp, "application/zip"),
+            "Baidu Netdisk Content-Disposition decoded cleanly");
+
+        String fromQueryFin = com.acid.browser.download.DownloadCoordinator.smartGuessFileName(
+            "https://appall01.baidupcs.com/file/72207b?fid=123&fin=%E7%A0%94%E7%A9%B6%E7%94%9F.zip&expires=8h",
+            null,
+            "application/zip"
+        );
+        assertEquals("研究生.zip", fromQueryFin, "Baidu PCS fin= query parameter fallback decoded cleanly");
+
+        assertTrue(SkillManager.isBuiltin(SkillManager.SKILL_CLOUD_DRIVE), "cloud_drive_download.md registered as builtin skill");
+        assertEquals(0, DownloadItem.STATUS_SAVED, "DownloadItem.STATUS_SAVED is 0");
     }
 
     private static void testAcidIoAndDownloadItem() throws Exception {

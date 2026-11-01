@@ -251,7 +251,9 @@ public class DownloadsSheet extends AcidBottomSheetView {
         for (final DownloadItem it : list) {
             int iconTint = (it.status == DownloadManager.STATUS_FAILED)
                 ? AcidTheme.COLOR_RED
-                : AcidTheme.muted(mIsDarkMode);
+                : (it.status == DownloadItem.STATUS_SAVED
+                    ? AcidTheme.accent(mIsDarkMode)
+                    : AcidTheme.muted(mIsDarkMode));
 
             ProgressBar pb = null;
             if (it.status == DownloadManager.STATUS_RUNNING || it.status == DownloadManager.STATUS_PENDING) {
@@ -287,6 +289,10 @@ public class DownloadsSheet extends AcidBottomSheetView {
                         String rem = it.getRemainingTime();
                         String remInfo = (rem != null && !rem.isEmpty()) ? (" · 剩余 " + rem) : "";
                         AcidFeedback.info(ctx, "正在多线程下载: " + it.fileName + " (" + it.getProgressPercent() + "%)" + speedInfo + remInfo);
+                    } else if (it.status == DownloadItem.STATUS_SAVED) {
+                        mDownloads.startDownload(it.url, it.fileName, null, null, it.mimeType, it.contentLength);
+                        updateDownloadListRows();
+                        startProgressPolling();
                     } else if (it.status == DownloadManager.STATUS_PAUSED) {
                         mDownloads.resumeDownload(it.downloadId);
                         AcidFeedback.ok(ctx, "已恢复下载: " + it.fileName);
@@ -327,7 +333,18 @@ public class DownloadsSheet extends AcidBottomSheetView {
     private void showDownloadContextMenu(View anchor, final DownloadItem it) {
         final Context ctx = getContext();
         List<AcidContextMenu.ActionItem> actions = new ArrayList<AcidContextMenu.ActionItem>();
-        if (it.status == DownloadManager.STATUS_RUNNING) {
+        if (it.status == DownloadItem.STATUS_SAVED) {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_DOWNLOAD, "开始下载", new Runnable() {
+                @Override
+                public void run() {
+                    if (mDownloads != null) {
+                        mDownloads.startDownload(it.url, it.fileName, null, null, it.mimeType, it.contentLength);
+                        updateDownloadListRows();
+                        startProgressPolling();
+                    }
+                }
+            }));
+        } else if (it.status == DownloadManager.STATUS_RUNNING) {
             actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_CLOSE, "暂停下载", new Runnable() {
                 @Override
                 public void run() {
@@ -432,6 +449,9 @@ public class DownloadsSheet extends AcidBottomSheetView {
 
     private String buildDownloadSubtitle(DownloadItem it) {
         String catTag = it.getCategoryLabel() + " · ";
+        if (it.status == DownloadItem.STATUS_SAVED) {
+            return catTag + "待下载 · " + DownloadItem.formatSize(it.contentLength) + " · 点击开始下载";
+        }
         if (it.status == DownloadManager.STATUS_RUNNING) {
             String progSize = DownloadItem.formatSize(it.downloadedBytes)
                 + " / " + DownloadItem.formatSize(it.contentLength);
@@ -455,6 +475,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
     }
 
     private int downloadSubtitleColor(DownloadItem it) {
+        if (it.status == DownloadItem.STATUS_SAVED) return AcidTheme.accent(mIsDarkMode);
         if (it.status == DownloadManager.STATUS_RUNNING) return AcidTheme.COLOR_BLUE;
         if (it.status == DownloadManager.STATUS_PAUSED) return AcidTheme.COLOR_AMBER;
         if (it.status == DownloadManager.STATUS_PENDING) return AcidTheme.COLOR_AMBER;

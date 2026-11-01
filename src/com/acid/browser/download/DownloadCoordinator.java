@@ -134,39 +134,36 @@ public class DownloadCoordinator {
             }
         }
 
-        String guessed = URLUtil.guessFileName(url, contentDisposition, effectiveMime);
+        // 1. Priority: RFC 5987 / 6266 Content-Disposition header (handles filename*=UTF-8'' and percent-encoded UTF-8)
+        String fromDisposition = HttpProbe.parseFileNameFromDisposition(contentDisposition);
+        if (fromDisposition != null && !fromDisposition.isEmpty()) {
+            return ensureExtensionIfMissing(fromDisposition, url, effectiveMime);
+        }
+
+        // 2. Check common filename query parameters in URL (e.g. UC/Quark &filename=, Baidu PCS &fin=, OSS &response-content-disposition=)
+        String fromUrlQuery = extractFileNameFromUrlQuery(url);
+        if (fromUrlQuery != null && !fromUrlQuery.isEmpty()) {
+            return ensureExtensionIfMissing(fromUrlQuery, url, effectiveMime);
+        }
+
+        // 3. Fallback to Android URLUtil + percent-decoding & sanitization
+        String guessed = null;
+        try {
+            guessed = URLUtil.guessFileName(url, contentDisposition, effectiveMime);
+        } catch (Throwable ignored) {}
+
+        guessed = HttpProbe.decodeAndSanitizeFileName(guessed);
+        if (guessed == null || guessed.isEmpty()) {
+            guessed = extractFileNameFromUrlPath(url);
+        }
+        if (guessed == null || guessed.isEmpty()) {
+            guessed = "download";
+        }
 
         // Extra guard: If URL path or contentDisposition has an explicit known extension,
         // but URLUtil forced a .bin extension, restore the original extension.
-        if (guessed != null && guessed.toLowerCase().endsWith(".bin")) {
-            String candidate = null;
-            if (contentDisposition != null) {
-                int fnIndex = contentDisposition.toLowerCase().indexOf("filename=");
-                if (fnIndex >= 0) {
-                    String part = contentDisposition.substring(fnIndex + 9).trim();
-                    if (part.startsWith("\"") && part.length() > 1) {
-                        int endQuote = part.indexOf('\"', 1);
-                        if (endQuote > 1) candidate = part.substring(1, endQuote);
-                    } else {
-                        int semi = part.indexOf(';');
-                        candidate = semi > 0 ? part.substring(0, semi).trim() : part;
-                    }
-                }
-            }
-            if (candidate == null && url != null) {
-                try {
-                    String path = Uri.parse(url).getPath();
-                    if (path != null) {
-                        int slash = path.lastIndexOf('/');
-                        if (slash >= 0 && slash < path.length() - 1) {
-                            candidate = path.substring(slash + 1);
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to derive a file name from the URL", e);
-                }
-            }
-
+        if (guessed.toLowerCase().endsWith(".bin")) {
+            String candidate = extractFileNameFromUrlPath(url);
             if (candidate != null) {
                 int dot = candidate.lastIndexOf('.');
                 if (dot >= 0 && dot < candidate.length() - 1) {
@@ -174,7 +171,7 @@ public class DownloadCoordinator {
                     if (!ext.equals(".bin")) {
                         if (guessed.toLowerCase().endsWith(ext + ".bin")) {
                             guessed = guessed.substring(0, guessed.length() - 4);
-                        } else if (guessed.toLowerCase().endsWith(".bin")) {
+                        } else {
                             guessed = guessed.substring(0, guessed.length() - 4) + ext;
                         }
                     }
@@ -182,7 +179,79 @@ public class DownloadCoordinator {
             }
         }
 
-        return guessed;
+        return ensureExtensionIfMissing(guessed, url, effectiveMime);
+    }
+
+    private static String extractFileNameFromUrlQuery(String url) {
+        if (url == null || url.isEmpty()) return null;
+        int qIdx = url.indexOf('?');
+        if (qIdx < 0 || qIdx >= url.length() - 1) return null;
+        String query = url.substring(qIdx + 1);
+        int hashIdx = query.indexOf('#');
+        if (hashIdx >= 0) query = query.substring(0, hashIdx);
+
+        String[] pairs = query.split("&");
+        for (int i = 0; i < pairs.length; i++) {
+            String p = pairs[i];
+            int eq = p.indexOf('=');
+            if (eq <= 0 || eq >= p.length() - 1) continue;
+            String key = p.substring(0, eq).trim().toLowerCase();
+            String val = p.substring(eq + 1).trim();
+            if ("filename".equals(key) || "fin".equals(key) || "file_name".equals(key) || "attname".equals(key)) {
+                String decoded = HttpProbe.decodeAndSanitizeFileName(val);
+                if (decoded != null && !decoded.isEmpty()) return decoded;
+            } else if ("response-content-disposition".equals(key)) {
+                String decodedDisp = HttpProbe.decodeAndSanitizeFileName(val);
+                String parsed = HttpProbe.parseFileNameFromDisposition(decodedDisp != null ? decodedDisp : val);
+                if (parsed != null && !parsed.isEmpty()) return parsed;
+            }
+        }
+        return null;
+    }
+
+    private static String extractFileNameFromUrlPath(String url) {
+        if (url == null || url.isEmpty()) return null;
+        try {
+            String clean = url;
+            int q = clean.indexOf('?');
+            if (q >= 0) clean = clean.substring(0, q);
+            int h = clean.indexOf('#');
+            if (h >= 0) clean = clean.substring(0, h);
+            int slash = clean.lastIndexOf('/');
+            if (slash >= 0 && slash < clean.length() - 1) {
+                return HttpProbe.decodeAndSanitizeFileName(clean.substring(slash + 1));
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static String ensureExtensionIfMissing(String fileName, String url, String effectiveMime) {
+        if (fileName == null || fileName.isEmpty()) return "download";
+        int dot = fileName.lastIndexOf('.');
+        if (dot > 0 && dot < fileName.length() - 1) {
+            return fileName;
+        }
+        // Try extension from URL path
+        String pathName = extractFileNameFromUrlPath(url);
+        if (pathName != null) {
+            int pDot = pathName.lastIndexOf('.');
+            if (pDot > 0 && pDot < pathName.length() - 1) {
+                String ext = pathName.substring(pDot);
+                if (ext.length() <= 8) {
+                    return fileName + ext;
+                }
+            }
+        }
+        // Try extension from MIME type
+        if (effectiveMime != null && !effectiveMime.isEmpty()) {
+            try {
+                String ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(effectiveMime);
+                if (ext != null && !ext.isEmpty()) {
+                    return fileName + "." + ext;
+                }
+            } catch (Throwable ignored) {}
+        }
+        return fileName;
     }
 
     public static String resolveMimeType(String fileName, String mimeType) {
@@ -237,6 +306,143 @@ public class DownloadCoordinator {
         }
     }
 
+    private static final String UA_QUARK_CLIENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.12-a038f7b798 Safari/537.36 Channel/pckk_other_ch";
+    private static final String UA_115_CLIENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 115Browser/27.0.5.7";
+
+    private static Map<String, String> buildCloudDriveAwareHeaders(String url, String userAgent) {
+        Map<String, String> headers = new HashMap<String, String>();
+        String lowerUrl = url != null ? url.toLowerCase() : "";
+
+        String cookie = null;
+        try {
+            cookie = CookieManager.getInstance().getCookie(url);
+        } catch (Throwable ignored) {}
+
+        // Enrich cross-subdomain cookies & Referer/UA for cloud drive CDNs
+        if (lowerUrl.contains(".quark.cn")) {
+            String mainCookie = safeGetCookie("https://pan.quark.cn");
+            cookie = mergeCookies(cookie, mainCookie);
+            headers.put("Referer", "https://pan.quark.cn/");
+            if (userAgent == null || !userAgent.contains("quark-cloud-drive")) {
+                userAgent = UA_QUARK_CLIENT;
+            }
+        } else if (lowerUrl.contains(".uc.cn")) {
+            String mainCookie = safeGetCookie("https://drive.uc.cn");
+            cookie = mergeCookies(cookie, mainCookie);
+            headers.put("Referer", "https://drive.uc.cn/");
+        } else if (lowerUrl.contains("baidupcs.com") || lowerUrl.contains("pcs.baidu.com")) {
+            headers.put("Referer", "https://pan.baidu.com/");
+        } else if (lowerUrl.contains("115.com") || lowerUrl.contains("115cdn.com")) {
+            String mainCookie = safeGetCookie("https://115.com");
+            cookie = mergeCookies(cookie, mainCookie);
+            headers.put("Referer", "https://115.com/");
+            if (userAgent == null || !userAgent.contains("115Browser")) {
+                userAgent = UA_115_CLIENT;
+            }
+        }
+
+        if (cookie != null && !cookie.isEmpty()) {
+            headers.put("Cookie", cookie);
+        }
+        if (userAgent != null && !userAgent.isEmpty()) {
+            headers.put("User-Agent", userAgent);
+        }
+        return headers;
+    }
+
+    private static String safeGetCookie(String domainUrl) {
+        try {
+            return CookieManager.getInstance().getCookie(domainUrl);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static String mergeCookies(String primary, String secondary) {
+        if (primary == null || primary.isEmpty()) return secondary;
+        if (secondary == null || secondary.isEmpty()) return primary;
+        if (primary.equals(secondary) || primary.contains(secondary)) return primary;
+        return primary + "; " + secondary;
+    }
+
+    /**
+     * Saves a download item in {@link DownloadItem#STATUS_SAVED} ("待下载") state when the user
+     * collapses the confirmation sheet, allowing on-demand download later from DownloadsSheet.
+     */
+    public DownloadItem saveDownloadForLater(
+        String url,
+        String fileName,
+        String userAgent,
+        String contentDisposition,
+        String mimeType,
+        long contentLength
+    ) {
+        if (url == null || url.isEmpty()) return null;
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return null;
+
+        if (fileName == null || fileName.trim().isEmpty()) {
+            fileName = smartGuessFileName(url, contentDisposition, mimeType);
+        }
+        String effectiveMime = resolveMimeType(fileName, mimeType);
+        long now = System.currentTimeMillis();
+
+        DownloadItem savedItem = null;
+        synchronized (mDownloads) {
+            // If an unstarted/failed entry with the same URL already exists, update and promote it
+            for (int i = 0; i < mDownloads.size(); i++) {
+                DownloadItem existing = mDownloads.get(i);
+                if (url.equals(existing.url) &&
+                    (existing.status == DownloadItem.STATUS_SAVED || existing.status == DownloadTask.STATUS_FAILED)) {
+                    mDownloads.remove(i);
+                    savedItem = new DownloadItem(
+                        existing.downloadId > 0 ? existing.downloadId : now,
+                        fileName,
+                        url,
+                        effectiveMime,
+                        contentLength > 0 ? contentLength : existing.contentLength,
+                        0,
+                        DownloadItem.STATUS_SAVED,
+                        now
+                    );
+                    break;
+                }
+            }
+            if (savedItem == null) {
+                savedItem = new DownloadItem(
+                    now,
+                    fileName,
+                    url,
+                    effectiveMime,
+                    contentLength,
+                    0,
+                    DownloadItem.STATUS_SAVED,
+                    now
+                );
+            }
+            mDownloads.add(0, savedItem);
+            if (mDataStore != null) {
+                mDataStore.saveDownloads(mDownloads);
+            }
+        }
+
+        Log.i(TAG, "[DOWNLOAD] Saved for later: " + fileName + " (id=" + savedItem.downloadId + ")");
+        AcidFeedback.info(mContext, "已暂存至下载管理: " + fileName + "\n可在「下载管理」中随时点击下载");
+        return savedItem;
+    }
+
+    private void removeSavedOrFailedDuplicateLocked(String url) {
+        if (url == null || url.isEmpty()) return;
+        for (int i = mDownloads.size() - 1; i >= 0; i--) {
+            DownloadItem existing = mDownloads.get(i);
+            if (url.equals(existing.url) &&
+                (existing.status == DownloadItem.STATUS_SAVED || existing.status == DownloadTask.STATUS_FAILED)) {
+                mDownloads.remove(i);
+            }
+        }
+    }
+
     public void startDownload(
         String url,
         String fileName,
@@ -279,17 +485,7 @@ public class DownloadCoordinator {
                 destDir.mkdirs();
             }
 
-            Map<String, String> headers = new HashMap<String, String>();
-            String cookie = null;
-            try {
-                cookie = CookieManager.getInstance().getCookie(url);
-            } catch (Exception ignored) {}
-            if (cookie != null && !cookie.isEmpty()) {
-                headers.put("Cookie", cookie);
-            }
-            if (userAgent != null && !userAgent.isEmpty()) {
-                headers.put("User-Agent", userAgent);
-            }
+            Map<String, String> headers = buildCloudDriveAwareHeaders(url, userAgent);
 
             final DownloadTask task = mDownloader.enqueue(url, fileName, effectiveMime, destDir, headers);
 
@@ -305,6 +501,7 @@ public class DownloadCoordinator {
             );
 
             synchronized (mDownloads) {
+                removeSavedOrFailedDuplicateLocked(url);
                 mDownloads.add(0, item);
                 if (mDataStore != null) {
                     mDataStore.saveDownloads(mDownloads);
@@ -376,6 +573,7 @@ public class DownloadCoordinator {
             );
 
             synchronized (mDownloads) {
+                removeSavedOrFailedDuplicateLocked(url);
                 mDownloads.add(0, item);
                 if (mDataStore != null) {
                     mDataStore.saveDownloads(mDownloads);
@@ -466,7 +664,7 @@ public class DownloadCoordinator {
 
         synchronized (mDownloads) {
             for (DownloadItem it : mDownloads) {
-                if (it.downloadId <= 0) {
+                if (it.downloadId <= 0 || it.status == DownloadItem.STATUS_SAVED) {
                     continue;
                 }
 

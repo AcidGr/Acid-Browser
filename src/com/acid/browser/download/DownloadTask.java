@@ -21,6 +21,7 @@ import java.util.Map;
  */
 public class DownloadTask {
 
+    public static final int STATUS_SAVED = 0;
     public static final int STATUS_PENDING = 1;
     public static final int STATUS_RUNNING = 2;
     public static final int STATUS_PAUSED = 4;
