@@ -157,21 +157,27 @@ public class UserscriptShaper {
 
     /**
      * Bootstrap injected at the earliest possible moment on every page.
+     * Note: Does not embed the secret token so untrusted pages cannot steal it via bridge hook.
      */
+    public static String bootstrap() {
+        return getTemplate("userscripts/page_bootstrap.js");
+    }
+
     public static String bootstrap(String secret) {
-        String sec = JSONObject.quote(secret == null ? "" : secret);
-        String template = getTemplate("userscripts/page_bootstrap.js");
-        return template.replace("/*__SECRET__*/\"\"", sec);
+        return bootstrap();
     }
 
     /**
      * Minimal {@code window.external.Tampermonkey} facade so script sites (GreasyFork and
      * friends) show "installed" state and offer a one-tap install.
+     * Note: Does not embed the secret token so untrusted pages cannot steal it via bridge hook.
      */
+    public static String tampermonkeyFacade() {
+        return getTemplate("userscripts/tampermonkey_facade.js");
+    }
+
     public static String tampermonkeyFacade(String secret) {
-        String sec = JSONObject.quote(secret == null ? "" : secret);
-        String template = getTemplate("userscripts/tampermonkey_facade.js");
-        return template.replace("/*__SECRET__*/\"\"", sec);
+        return tampermonkeyFacade();
     }
 
     private static String grantedExpr(UserscriptMeta meta, String api) {

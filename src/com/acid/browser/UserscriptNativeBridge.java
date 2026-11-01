@@ -131,8 +131,9 @@ public class UserscriptNativeBridge {
                 ? new JSONObject(jsonArgs)
                 : new JSONObject();
 
-            if (mSecret != null && !mSecret.equals(args.optString("secret", ""))) {
-                Log.w(TAG, "Rejected bridge call '" + action + "': bad token");
+            boolean isPublicAction = "requestInjection".equals(action) || "isInstalled".equals(action);
+            if (!isPublicAction && mSecret != null && !mSecret.equals(args.optString("secret", ""))) {
+                Log.w(TAG, "Rejected bridge call '" + action + "': bad or missing token");
                 return "";
             }
 
@@ -196,13 +197,20 @@ public class UserscriptNativeBridge {
             }
 
             if ("setClipboard".equals(action)) {
-                String data = args.optString("data", "");
+                final String data = args.optString("data", "");
                 if (mContext != null && !data.isEmpty()) {
-                    ClipboardManager cm = (ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (cm != null) {
-                        cm.setPrimaryClip(ClipData.newPlainText("Userscript", data));
-                        return "true";
-                    }
+                    AcidAsync.postToMain(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                ClipboardManager cm = (ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
+                                if (cm != null) {
+                                    cm.setPrimaryClip(ClipData.newPlainText("Userscript", data));
+                                }
+                            } catch (Throwable ignored) {}
+                        }
+                    });
+                    return "true";
                 }
                 return "false";
             }
