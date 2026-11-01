@@ -4,6 +4,7 @@ import org.json.JSONObject;
 
 import com.acid.browser.download.ChunkDivider;
 import com.acid.browser.download.DownloadChunk;
+import com.acid.browser.download.DownloadItem;
 import com.acid.browser.download.DownloadTask;
 import com.acid.browser.download.HttpProbe;
 
@@ -64,6 +65,9 @@ public final class TestRunner {
         });
         run("AcidDownloader RFC 7233 range chunking, checkpoint resume & probe", new TestCase() {
             @Override public void execute() throws Exception { testDownloadEngine(); }
+        });
+        run("AcidIo UTF-8 file/stream round-trip & DownloadItem classification", new TestCase() {
+            @Override public void execute() throws Exception { testAcidIoAndDownloadItem(); }
         });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
@@ -179,7 +183,7 @@ public final class TestRunner {
 
         InMemoryPrefs primary = new InMemoryPrefs();
         InMemoryPrefs legacy = new InMemoryPrefs();
-        legacy.edit().putBoolean(BrowserDataStore.PREF_MCP_ENABLED, false).apply();
+        legacy.edit().putBoolean(AcidSettings.MCP_ENABLED.prefKey, false).apply();
 
         BrowserDataStore store = new BrowserDataStore(primary, legacy, tmpFile);
         assertEquals(Boolean.FALSE, Boolean.valueOf(store.isMcpServerEnabled()), "legacy mcp_server_enabled migrated");
@@ -688,5 +692,47 @@ public final class TestRunner {
 
         String d3 = "inline; filename=unquoted.png; size=12345";
         assertEquals("unquoted.png", HttpProbe.parseFileNameFromDisposition(d3), "Unquoted filename parsing");
+    }
+
+    private static void testAcidIoAndDownloadItem() throws Exception {
+        File tmp = File.createTempFile("acid_io_test_", ".txt");
+        tmp.deleteOnExit();
+        try {
+            String sample = "Acid Browser 读写测试\nLine 2";
+            assertTrue(AcidIo.writeFileUtf8Safe(tmp, sample), "AcidIo writeFileUtf8Safe succeeds");
+            assertEquals(sample, AcidIo.readFileUtf8(tmp), "AcidIo readFileUtf8 round-trip");
+            assertEquals("", AcidIo.readFileUtf8OrEmpty(tmp, 5), "AcidIo maxBytes guard rejects oversized file");
+            assertEquals(sample, AcidIo.readFileUtf8OrEmpty(tmp, 1024), "AcidIo readFileUtf8OrEmpty within cap");
+        } finally {
+            tmp.delete();
+        }
+
+        // DownloadItem category classification & size formatting
+        assertEquals(Integer.valueOf(DownloadItem.CAT_APK),
+            Integer.valueOf(new DownloadItem(0L, "app.apk", "https://x/app.apk", "", 1024, 0, 1, 1L).getCategory()), "apk category");
+        assertEquals(Integer.valueOf(DownloadItem.CAT_ARCHIVE),
+            Integer.valueOf(new DownloadItem(1L, "archive.tar.gz", "https://x/a", "", 100, 50, 2, 1L).getCategory()), "archive category");
+        assertEquals(Integer.valueOf(DownloadItem.CAT_DOC),
+            Integer.valueOf(new DownloadItem(2L, "manual.pdf", "https://x/m", "", 100, 100, 8, 1L).getCategory()), "doc category");
+        assertEquals(Integer.valueOf(DownloadItem.CAT_IMAGE),
+            Integer.valueOf(new DownloadItem(3L, "photo.webp", "https://x/p", "", 100, 20, 2, 1L).getCategory()), "image category");
+        assertEquals(Integer.valueOf(DownloadItem.CAT_VIDEO),
+            Integer.valueOf(new DownloadItem(4L, "clip.mp4", "https://x/v", "", 1000, 250, 2, 1L).getCategory()), "video category");
+        assertEquals(Integer.valueOf(DownloadItem.CAT_AUDIO),
+            Integer.valueOf(new DownloadItem(5L, "song.flac", "https://x/s", "", 1000, 500, 2, 1L).getCategory()), "audio category");
+        assertEquals(Integer.valueOf(DownloadItem.CAT_OTHER),
+            Integer.valueOf(new DownloadItem(6L, "disk.iso", "https://x/d", "application/octet-stream", 1000, 0, 1, 1L).getCategory()), "unknown binary falls into CAT_OTHER");
+
+        DownloadItem progItem = new DownloadItem(7L, "video.mp4", "https://x/v.mp4", "video/mp4", 1000L, 250L, 2, 100L);
+        assertEquals(Integer.valueOf(25), Integer.valueOf(progItem.getProgressPercent()), "progress percent calculation");
+        assertEquals("1.0 KB", DownloadItem.formatSize(1024), "formatSize KB");
+
+        BrowserDataStore store = new BrowserDataStore(new InMemoryPrefs(), new InMemoryPrefs(), null);
+        List<DownloadItem> savedList = new ArrayList<DownloadItem>();
+        savedList.add(progItem);
+        store.saveDownloads(savedList);
+        List<DownloadItem> loadedList = store.loadDownloads();
+        assertEquals(Integer.valueOf(1), Integer.valueOf(loadedList.size()), "DownloadItem persisted in BrowserDataStore");
+        assertEquals("video.mp4", loadedList.get(0).fileName, "persisted fileName matches");
     }
 }

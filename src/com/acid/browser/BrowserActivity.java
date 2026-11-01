@@ -28,7 +28,6 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.widget.Toast;
 
 /**
  * Thin Browser Activity Orchestrator:
@@ -185,7 +184,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) {
                     long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
                     if (mController != null) {
-                        mController.onDownloadCompleted(id);
+                        mController.getDownloadCoordinator().onDownloadCompleted(id);
                     }
                     if (mDownloadsSheet != null && mDownloadsSheet.isShowing()) {
                         mDownloadsSheet.refreshDownloads();
@@ -338,11 +337,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         attachModalSheet(mBookmarksHistorySheet);
 
         // 3. Downloads Manager
-        mDownloadsSheet = new DownloadsSheet(this, mController);
+        mDownloadsSheet = new DownloadsSheet(this, mController.getDownloadCoordinator());
         attachModalSheet(mDownloadsSheet);
 
         // 4. Download Confirmation
-        mDownloadConfirmSheet = new DownloadConfirmSheet(this, mController);
+        mDownloadConfirmSheet = new DownloadConfirmSheet(this, mController.getDownloadCoordinator());
         attachModalSheet(mDownloadConfirmSheet);
 
         // 5. About & OTA Update
@@ -357,7 +356,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onStartApkDownload(String url, String fileName) {
                 mOverlayStack.dismissAllModals();
                 if (mController != null) {
-                    mController.startDownload(
+                    mController.getDownloadCoordinator().startDownload(
                         url, fileName, null, null,
                         "application/vnd.android.package-archive", 0
                     );
@@ -513,7 +512,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
                 @Override
                 public void onOpenSkills() {
-                    mSkillSheet.showSkills();
+                    mSkillSheet.renderContent();
                     mOverlayStack.pushModal(mSettingsSheet, mSkillSheet);
                 }
 
@@ -688,7 +687,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
             @Override
             public void onOpenSkills() {
-                mSkillSheet.showSkills();
+                mSkillSheet.renderContent();
                 mOverlayStack.openRootModal(mSkillSheet);
             }
 
@@ -1553,9 +1552,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
-    public void onAgentActionLog(final String logLine) {}
-
-    @Override
     public void onDownloadRequested(
         final String url,
         final String fileName,
@@ -1670,6 +1666,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         }
         if (mHttpServer != null) {
             mHttpServer.stop();
+        }
+        if (mController != null) {
+            mController.getDownloadCoordinator().destroy();
         }
         super.onDestroy();
     }

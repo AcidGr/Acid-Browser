@@ -9,15 +9,9 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
+import com.acid.browser.download.DownloadItem;
+
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -38,20 +32,7 @@ public class BrowserDataStore {
     public static final String PREF_NAME = "acid_browser_data";
     public static final String PREF_BOOKMARKS = "bookmarks";
     public static final String PREF_HISTORY = "history";
-    public static final String PREF_DARK_MODE = "dark_mode";
     public static final String PREF_DOWNLOADS = "downloads";
-    public static final String PREF_ADBLOCK_ENABLED = "adblock_enabled";
-    public static final String PREF_ADBLOCK_BLOCKED_COUNT = "adblock_blocked_count";
-    public static final String PREF_ADBLOCK_SUBSCRIPTION_URL = "adblock_sub_url";
-    public static final String PREF_SEARCH_ENGINE = "search_engine";
-    public static final String PREF_SEARCH_ENGINE_CUSTOM = "search_engine_custom";
-    public static final String PREF_HOME_TYPE = "home_type";
-    public static final String PREF_HOME_CUSTOM_URL = "home_custom_url";
-    public static final String PREF_CLEAR_ON_EXIT = "clear_on_exit";
-    public static final String PREF_WEB_DEBUGGING = "web_debugging";
-    public static final String PREF_DO_NOT_TRACK = "do_not_track";
-    public static final String PREF_BLOCK_IMAGES = "block_images";
-    public static final String PREF_MCP_ENABLED = "mcp_server_enabled";
     private static final String LEGACY_PREF_ACTIVITY = "acid_browser_prefs";
 
     public static final int SEARCH_GOOGLE = 0;
@@ -190,28 +171,13 @@ public class BrowserDataStore {
 
     public void syncDefaultHomepage() {
         if (mWorkspaceDir == null || mContext == null) return;
-        try {
-            File homepageDir = new File(mWorkspaceDir, "homepage");
-            if (!homepageDir.exists()) {
-                homepageDir.mkdirs();
+        File homepageDir = new File(mWorkspaceDir, "homepage");
+        File targetIndex = new File(homepageDir, "index.html");
+        if (!targetIndex.exists() || targetIndex.length() == 0) {
+            String html = AcidIo.readAssetUtf8OrEmpty(mContext, "homepage/index.html");
+            if (!html.isEmpty()) {
+                AcidIo.writeFileUtf8Safe(targetIndex, html);
             }
-            File targetIndex = new File(homepageDir, "index.html");
-            if (!targetIndex.exists() || targetIndex.length() == 0) {
-                InputStream is = mContext.getAssets().open("homepage/index.html");
-                BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) {
-                    sb.append(line).append("\n");
-                }
-                br.close();
-                OutputStreamWriter osw = new OutputStreamWriter(new FileOutputStream(targetIndex), StandardCharsets.UTF_8);
-                osw.write(sb.toString());
-                osw.flush();
-                osw.close();
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to sync default homepage template to workspace", e);
         }
     }
 
@@ -477,17 +443,9 @@ public class BrowserDataStore {
     public void saveToJsonFile() {
         if (mSettingsJsonFile == null) return;
         try {
-            File parent = mSettingsJsonFile.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
             mLastSelfSaveTime = System.currentTimeMillis();
             JSONObject o = exportToJson();
-            String jsonStr = o.toString(2);
-            FileOutputStream fos = new FileOutputStream(mSettingsJsonFile);
-            fos.write(jsonStr.getBytes(StandardCharsets.UTF_8));
-            fos.flush();
-            fos.close();
+            AcidIo.writeFileUtf8(mSettingsJsonFile, o.toString(2));
         } catch (Exception e) {
             Log.w(TAG, "Failed to save settings.json", e);
         }
@@ -523,15 +481,7 @@ public class BrowserDataStore {
     public boolean reloadFromJsonFile() {
         if (mSettingsJsonFile == null || !mSettingsJsonFile.exists()) return false;
         try {
-            FileInputStream fis = new FileInputStream(mSettingsJsonFile);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[2048];
-            int n;
-            while ((n = fis.read(buf)) != -1) {
-                baos.write(buf, 0, n);
-            }
-            fis.close();
-            String content = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            String content = AcidIo.readFileUtf8(mSettingsJsonFile);
             JSONObject o = new JSONObject(content);
 
             SharedPreferences.Editor ed = prefs().edit();
@@ -893,21 +843,14 @@ public class BrowserDataStore {
                 o.put("url", item.url);
                 arr.put(o);
             }
-            File parent = mBookmarksJsonFile.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
             mLastBookmarksSelfSaveTime = System.currentTimeMillis();
-            FileOutputStream fos = new FileOutputStream(mBookmarksJsonFile);
-            byte[] bytes;
+            String formatted;
             try {
-                bytes = arr.toString(2).getBytes(StandardCharsets.UTF_8);
+                formatted = arr.toString(2);
             } catch (Exception e) {
-                bytes = arr.toString().getBytes(StandardCharsets.UTF_8);
+                formatted = arr.toString();
             }
-            fos.write(bytes);
-            fos.flush();
-            fos.close();
+            AcidIo.writeFileUtf8(mBookmarksJsonFile, formatted);
             return true;
         } catch (Exception e) {
             Log.w(TAG, "Failed to save bookmarks to " + mBookmarksJsonFile, e);
@@ -918,15 +861,7 @@ public class BrowserDataStore {
     public synchronized boolean reloadBookmarksFromJsonFile() {
         if (mBookmarksJsonFile == null || !mBookmarksJsonFile.exists()) return false;
         try {
-            FileInputStream fis = new FileInputStream(mBookmarksJsonFile);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[2048];
-            int n;
-            while ((n = fis.read(buf)) != -1) {
-                baos.write(buf, 0, n);
-            }
-            fis.close();
-            String jsonStr = new String(baos.toByteArray(), StandardCharsets.UTF_8).trim();
+            String jsonStr = AcidIo.readFileUtf8(mBookmarksJsonFile).trim();
             if (jsonStr.isEmpty()) return false;
 
             JSONArray arr = new JSONArray(jsonStr);
@@ -1034,21 +969,14 @@ public class BrowserDataStore {
                 o.put("time", item.time);
                 arr.put(o);
             }
-            File parent = mHistoryJsonFile.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
             mLastHistorySelfSaveTime = System.currentTimeMillis();
-            FileOutputStream fos = new FileOutputStream(mHistoryJsonFile);
-            byte[] bytes;
+            String formatted;
             try {
-                bytes = arr.toString(2).getBytes(StandardCharsets.UTF_8);
+                formatted = arr.toString(2);
             } catch (Exception e) {
-                bytes = arr.toString().getBytes(StandardCharsets.UTF_8);
+                formatted = arr.toString();
             }
-            fos.write(bytes);
-            fos.flush();
-            fos.close();
+            AcidIo.writeFileUtf8(mHistoryJsonFile, formatted);
             return true;
         } catch (Exception e) {
             Log.w(TAG, "Failed to save history to " + mHistoryJsonFile, e);
@@ -1059,15 +987,7 @@ public class BrowserDataStore {
     public synchronized boolean reloadHistoryFromJsonFile() {
         if (mHistoryJsonFile == null || !mHistoryJsonFile.exists()) return false;
         try {
-            FileInputStream fis = new FileInputStream(mHistoryJsonFile);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int n;
-            while ((n = fis.read(buf)) != -1) {
-                baos.write(buf, 0, n);
-            }
-            fis.close();
-            String jsonStr = new String(baos.toByteArray(), StandardCharsets.UTF_8).trim();
+            String jsonStr = AcidIo.readFileUtf8(mHistoryJsonFile).trim();
             if (jsonStr.isEmpty()) return false;
 
             JSONArray arr = new JSONArray(jsonStr);
@@ -1156,10 +1076,10 @@ public class BrowserDataStore {
         });
     }
 
-    public List<BrowserController.DownloadItem> loadDownloads() {
+    public List<DownloadItem> loadDownloads() {
         SharedPreferences prefs = prefs();
         String raw = prefs.getString(PREF_DOWNLOADS, null);
-        List<BrowserController.DownloadItem> list = new ArrayList<BrowserController.DownloadItem>();
+        List<DownloadItem> list = new ArrayList<DownloadItem>();
         if (raw == null) return list;
         try {
             JSONArray arr = new JSONArray(raw);
@@ -1169,7 +1089,7 @@ public class BrowserDataStore {
                     Log.w(TAG, "download[" + i + "] is not a JSON object; skipped");
                     continue;
                 }
-                list.add(new BrowserController.DownloadItem(
+                list.add(new DownloadItem(
                     o.optLong("downloadId", 0),
                     o.optString("fileName", "file"),
                     o.optString("url", ""),
@@ -1186,10 +1106,10 @@ public class BrowserDataStore {
         return list;
     }
 
-    public void saveDownloads(List<BrowserController.DownloadItem> list) {
+    public void saveDownloads(List<DownloadItem> list) {
         JSONArray arr = new JSONArray();
         if (list != null) {
-            for (BrowserController.DownloadItem item : list) {
+            for (DownloadItem item : list) {
                 if (item == null) continue;
                 JSONObject o = new JSONObject();
                 try {

@@ -49,11 +49,6 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         setRootPage(buildMainPage());
     }
 
-    public void showSettings() {
-        setRootPage(buildMainPage());
-        show();
-    }
-
     public void refresh() {
         if (isShowing()) {
             refreshActivePage();

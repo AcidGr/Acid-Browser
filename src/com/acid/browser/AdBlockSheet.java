@@ -51,13 +51,6 @@ public class AdBlockSheet extends AcidBottomSheetView {
         setRootPage(buildAdBlockPage());
     }
 
-    public void showAdBlock() {
-        mDraftSubUrl = null;
-        mDraftCustomRules = null;
-        setRootPage(buildAdBlockPage());
-        show();
-    }
-
     @Override
     public void show() {
         if (getPageDepth() == 0) {

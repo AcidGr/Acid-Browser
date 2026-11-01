@@ -20,7 +20,6 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -302,7 +301,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mTvAgentSessionTitle = new TextView(ctx);
         mTvAgentSessionTitle.setText("新对话");
         mTvAgentSessionTitle.setTextColor(AcidTheme.LIGHT_TEXT);
-        mTvAgentSessionTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_H4_ITEM);
+        mTvAgentSessionTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_ITEM);
         mTvAgentSessionTitle.setTypeface(Typeface.DEFAULT_BOLD);
         mTvAgentSessionTitle.setSingleLine(true);
         mTvAgentSessionTitle.setEllipsize(TextUtils.TruncateAt.END);

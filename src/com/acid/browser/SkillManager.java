@@ -6,10 +6,7 @@ import android.util.Log;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -128,9 +125,9 @@ public class SkillManager {
         for (String skillFile : BUILTIN_SKILLS) {
             File target = new File(mSkillsDir, skillFile);
             if (!target.exists() || target.length() == 0) {
-                String assetContent = readAssetText("skills/" + skillFile);
+                String assetContent = AcidIo.readAssetUtf8OrEmpty(mContext, "skills/" + skillFile);
                 if (!assetContent.isEmpty()) {
-                    writeFileText(target, assetContent);
+                    AcidIo.writeFileUtf8Safe(target, assetContent);
                 }
             }
         }
@@ -141,10 +138,10 @@ public class SkillManager {
      */
     public synchronized boolean resetBuiltinSkill(String fileName) {
         if (!isBuiltin(fileName)) return false;
-        String assetContent = readAssetText("skills/" + fileName);
+        String assetContent = AcidIo.readAssetUtf8OrEmpty(mContext, "skills/" + fileName);
         if (assetContent.isEmpty()) return false;
         File target = new File(mSkillsDir, fileName);
-        boolean ok = writeFileText(target, assetContent);
+        boolean ok = AcidIo.writeFileUtf8Safe(target, assetContent);
         if (ok) notifyChanged();
         return ok;
     }
@@ -185,7 +182,7 @@ public class SkillManager {
     public synchronized String readSkill(String fileName) {
         File file = new File(mSkillsDir, fileName);
         if (!file.exists() || !file.isFile()) return "";
-        return readFileText(file);
+        return AcidIo.readFileUtf8OrEmpty(file, 2 * 1024 * 1024);
     }
 
     /**
@@ -198,7 +195,7 @@ public class SkillManager {
             cleanName += ".md";
         }
         File target = new File(mSkillsDir, cleanName);
-        boolean ok = writeFileText(target, content != null ? content : "");
+        boolean ok = AcidIo.writeFileUtf8Safe(target, content != null ? content : "");
         if (ok) {
             notifyChanged();
         }
@@ -290,55 +287,5 @@ public class SkillManager {
         }
 
         return new SkillMeta(fileName, name, title, description, builtin, file.lastModified(), file.length());
-    }
-
-    private String readAssetText(String assetPath) {
-        try {
-            InputStream is = mContext.getAssets().open(assetPath);
-            BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-            br.close();
-            return sb.toString();
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to read asset: " + assetPath, e);
-            return "";
-        }
-    }
-
-    private String readFileText(File file) {
-        try {
-            BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-            br.close();
-            return sb.toString();
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to read file: " + file.getAbsolutePath(), e);
-            return "";
-        }
-    }
-
-    private boolean writeFileText(File file, String text) {
-        try {
-            File parent = file.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
-            OutputStreamWriter osw = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8);
-            osw.write(text);
-            osw.flush();
-            osw.close();
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to write file: " + file.getAbsolutePath(), e);
-            return false;
-        }
     }
 }

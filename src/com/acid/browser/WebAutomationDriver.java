@@ -9,7 +9,6 @@ import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Log;
 import android.view.MotionEvent;
-import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebView;
 
@@ -19,7 +18,6 @@ import org.json.JSONTokener;
 
 import java.io.ByteArrayOutputStream;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -48,40 +46,6 @@ public class WebAutomationDriver {
     private final Context mContext;
     private final AutomationHost mHost;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
-    private final AcidNativeHostBridge mNativeBridge = new AcidNativeHostBridge();
-
-    public static class AcidNativeHostBridge {
-        private final ConcurrentHashMap<String, AtomicReference<String>> mResults =
-            new ConcurrentHashMap<String, AtomicReference<String>>();
-        private final ConcurrentHashMap<String, CountDownLatch> mLatches =
-            new ConcurrentHashMap<String, CountDownLatch>();
-
-        public void prepareCall(String callId, CountDownLatch latch, AtomicReference<String> ref) {
-            mLatches.put(callId, latch);
-            mResults.put(callId, ref);
-        }
-
-        public void cleanupCall(String callId) {
-            mLatches.remove(callId);
-            mResults.remove(callId);
-        }
-
-        @JavascriptInterface
-        public void resolve(String callId, String jsonPayload) {
-            AtomicReference<String> ref = mResults.get(callId);
-            if (ref != null) {
-                ref.set(jsonPayload);
-            }
-            CountDownLatch latch = mLatches.get(callId);
-            if (latch != null) {
-                latch.countDown();
-            }
-        }
-    }
-
-    public AcidNativeHostBridge getNativeHostBridge() {
-        return mNativeBridge;
-    }
 
     public WebAutomationDriver(Context context, AutomationHost host) {
         mContext = context;
@@ -135,7 +99,6 @@ public class WebAutomationDriver {
     }
 
     private static final String EVAL_PARSED_MARKER = "__acid_parsed__";
-    private static final String EVAL_PARSED_NOHOST_MARKER = "__acid_parsed_nohost__";
 
     /**
      * Shared in-page serializer: Element/NodeList/Map/Set/circular/function/BigInt/NaN safe.
@@ -214,7 +177,6 @@ public class WebAutomationDriver {
     private static String buildEvalWrapper(String callId, String body, String mode) {
         return "(function(){\n" +
             "var __acidCid=" + JSONObject.quote(callId) + ";\n" +
-            "var __acidHost=window.__acidNativeHost;\n" +
             "var __acidPartial=undefined;\n" +
             "window.__partial=function(v){ __acidPartial=v; return v; };\n" +
             "try {\n" +
@@ -222,16 +184,14 @@ public class WebAutomationDriver {
             "    function(v){ var p; try { p=__acidSer(v," + JSONObject.quote(mode) + "); } catch(e){ p=__acidErr(e); } __acidSend(p); },\n" +
             "    function(e){ __acidSend(__acidErr(e)); });\n" +
             "} catch(e) { __acidSend(__acidErr(e)); }\n" +
-            "return (__acidHost && __acidHost.resolve) ? " + JSONObject.quote(EVAL_PARSED_MARKER) + " : " +
-            JSONObject.quote(EVAL_PARSED_NOHOST_MARKER) + ";\n" +
+            "return " + JSONObject.quote(EVAL_PARSED_MARKER) + ";\n" +
             "function __acidSend(p){\n" +
-            "  if (__acidHost && __acidHost.resolve) { try { __acidHost.resolve(__acidCid, p); return; } catch(e){} }\n" +
             "  (window.__acidEvalResults = window.__acidEvalResults || {})[__acidCid] = p;\n" +
             "}\n" +
             "function __acidErr(e){\n" +
             "  var stack = String(e && e.stack || '');\n" +
             "  var m = stack.match(/<anonymous>:(\\d+):(\\d+)/);\n" +
-            "  var line = m ? Math.max(1, parseInt(m[1], 10) - 7) : undefined;\n" +
+            "  var line = m ? Math.max(1, parseInt(m[1], 10) - 6) : undefined;\n" +
             "  var o={ok:false, error_code:'JS_EXCEPTION', error:String(e&&e.message||e), mode:" + JSONObject.quote(mode) + "};\n" +
             "  if (line !== undefined) {\n" +
             "    o.error_line = line;\n" +
@@ -277,46 +237,23 @@ public class WebAutomationDriver {
 
         for (JsEvalShaper.Candidate cand : candidates) {
             final String callId = "eval_" + System.nanoTime() + "_" + (int) (Math.random() * 100000);
-            final CountDownLatch latch = new CountDownLatch(1);
-            final AtomicReference<String> resultRef = new AtomicReference<String>(null);
-            mNativeBridge.prepareCall(callId, latch, resultRef);
-            try {
-                long remaining = deadline - SystemClock.uptimeMillis();
-                if (remaining <= 0) {
-                    return evalError("ASYNC_TIMEOUT", "eval timed out before code could be injected", effTimeout);
-                }
-                String parsed = evaluateJsSync(buildEvalWrapper(callId, cand.body, cand.mode), Math.min(remaining, 3000));
-                if (parsed != null && parsed.contains("\"NO_ACTIVE_TAB\"")) {
-                    return evalError("NO_ACTIVE_TAB", "no active tab", 0);
-                }
-                boolean viaHost = EVAL_PARSED_MARKER.equals(parsed);
-                boolean viaPoll = EVAL_PARSED_NOHOST_MARKER.equals(parsed);
-                boolean injectTimedOut = parsed != null && parsed.contains("\"TIMEOUT\"");
-                if (!viaHost && !viaPoll && !injectTimedOut) {
-                    // Syntax error for this shape: nothing executed, try the next shape.
-                    if (triedModes.length() > 0) triedModes.append(", ");
-                    triedModes.append(cand.mode);
-                    continue;
-                }
-                if (viaPoll) {
-                    return pollEvalResult(callId, deadline, effTimeout);
-                }
-                // Parsed (or main thread busy running the code): wait for resolution.
-                long wait = deadline - SystemClock.uptimeMillis();
-                boolean done = false;
-                try {
-                    done = wait > 0 && latch.await(wait, TimeUnit.MILLISECONDS);
-                } catch (InterruptedException e) {
-                    return evalError("INTERRUPTED", "eval interrupted", 0);
-                }
-                if (!done || resultRef.get() == null) {
-                    return evalError("ASYNC_TIMEOUT",
-                        "code started but its result (or awaited Promise) did not settle within timeout", effTimeout);
-                }
-                return resultRef.get();
-            } finally {
-                mNativeBridge.cleanupCall(callId);
+            long remaining = deadline - SystemClock.uptimeMillis();
+            if (remaining <= 0) {
+                return evalError("ASYNC_TIMEOUT", "eval timed out before code could be injected", effTimeout);
             }
+            String parsed = evaluateJsSync(buildEvalWrapper(callId, cand.body, cand.mode), Math.min(remaining, 3000));
+            if (parsed != null && (parsed.contains("\"NO_ACTIVE_TAB\"") || parsed.contains("\"NO_TARGET_TAB\""))) {
+                return evalError("NO_ACTIVE_TAB", "no active tab", 0);
+            }
+            boolean parsedOk = EVAL_PARSED_MARKER.equals(parsed);
+            boolean injectTimedOut = parsed != null && parsed.contains("\"TIMEOUT\"");
+            if (!parsedOk && !injectTimedOut) {
+                // Syntax error for this shape: nothing executed, try the next shape.
+                if (triedModes.length() > 0) triedModes.append(", ");
+                triedModes.append(cand.mode);
+                continue;
+            }
+            return pollEvalResult(callId, deadline, effTimeout);
         }
 
         JSONObject err = new JSONObject();

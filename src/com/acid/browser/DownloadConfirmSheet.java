@@ -12,13 +12,16 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.acid.browser.download.DownloadCoordinator;
+import com.acid.browser.download.DownloadItem;
+
 /**
  * Download Confirmation Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage} template
  * with pinned bottom CTA buttons and live filename draft preservation.
  */
 public class DownloadConfirmSheet extends AcidBottomSheetView {
 
-    private final BrowserController mController;
+    private final DownloadCoordinator mDownloads;
 
     private String mPendingUrl = "";
     private String mPendingFileName = "";
@@ -27,9 +30,9 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
     private String mPendingMimeType = null;
     private long mPendingContentLength = 0;
 
-    public DownloadConfirmSheet(Context context, BrowserController controller) {
+    public DownloadConfirmSheet(Context context, DownloadCoordinator downloads) {
         super(context);
-        mController = controller;
+        mDownloads = downloads;
     }
 
     @Override
@@ -52,18 +55,6 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
         mPendingMimeType = mimeType;
         mPendingContentLength = contentLength;
         setRootPage(buildConfirmPage());
-    }
-
-    public void showConfirm(
-        String url,
-        String fileName,
-        String userAgent,
-        String contentDisposition,
-        String mimeType,
-        long contentLength
-    ) {
-        prepareConfirm(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
-        show();
     }
 
     private SheetPage buildConfirmPage() {
@@ -98,7 +89,7 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 // Size & MIME
                 TextView tvSize = new TextView(ctx);
                 String mimeInfo = !TextUtils.isEmpty(mPendingMimeType) ? (" · " + mPendingMimeType) : "";
-                tvSize.setText("预估大小: " + BrowserController.DownloadItem.formatSize(mPendingContentLength) + mimeInfo);
+                tvSize.setText("预估大小: " + DownloadItem.formatSize(mPendingContentLength) + mimeInfo);
                 tvSize.setTextColor(muted);
                 tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 infoCard.addView(tvSize);
@@ -118,16 +109,15 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 pathRow.addView(AcidWidgets.miniButton(ctx, mIsDarkMode, "浏览目录", blue, false, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
-                        if (mController != null) {
-                            mController.openDownloadFolder();
+                        if (mDownloads != null) {
+                            mDownloads.openDownloadFolder();
                         }
                     }
                 }));
                 infoCard.addView(pathRow);
 
                 // Engine info row
-                int curEngine = (mController != null && mController.getDataStore() != null)
-                    ? mController.getDataStore().getDownloaderEngine() : 0;
+                int curEngine = (mDownloads != null) ? mDownloads.getDownloaderEngine() : 0;
                 String engineName = (curEngine == 1) ? "系统下载器" : "内置下载器";
                 TextView tvEngine = new TextView(ctx);
                 tvEngine.setText("下载引擎: " + engineName);
@@ -157,8 +147,8 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 urlRow.addView(AcidWidgets.miniButton(ctx, mIsDarkMode, "复制链接", accent, false, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
-                        if (mController != null) {
-                            mController.copyToClipboard(mPendingUrl);
+                        if (mDownloads != null) {
+                            mDownloads.copyUrlToClipboard(mPendingUrl);
                         }
                     }
                 }));
@@ -179,8 +169,8 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                         String customName = etFileName.getText() != null ? etFileName.getText().toString().trim() : "";
                         if (customName.isEmpty()) customName = mPendingFileName;
                         closeEntireModalFlow();
-                        if (mController != null) {
-                            mController.startDownload(
+                        if (mDownloads != null) {
+                            mDownloads.startDownload(
                                 mPendingUrl,
                                 customName,
                                 mPendingUserAgent,

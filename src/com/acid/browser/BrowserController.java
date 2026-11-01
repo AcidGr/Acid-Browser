@@ -1,18 +1,12 @@
 package com.acid.browser;
 
-import android.app.DownloadManager;
-import android.content.ActivityNotFoundException;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -25,8 +19,6 @@ import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
-import android.webkit.MimeTypeMap;
-import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -34,24 +26,17 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
-import android.widget.Toast;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import com.acid.browser.download.AcidDownloader;
-import com.acid.browser.download.DownloadChunk;
-import com.acid.browser.download.DownloadTask;
+import com.acid.browser.download.DownloadCoordinator;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Core controller managing Tab sessions, WebView lifecycle, Mobile/Desktop identity,
- * DeepLink hijack blocking, and coordinating with UserscriptManager and WebAutomationDriver.
+ * DeepLink hijack blocking, and coordinating with {@link UserscriptManager},
+ * {@link WebAutomationDriver}, and {@link DownloadCoordinator}.
  */
 public class BrowserController implements WebAutomationDriver.AutomationHost {
     private static final String TAG = "AcidBrowserCtrl";
@@ -69,7 +54,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         void onModeChanged(boolean isDesktopMode, int controlMode, boolean somEnabled);
         void onDeepLinkBlocked(String blockedUri, int totalBlocked);
         void onTabsChanged(int tabCount, int activeTabId);
-        void onAgentActionLog(String logLine);
         void onDownloadRequested(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength);
         void onUserscriptInstallRequested(String url, String fileName);
         void onSettingsReloaded();
@@ -92,161 +76,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
-    public static class DownloadItem {
-        public long downloadId;
-        public String fileName;
-        public final String url;
-        public final String mimeType;
-        public long contentLength;
-        public long downloadedBytes;
-        public int status;
-        public final long timestamp;
-
-        public volatile long speedBytesPerSec = 0;
-        public volatile String formattedSpeed = "";
-        public volatile String remainingTime = "";
-
-        public String getFormattedSpeed() {
-            return formattedSpeed != null ? formattedSpeed : "";
-        }
-
-        public String getRemainingTime() {
-            return remainingTime != null ? remainingTime : "";
-        }
-
-        public DownloadItem(long downloadId, String fileName, String url, String mimeType, long contentLength, long downloadedBytes, int status, long timestamp) {
-            this.downloadId = downloadId;
-            this.fileName = (fileName != null && !fileName.isEmpty()) ? fileName : "file";
-            this.url = url != null ? url : "";
-            this.mimeType = mimeType != null ? mimeType : "";
-            this.contentLength = contentLength;
-            this.downloadedBytes = downloadedBytes;
-            this.status = status;
-            this.timestamp = timestamp > 0 ? timestamp : System.currentTimeMillis();
-        }
-
-        public DownloadItem(String url, String mimeType, long contentLength) {
-            this(0, "download", url, mimeType, contentLength, 0, 0, System.currentTimeMillis());
-        }
-
-        public static String formatSize(long bytes) {
-            if (bytes <= 0) return "未知大小";
-            if (bytes < 1024) return bytes + " B";
-            if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0);
-            if (bytes < 1024 * 1024 * 1024) return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
-            return String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
-        }
-
-        public static final int CAT_ALL = 0;
-        public static final int CAT_APK = 1;
-        public static final int CAT_ARCHIVE = 2;
-        public static final int CAT_DOC = 3;
-        public static final int CAT_IMAGE = 4;
-        /**
-         * Legacy bucket that used to hold both audio and video. Never returned by
-         * {@link #getCategory()} any more, but kept so old serialized records and
-         * external callers still resolve to a valid value.
-         */
-        @Deprecated
-        public static final int CAT_MEDIA = 5;
-        public static final int CAT_VIDEO = 6;
-        public static final int CAT_AUDIO = 7;
-        public static final int CAT_OTHER = 8;
-
-        private static final String[] VIDEO_EXT = {
-            ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".m4v", ".3gp", ".wmv", ".mpg", ".mpeg", ".ts"
-        };
-        private static final String[] AUDIO_EXT = {
-            ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".amr", ".mid", ".midi"
-        };
-        private static final String[] ARCHIVE_EXT = {
-            ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst", ".tgz", ".tbz", ".lz", ".lzma"
-        };
-        private static final String[] DOC_EXT = {
-            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv",
-            ".json", ".xml", ".md", ".log", ".rtf", ".epub", ".html", ".htm"
-        };
-        private static final String[] IMAGE_EXT = {
-            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".heic", ".heif", ".avif", ".ico"
-        };
-
-        private static boolean matches(String name, String[] exts) {
-            for (String e : exts) {
-                if (name.endsWith(e)) return true;
-            }
-            return false;
-        }
-
-        /**
-         * Classifies the download by extension first, then MIME type, and finally
-         * falls back to {@link #CAT_OTHER}. Unknown files used to be reported as
-         * documents, which made .exe / .iso / .bin show up under "文档".
-         */
-        public int getCategory() {
-            String name = fileName != null ? fileName.toLowerCase(java.util.Locale.US) : "";
-            String mime = mimeType != null ? mimeType.toLowerCase(java.util.Locale.US) : "";
-
-            if (name.endsWith(".apk") || name.endsWith(".apks") || name.endsWith(".xapk")
-                || name.endsWith(".apkm") || mime.contains("package-archive")) {
-                return CAT_APK;
-            }
-            if (matches(name, ARCHIVE_EXT) || mime.contains("zip") || mime.contains("compressed")
-                || mime.contains("x-tar") || mime.contains("x-7z") || mime.contains("x-rar")) {
-                return CAT_ARCHIVE;
-            }
-            if (matches(name, DOC_EXT) || mime.contains("pdf") || mime.contains("document")
-                || mime.contains("sheet") || mime.contains("presentation") || mime.startsWith("text/")) {
-                return CAT_DOC;
-            }
-            if (matches(name, IMAGE_EXT) || mime.startsWith("image/")) {
-                return CAT_IMAGE;
-            }
-            if (matches(name, VIDEO_EXT) || mime.startsWith("video/")) {
-                return CAT_VIDEO;
-            }
-            if (matches(name, AUDIO_EXT) || mime.startsWith("audio/")) {
-                return CAT_AUDIO;
-            }
-            return CAT_OTHER;
-        }
-
-        /** Short human label used in the list subtitle and the filter pills. */
-        public String getCategoryLabel() {
-            switch (getCategory()) {
-                case CAT_APK: return "安装包";
-                case CAT_ARCHIVE: return "压缩包";
-                case CAT_DOC: return "文档";
-                case CAT_IMAGE: return "图片";
-                case CAT_VIDEO: return "视频";
-                case CAT_AUDIO: return "音频";
-                default: return "其它";
-            }
-        }
-
-        /** Vector glyph for the list row icon. */
-        public int getCategoryIcon() {
-            switch (getCategory()) {
-                case CAT_APK: return AcidIcons.ICON_FILE_APK;
-                case CAT_ARCHIVE: return AcidIcons.ICON_FILE_ARCHIVE;
-                case CAT_DOC: return AcidIcons.ICON_FILE_DOC;
-                case CAT_IMAGE: return AcidIcons.ICON_FILE_IMAGE;
-                case CAT_VIDEO: return AcidIcons.ICON_FILE_VIDEO;
-                case CAT_AUDIO: return AcidIcons.ICON_FILE_AUDIO;
-                default: return AcidIcons.ICON_FILE_OTHER;
-            }
-        }
-
-        public int getProgressPercent() {
-            if (status == DownloadManager.STATUS_SUCCESSFUL) return 100;
-            if (contentLength > 0 && downloadedBytes > 0) {
-                int p = (int) ((downloadedBytes * 100L) / contentLength);
-                return Math.max(0, Math.min(100, p));
-            }
-            return status == DownloadManager.STATUS_RUNNING ? 5 : 0;
-        }
-
-    }
-
     private final Context mContext;
     private final FrameLayout mWebViewContainer;
     private final AgentOverlayView mOverlayView;
@@ -256,6 +85,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private final UserscriptManager mUserscriptManager;
     private final SkillManager mSkillManager;
     private final WebAutomationDriver mAutomationDriver;
+    private final DownloadCoordinator mDownloadCoordinator;
 
     private final List<TabSession> mTabs = new ArrayList<TabSession>();
     private int mNextTabId = 1;
@@ -270,28 +100,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private String mTakeoverReason = "";
     private int mBlockedDeepLinks = 0;
     private String mLastBlockedDeepLink = "";
-    private final List<DownloadItem> mDownloads = new ArrayList<DownloadItem>();
-    private final AcidDownloader mDownloader;
     private View mCustomView = null;
     private WebChromeClient.CustomViewCallback mCustomViewCallback = null;
     private BrowserDataStore mDataStore = null;
-    /** Guards against stacking overlapping DownloadManager passes. */
-    private volatile boolean mSyncInFlight = false;
 
     public void setDataStore(BrowserDataStore dataStore) {
         mDataStore = dataStore;
-        if (mDataStore != null) {
-            List<DownloadItem> saved = mDataStore.loadDownloads();
-            synchronized (mDownloads) {
-                mDownloads.clear();
-                mDownloads.addAll(saved);
-            }
-            if (Build.VERSION.SDK_INT >= 19) {
-                try {
-                    WebView.setWebContentsDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to set web contents debugging", e);
-                }
+        mDownloadCoordinator.setDataStore(dataStore);
+        if (mDataStore != null && Build.VERSION.SDK_INT >= 19) {
+            try {
+                WebView.setWebContentsDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to set web contents debugging", e);
             }
         }
     }
@@ -339,34 +159,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             adBlock.bindDataStore(mDataStore);
         }
         mAutomationDriver = new WebAutomationDriver(context, this);
-        mDownloader = AcidDownloader.getInstance();
-        mDownloader.addListener(new AcidDownloader.DownloaderListener() {
-            @Override
-            public void onTaskStarted(DownloadTask task) {
-                updateDownloadItemFromTask(task);
-            }
-
-            @Override
-            public void onTaskProgress(DownloadTask task) {
-                updateDownloadItemFromTask(task);
-            }
-
-            @Override
-            public void onTaskPaused(DownloadTask task) {
-                updateDownloadItemFromTask(task);
-            }
-
-            @Override
-            public void onTaskCompleted(DownloadTask task) {
-                updateDownloadItemFromTask(task);
-                onDownloadCompleted(task.id);
-            }
-
-            @Override
-            public void onTaskFailed(DownloadTask task, String error) {
-                updateDownloadItemFromTask(task);
-            }
-        });
+        mDownloadCoordinator = new DownloadCoordinator(context, mDataStore);
 
         if (mOverlayView != null) {
             mOverlayView.setTabStateProvider(new AgentOverlayView.TabStateProvider() {
@@ -382,18 +175,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             });
         }
 
-        if (mDataStore != null) {
-            List<DownloadItem> saved = mDataStore.loadDownloads();
-            synchronized (mDownloads) {
-                mDownloads.clear();
-                mDownloads.addAll(saved);
-            }
-            if (Build.VERSION.SDK_INT >= 19) {
-                try {
-                    WebView.setWebContentsDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to set web contents debugging", e);
-                }
+        if (mDataStore != null && Build.VERSION.SDK_INT >= 19) {
+            try {
+                WebView.setWebContentsDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to set web contents debugging", e);
             }
         }
 
@@ -404,16 +190,21 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mContext;
     }
 
+    @Override
     public UserscriptManager getUserscriptManager() {
         return mUserscriptManager;
     }
 
-    public File getWorkspaceDir() {
-        return mUserscriptManager.getWorkspaceDir();
+    public WebAutomationDriver getAutomationDriver() {
+        return mAutomationDriver;
     }
 
-    public File getUserscriptsDir() {
-        return mUserscriptManager.getUserscriptsDir();
+    public DownloadCoordinator getDownloadCoordinator() {
+        return mDownloadCoordinator;
+    }
+
+    public File getWorkspaceDir() {
+        return mUserscriptManager.getWorkspaceDir();
     }
 
     @Override
@@ -424,14 +215,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     @Override
     public void emitLog(final String msg) {
         Log.i(TAG, msg);
-        if (mListener != null) {
-            mMainHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    mListener.onAgentActionLog(msg);
-                }
-            });
-        }
     }
 
     // =========================================================================
@@ -797,7 +580,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 if (url != null && (url.endsWith(".user.js") || url.contains(".user.js?"))) {
-                    String guessName = smartGuessFileName(url, null, "application/javascript");
+                    String guessName = DownloadCoordinator.smartGuessFileName(url, null, "application/javascript");
                     if (mListener != null) {
                         mListener.onUserscriptInstallRequested(url, guessName);
                     }
@@ -810,7 +593,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (Build.VERSION.SDK_INT >= 24 && request != null && request.getUrl() != null) {
                     String u = request.getUrl().toString();
                     if (u.endsWith(".user.js") || u.contains(".user.js?")) {
-                        String guessName = smartGuessFileName(u, null, "application/javascript");
+                        String guessName = DownloadCoordinator.smartGuessFileName(u, null, "application/javascript");
                         if (mListener != null) {
                             mListener.onUserscriptInstallRequested(u, guessName);
                         }
@@ -982,8 +765,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         wv.setDownloadListener(new DownloadListener() {
             @Override
             public void onDownloadStart(final String url, final String userAgent, final String contentDisposition, final String mimeType, final long contentLength) {
-                final String fileName = smartGuessFileName(url, contentDisposition, mimeType);
-                final String resolvedMime = resolveMimeType(fileName, mimeType);
+                final String fileName = DownloadCoordinator.smartGuessFileName(url, contentDisposition, mimeType);
+                final String resolvedMime = DownloadCoordinator.resolveMimeType(fileName, mimeType);
                 emitLog("[DOWNLOAD] Triggered: " + fileName + " (" + contentLength + " B, " + resolvedMime + ")");
 
                 // Intercept userscript downloads directly into the script installer.
@@ -1005,7 +788,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         if (mListener != null) {
                             mListener.onDownloadRequested(url, fileName, userAgent, contentDisposition, resolvedMime, contentLength);
                         } else {
-                            startDownload(url, fileName, userAgent, contentDisposition, resolvedMime, contentLength);
+                            mDownloadCoordinator.startDownload(url, fileName, userAgent, contentDisposition, resolvedMime, contentLength);
                         }
                     }
                 });
@@ -1380,22 +1163,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mIsDesktopMode;
     }
 
-    public String evaluateJsAsync(String code, long timeoutMs) {
-        return mAutomationDriver.evaluateJsAsync(code, timeoutMs);
-    }
-
-    public JSONObject waitSync(String condition, String target, long quietMs, long timeoutMs) {
-        return mAutomationDriver.waitConditionSync(condition, target, quietMs, timeoutMs);
-    }
-
-    public JSONObject clickTargetSync(JSONObject targetOpts, boolean useNative) {
-        return mAutomationDriver.clickTargetSync(targetOpts, useNative);
-    }
-
-    public JSONObject fillTargetSync(JSONObject targetOpts, String text, boolean clear, boolean submit) {
-        return mAutomationDriver.fillSync(targetOpts, text, clear, submit);
-    }
-
     public void setControlMode(int mode, String reason) {
         mTakeoverReason = (reason != null) ? reason : "";
         mOverlayView.setControlMode(mode);
@@ -1414,7 +1181,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void setSomEnabled(boolean enabled) {
         mSomEnabled = enabled;
-        evaluateJsSync("window.__acidBridge && window.__acidBridge.setSomEnabled(" + enabled + ");", 1500);
+        mAutomationDriver.evaluateJsSync("window.__acidBridge && window.__acidBridge.setSomEnabled(" + enabled + ");", 1500);
         if (mListener != null) {
             mListener.onModeChanged(mIsDesktopMode, mOverlayView.getControlMode(), mSomEnabled);
         }
@@ -1437,602 +1204,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
-    public static String smartGuessFileName(String url, String contentDisposition, String mimeType) {
-        String effectiveMime = mimeType;
-        if (effectiveMime != null) {
-            String lower = effectiveMime.trim().toLowerCase();
-            if (lower.equals("application/octet-stream") ||
-                lower.equals("binary/octet-stream") ||
-                lower.equals("application/force-download") ||
-                lower.equals("*/*") ||
-                lower.isEmpty()) {
-                effectiveMime = null;
-            }
-        }
-
-        String guessed = URLUtil.guessFileName(url, contentDisposition, effectiveMime);
-
-        // Extra guard: If URL path or contentDisposition has an explicit known extension,
-        // but URLUtil forced a .bin extension, restore the original extension.
-        if (guessed != null && guessed.toLowerCase().endsWith(".bin")) {
-            String candidate = null;
-            if (contentDisposition != null) {
-                int fnIndex = contentDisposition.toLowerCase().indexOf("filename=");
-                if (fnIndex >= 0) {
-                    String part = contentDisposition.substring(fnIndex + 9).trim();
-                    if (part.startsWith("\"") && part.length() > 1) {
-                        int endQuote = part.indexOf('\"', 1);
-                        if (endQuote > 1) candidate = part.substring(1, endQuote);
-                    } else {
-                        int semi = part.indexOf(';');
-                        candidate = semi > 0 ? part.substring(0, semi).trim() : part;
-                    }
-                }
-            }
-            if (candidate == null && url != null) {
-                try {
-                    String path = Uri.parse(url).getPath();
-                    if (path != null) {
-                        int slash = path.lastIndexOf('/');
-                        if (slash >= 0 && slash < path.length() - 1) {
-                            candidate = path.substring(slash + 1);
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to derive a file name from the URL", e);
-                }
-            }
-
-            if (candidate != null) {
-                int dot = candidate.lastIndexOf('.');
-                if (dot >= 0 && dot < candidate.length() - 1) {
-                    String ext = candidate.substring(dot).toLowerCase();
-                    if (!ext.equals(".bin")) {
-                        if (guessed.toLowerCase().endsWith(ext + ".bin")) {
-                            guessed = guessed.substring(0, guessed.length() - 4);
-                        } else if (guessed.toLowerCase().endsWith(".bin")) {
-                            guessed = guessed.substring(0, guessed.length() - 4) + ext;
-                        }
-                    }
-                }
-            }
-        }
-
-        return guessed;
-    }
-
-    public static String resolveMimeType(String fileName, String mimeType) {
-        if (fileName != null) {
-            int dot = fileName.lastIndexOf('.');
-            if (dot >= 0 && dot < fileName.length() - 1) {
-                String ext = fileName.substring(dot + 1).toLowerCase();
-                if ("apk".equals(ext)) {
-                    return "application/vnd.android.package-archive";
-                }
-                String guessed = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
-                if (guessed != null && !guessed.isEmpty()) {
-                    return guessed;
-                }
-            }
-        }
-        if (mimeType != null && !mimeType.isEmpty() && !"*/*".equals(mimeType) && !"application/octet-stream".equals(mimeType)) {
-            return mimeType;
-        }
-        return "*/*";
-    }
-
-    /**
-     * Cheap snapshot of the download list. This never talks to DownloadManager, so it
-     * is safe to call on the UI thread as often as needed; use
-     * {@link #syncDownloadStatusAsync(DownloadSyncCallback)} to refresh the numbers.
-     */
-    public List<DownloadItem> getDownloads() {
-        synchronized (mDownloads) {
-            return new ArrayList<DownloadItem>(mDownloads);
-        }
-    }
-
-    public AcidDownloader getDownloader() {
-        return mDownloader;
-    }
-
-    private void updateDownloadItemFromTask(DownloadTask task) {
-        if (task == null) return;
-        boolean changed = false;
-        synchronized (mDownloads) {
-            for (DownloadItem it : mDownloads) {
-                if (it.downloadId == task.id) {
-                    it.downloadedBytes = task.downloadedBytes;
-                    if (task.contentLength > 0) it.contentLength = task.contentLength;
-                    it.status = task.status;
-                    it.speedBytesPerSec = task.currentSpeedBytesPerSec;
-                    it.formattedSpeed = task.getFormattedSpeed();
-                    it.remainingTime = task.getEstimatedRemainingTime();
-                    changed = true;
-                    break;
-                }
-            }
-            if (changed && mDataStore != null) {
-                mDataStore.saveDownloads(mDownloads);
-            }
-        }
-    }
-
-    public void startDownload(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength) {
-        if (url == null || url.isEmpty()) return;
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            AcidFeedback.warn(mContext, "当前暂不支持下载此协议资源: " + url);
-            return;
-        }
-
-        int engine = (mDataStore != null) ? mDataStore.getDownloaderEngine() : AcidSettings.DOWNLOADER_BUILTIN;
-        if (engine == AcidSettings.DOWNLOADER_SYSTEM) {
-            startDownloadWithSystem(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
-        } else {
-            startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
-        }
-    }
-
-    public void startDownloadWithBuiltin(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength) {
-        try {
-            if (fileName == null || fileName.trim().isEmpty()) {
-                fileName = smartGuessFileName(url, contentDisposition, mimeType);
-            }
-            String effectiveMime = resolveMimeType(fileName, mimeType);
-
-            File destDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            if (destDir == null || (!destDir.exists() && !destDir.mkdirs())) {
-                File extFiles = mContext.getExternalFilesDir(null);
-                destDir = new File(extFiles != null ? extFiles : mContext.getFilesDir(), "Download");
-                destDir.mkdirs();
-            }
-
-            Map<String, String> headers = new HashMap<String, String>();
-            String cookie = null;
-            try {
-                cookie = CookieManager.getInstance().getCookie(url);
-            } catch (Exception ignored) {}
-            if (cookie != null && !cookie.isEmpty()) {
-                headers.put("Cookie", cookie);
-            }
-            if (userAgent != null && !userAgent.isEmpty()) {
-                headers.put("User-Agent", userAgent);
-            }
-
-            final DownloadTask task = mDownloader.enqueue(url, fileName, effectiveMime, destDir, headers);
-
-            DownloadItem item = new DownloadItem(
-                task.id,
-                task.fileName,
-                url,
-                effectiveMime,
-                contentLength,
-                0,
-                DownloadTask.STATUS_RUNNING,
-                task.createdAt
-            );
-
-            synchronized (mDownloads) {
-                mDownloads.add(0, item);
-                if (mDataStore != null) {
-                    mDataStore.saveDownloads(mDownloads);
-                }
-            }
-
-            emitLog("[DOWNLOAD] Enqueued multi-thread task: " + fileName + " (id=" + task.id + ") -> /Download/");
-            AcidFeedback.ok(mContext, "已开始内置下载: " + fileName + "\n保存至手机 Download 目录");
-        } catch (Exception e) {
-            emitLog("[DOWNLOAD] Failed to enqueue builtin: " + e.getMessage());
-            AcidFeedback.error(mContext, "内置下载发起失败: " + e.getMessage());
-        }
-    }
-
-    public void startDownloadWithSystem(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength) {
-        try {
-            DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm == null) {
-                AcidFeedback.warn(mContext, "系统下载器不可用，自动转为内置下载");
-                startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
-                return;
-            }
-
-            if (fileName == null || fileName.trim().isEmpty()) {
-                fileName = smartGuessFileName(url, contentDisposition, mimeType);
-            }
-            String effectiveMime = resolveMimeType(fileName, mimeType);
-
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-            if (effectiveMime != null && !effectiveMime.isEmpty() && !"*/*".equals(effectiveMime)) {
-                request.setMimeType(effectiveMime);
-            }
-
-            String cookie = null;
-            try {
-                cookie = CookieManager.getInstance().getCookie(url);
-            } catch (Exception ignored) {}
-            if (cookie != null && !cookie.isEmpty()) {
-                request.addRequestHeader("Cookie", cookie);
-            }
-            if (userAgent != null && !userAgent.isEmpty()) {
-                request.addRequestHeader("User-Agent", userAgent);
-            }
-
-            request.allowScanningByMediaScanner();
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setTitle(fileName);
-            request.setDescription("Acid Browser 系统下载");
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-
-            long downloadId = dm.enqueue(request);
-
-            DownloadItem item = new DownloadItem(
-                downloadId,
-                fileName,
-                url,
-                effectiveMime,
-                contentLength,
-                0,
-                DownloadManager.STATUS_RUNNING,
-                System.currentTimeMillis()
-            );
-
-            synchronized (mDownloads) {
-                mDownloads.add(0, item);
-                if (mDataStore != null) {
-                    mDataStore.saveDownloads(mDownloads);
-                }
-            }
-
-            emitLog("[DOWNLOAD] Enqueued system task: " + fileName + " (id=" + downloadId + ") -> /Download/");
-            AcidFeedback.ok(mContext, "已通过系统下载器开始下载: " + fileName);
-        } catch (Exception e) {
-            emitLog("[DOWNLOAD] System download enqueue failed: " + e.getMessage() + ", falling back to builtin");
-            startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
-        }
-    }
-
-    public boolean pauseDownload(long downloadId) {
-        return mDownloader.pause(downloadId);
-    }
-
-    public boolean resumeDownload(long downloadId) {
-        DownloadTask task = mDownloader.getTask(downloadId);
-        if (task != null) {
-            return mDownloader.resume(downloadId);
-        }
-        synchronized (mDownloads) {
-            for (DownloadItem it : mDownloads) {
-                if (it.downloadId == downloadId) {
-                    startDownload(it.url, it.fileName, null, null, it.mimeType, it.contentLength);
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    public void onDownloadCompleted(long downloadId) {
-        syncDownloadStatusAsync(null);
-        synchronized (mDownloads) {
-            for (DownloadItem it : mDownloads) {
-                if (it.downloadId == downloadId) {
-                    emitLog("[DOWNLOAD] Complete: " + it.fileName);
-                    break;
-                }
-            }
-        }
-    }
-
-    /** Result callback for {@link #syncDownloadStatusAsync(DownloadSyncCallback)}. */
-    public interface DownloadSyncCallback {
-        /**
-         * @param anyActive true when at least one task is still running or queued,
-         *                  so callers can decide whether to poll again.
-         */
-        void onDownloadSyncDone(boolean anyActive);
-    }
-
-    /**
-     * Refreshes download progress off the UI thread.
-     *
-     * <p>Each item needs its own DownloadManager query, which is a binder round-trip into
-     * DownloadProvider. Doing that on the main thread for every row was the cause of the
-     * janky download list, so the whole pass runs on a worker and posts the result back.
-     * Overlapping calls are collapsed: if a pass is already in flight the new request is
-     * dropped, because the in-flight one will observe the same state.
-     */
-    public void syncDownloadStatusAsync(final DownloadSyncCallback callback) {
-        if (mSyncInFlight) return;
-        mSyncInFlight = true;
-
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                boolean anyActive = false;
-                try {
-                    anyActive = syncDownloadStatusOffMainThread();
-                } catch (Exception e) {
-                    Log.w(TAG, "Background download status sync failed", e);
-                } finally {
-                    mSyncInFlight = false;
-                }
-
-                final boolean result = anyActive;
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (callback != null) {
-                            callback.onDownloadSyncDone(result);
-                        }
-                    }
-                });
-            }
-        }, "AcidDownloadSync").start();
-    }
-
-    /**
-     * Blocking refresh of every download row. Must not be called from the UI thread.
-     *
-     * @return true when at least one row is still running or pending.
-     */
-    private boolean syncDownloadStatusOffMainThread() {
-        DownloadManager dm = null;
-        try {
-            dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-        } catch (Exception ignored) {}
-
-        boolean changed = false;
-        boolean anyActive = false;
-
-        synchronized (mDownloads) {
-            for (DownloadItem it : mDownloads) {
-                if (it.downloadId <= 0) {
-                    continue;
-                }
-
-                // Check AcidDownloader in-process task first
-                DownloadTask task = mDownloader.getTask(it.downloadId);
-                if (task != null) {
-                    if (it.downloadedBytes != task.downloadedBytes) {
-                        it.downloadedBytes = task.downloadedBytes;
-                        changed = true;
-                    }
-                    if (task.contentLength > 0 && it.contentLength != task.contentLength) {
-                        it.contentLength = task.contentLength;
-                        changed = true;
-                    }
-                    if (it.status != task.status) {
-                        it.status = task.status;
-                        changed = true;
-                    }
-                    it.speedBytesPerSec = task.currentSpeedBytesPerSec;
-                    it.formattedSpeed = task.getFormattedSpeed();
-                    it.remainingTime = task.getEstimatedRemainingTime();
-                    if (it.status == DownloadTask.STATUS_RUNNING || it.status == DownloadTask.STATUS_PENDING) {
-                        anyActive = true;
-                    }
-                    continue;
-                }
-
-                if (dm == null) continue;
-                DownloadManager.Query q = new DownloadManager.Query();
-                q.setFilterById(it.downloadId);
-                Cursor c = null;
-                try {
-                    c = dm.query(q);
-                    if (c != null && c.moveToFirst()) {
-                        int statusCol = c.getColumnIndex(DownloadManager.COLUMN_STATUS);
-                        int bytesCol = c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR);
-                        int totalCol = c.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES);
-
-                        if (statusCol != -1) {
-                            int status = c.getInt(statusCol);
-                            if (it.status != status) {
-                                it.status = status;
-                                changed = true;
-                            }
-                        }
-                        if (bytesCol != -1) {
-                            long bytes = c.getLong(bytesCol);
-                            if (it.downloadedBytes != bytes) {
-                                it.downloadedBytes = bytes;
-                                changed = true;
-                            }
-                        }
-                        if (totalCol != -1) {
-                            long total = c.getLong(totalCol);
-                            if (total > 0 && (it.contentLength <= 0 || it.contentLength != total)) {
-                                it.contentLength = total;
-                                changed = true;
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to read download status for id " + it.downloadId, e);
-                } finally {
-                    if (c != null) {
-                        try {
-                            c.close();
-                        } catch (Exception e) {
-                            Log.w(TAG, "Failed to close download-status cursor", e);
-                        }
-                    }
-                }
-
-                if (it.status == DownloadManager.STATUS_RUNNING
-                    || it.status == DownloadManager.STATUS_PENDING) {
-                    anyActive = true;
-                }
-            }
-
-            // Persist inside the lock so the worker never serialises a list that a UI
-            // thread mutation is concurrently editing.
-            if (changed && mDataStore != null) {
-                mDataStore.saveDownloads(mDownloads);
-            }
-        }
-
-        return anyActive;
-    }
-
-    public void openDownloadedFile(DownloadItem it) {
-        openDownloadedFile(it, false);
-    }
-
-    public void openDownloadedFile(DownloadItem it, boolean forceChooser) {
-        if (it == null) return;
-        try {
-            File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            File file = new File(dir, it.fileName);
-            if (!file.exists()) {
-                File fallbackDir = new File(mContext.getExternalFilesDir(null), "Download");
-                File fallbackFile = new File(fallbackDir, it.fileName);
-                if (fallbackFile.exists()) {
-                    file = fallbackFile;
-                }
-            }
-
-            Uri uri = null;
-            if (file.exists()) {
-                uri = AcidFileProvider.getUriForFile(file);
-            }
-            if (uri == null) {
-                DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null && it.downloadId > 0) {
-                    uri = dm.getUriForDownloadedFile(it.downloadId);
-                }
-            }
-
-            if (uri == null) {
-                AcidFeedback.warn(mContext, "未找到下载文件: " + it.fileName);
-                return;
-            }
-
-            String mime = it.mimeType;
-            String lower = it.fileName != null ? it.fileName.toLowerCase() : "";
-            if (lower.endsWith(".apk")) {
-                mime = "application/vnd.android.package-archive";
-            } else if (mime == null || mime.isEmpty() || "*/*".equals(mime) || "application/octet-stream".equals(mime)) {
-                int dot = lower.lastIndexOf('.');
-                if (dot >= 0 && dot < lower.length() - 1) {
-                    String ext = lower.substring(dot + 1);
-                    String guessed = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
-                    if (guessed != null) {
-                        mime = guessed;
-                    }
-                }
-            }
-            if (mime == null || mime.isEmpty()) {
-                mime = "*/*";
-            }
-
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(uri, mime);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-
-            if (forceChooser) {
-                Intent chooser = Intent.createChooser(intent, "选择打开方式: " + it.fileName);
-                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                mContext.startActivity(chooser);
-            } else {
-                mContext.startActivity(intent);
-            }
-        } catch (ActivityNotFoundException anfe) {
-            AcidFeedback.warn(mContext, "系统未找到可打开此类型文件的应用 (" + it.fileName + ")");
-        } catch (Exception e) {
-            AcidFeedback.error(mContext, "无法打开文件: " + e.getMessage());
-        }
-    }
-
-    public void openDownloadFolder() {
-        try {
-            Intent intent = new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            mContext.startActivity(intent);
-        } catch (Exception e1) {
-            try {
-                Intent intent = new Intent(Intent.ACTION_VIEW);
-                Uri uri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload");
-                intent.setDataAndType(uri, "vnd.android.document/directory");
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                mContext.startActivity(intent);
-            } catch (Exception e2) {
-                File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                AcidFeedback.info(mContext, "存储目录: " + dir.getAbsolutePath());
-            }
-        }
-    }
-
-    public void copyToClipboard(String text) {
-        if (text == null || text.isEmpty()) return;
-        try {
-            ClipboardManager cm = (ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText("download_url", text));
-                AcidFeedback.ok(mContext, "已复制到剪贴板");
-            }
-        } catch (Exception e) {
-            AcidFeedback.error(mContext, "复制失败: " + e.getMessage());
-        }
-    }
-
-    public boolean deleteDownload(long downloadId, boolean deletePhysicalFile) {
-        boolean removed = false;
-        DownloadItem target = null;
-        mDownloader.cancel(downloadId, deletePhysicalFile);
-
-        synchronized (mDownloads) {
-            for (int i = 0; i < mDownloads.size(); i++) {
-                DownloadItem it = mDownloads.get(i);
-                if (it.downloadId == downloadId) {
-                    target = it;
-                    mDownloads.remove(i);
-                    removed = true;
-                    break;
-                }
-            }
-        }
-
-        if (deletePhysicalFile && target != null) {
-            try {
-                File file = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), target.fileName);
-                if (file.exists()) {
-                    file.delete();
-                } else {
-                    File fallback = new File(new File(mContext.getExternalFilesDir(null), "Download"), target.fileName);
-                    if (fallback.exists()) fallback.delete();
-                }
-                DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null && downloadId > 0) {
-                    dm.remove(downloadId);
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to delete downloaded file for id " + downloadId, e);
-            }
-        }
-
-        if (removed) {
-            synchronized (mDownloads) {
-                if (mDataStore != null) {
-                    mDataStore.saveDownloads(mDownloads);
-                }
-            }
-        }
-        return removed;
-    }
-
-    public void clearDownloads() {
-        synchronized (mDownloads) {
-            mDownloads.clear();
-        }
-        if (mDataStore != null) {
-            mDataStore.clearDownloads();
-        }
-    }
-
     @Override
     public int getBlockedDeepLinksCount() {
         return mBlockedDeepLinks;
@@ -2041,58 +1212,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     @Override
     public String getLastBlockedDeepLink() {
         return mLastBlockedDeepLink;
-    }
-
-    // =========================================================================
-    // Delegation to WebAutomationDriver & UserscriptManager
-    // =========================================================================
-
-    public String evaluateJsSync(String jsExpr, long timeoutMs) {
-        return mAutomationDriver.evaluateJsSync(jsExpr, timeoutMs);
-    }
-
-    public JSONObject observeSync(boolean includeSom, boolean viewportOnly, boolean includeScreenshot) {
-        return mAutomationDriver.observeSync(includeSom, viewportOnly, includeScreenshot);
-    }
-
-    public JSONObject navigateSync(String url, long waitSettleMs) {
-        return mAutomationDriver.navigateSync(url, waitSettleMs);
-    }
-
-    public JSONObject clickRefSync(String targetRef, boolean useNativeMotionEvent) {
-        return mAutomationDriver.clickRefSync(targetRef, useNativeMotionEvent);
-    }
-
-    public JSONObject clickCoordinateSync(float viewX, float viewY) {
-        return mAutomationDriver.clickCoordinateSync(viewX, viewY);
-    }
-
-    public JSONObject fillSync(String ref, String text, boolean clear, boolean submit) {
-        return mAutomationDriver.fillSync(ref, text, clear, submit);
-    }
-
-    public JSONObject fillFormSync(JSONArray fields, boolean submitLast) {
-        return mAutomationDriver.fillFormSync(fields, submitLast);
-    }
-
-    public JSONObject selectOptionSync(String ref, String valueOrLabel) {
-        return mAutomationDriver.selectOptionSync(ref, valueOrLabel);
-    }
-
-    public JSONObject scrollSync(String direction, double amount, String targetRef) {
-        return mAutomationDriver.scrollSync(direction, amount, targetRef);
-    }
-
-    public String captureScreenshotBase64Sync(int jpegQuality) {
-        return mAutomationDriver.captureScreenshotBase64Sync(jpegQuality);
-    }
-
-    public JSONArray listUserscriptsJson() {
-        return mUserscriptManager.listUserscriptsJson();
-    }
-
-    public List<UserscriptMeta> getUserscripts() {
-        return mUserscriptManager.getScripts();
     }
 
     /**
@@ -2110,10 +1229,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return error;
     }
 
-    public boolean saveUserscript(String name, String code) {
-        return installUserscript(name, code) == null;
-    }
-
     /** Runs a script immediately on the active tab, honouring its {@code @match}. */
     public boolean runUserscriptNow(UserscriptMeta meta) {
         TabSession tab = getActiveTab();
@@ -2123,13 +1238,5 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             ? "[PLUGIN] Ran " + meta.fileName
             : "[PLUGIN] " + meta.fileName + " does not apply to this page");
         return ok;
-    }
-
-    public boolean deleteUserscript(String name) {
-        return mUserscriptManager.deleteUserscript(name);
-    }
-
-    public boolean setUserscriptEnabled(String name, boolean enabled) {
-        return mUserscriptManager.setScriptEnabled(name, enabled);
     }
 }

@@ -101,13 +101,9 @@ public class AdBlockManager {
         mSubscriptionFile = new File(mAdBlockDir, "subscriptions.txt");
 
         if (!mCustomRulesFile.exists()) {
-            try {
-                FileOutputStream fos = new FileOutputStream(mCustomRulesFile);
-                String header = "! Acid Browser Custom AdBlock Rules\n" +
-                                "! 支持 ||domain^ (拦截域名), @@||domain^ (白名单), ##selector (元素隐藏)\n";
-                fos.write(header.getBytes("UTF-8"));
-                fos.close();
-            } catch (Exception ignored) {}
+            String header = "! Acid Browser Custom AdBlock Rules\n" +
+                            "! 支持 ||domain^ (拦截域名), @@||domain^ (白名单), ##selector (元素隐藏)\n";
+            AcidIo.writeFileUtf8Safe(mCustomRulesFile, header);
         }
     }
 
@@ -505,37 +501,16 @@ public class AdBlockManager {
     }
 
     public String getCustomRulesText() {
-        if (mCustomRulesFile == null || !mCustomRulesFile.exists()) {
-            return "";
-        }
-        try {
-            FileInputStream fis = new FileInputStream(mCustomRulesFile);
-            BufferedReader br = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) {
-                sb.append(line).append("\n");
-            }
-            br.close();
-            fis.close();
-            return sb.toString();
-        } catch (Exception e) {
-            return "";
-        }
+        return AcidIo.readFileUtf8OrEmpty(mCustomRulesFile, AcidHttp.DEFAULT_MAX_BYTES);
     }
 
     public boolean saveCustomRulesText(String text) {
         if (mCustomRulesFile == null) return false;
-        try {
-            FileOutputStream fos = new FileOutputStream(mCustomRulesFile);
-            fos.write(text.getBytes("UTF-8"));
-            fos.close();
-            loadAllRulesSync();
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to save custom rules: " + e.getMessage());
+        if (!AcidIo.writeFileUtf8Safe(mCustomRulesFile, text)) {
             return false;
         }
+        loadAllRulesSync();
+        return true;
     }
 
     public void reloadCustomRules() {

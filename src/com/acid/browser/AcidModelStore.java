@@ -8,15 +8,12 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * DSH-Inspired Model & Provider Catalog Store for Acid Browser.
@@ -667,7 +664,7 @@ public class AcidModelStore {
 
         int code = conn.getResponseCode();
         InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
-        String respStr = readStreamUtf8(is);
+        String respStr = AcidIo.readStreamUtf8(is);
         conn.disconnect();
 
         if (code < 200 || code >= 300) {
@@ -708,17 +705,5 @@ public class AcidModelStore {
             throw new Exception("该端点未返回任何可用模型列表，请手动添加模型 ID");
         }
         return result;
-    }
-
-    private static String readStreamUtf8(InputStream is) throws Exception {
-        if (is == null) return "";
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096];
-        int n;
-        while ((n = is.read(buf)) != -1) {
-            baos.write(buf, 0, n);
-        }
-        is.close();
-        return new String(baos.toByteArray(), StandardCharsets.UTF_8);
     }
 }

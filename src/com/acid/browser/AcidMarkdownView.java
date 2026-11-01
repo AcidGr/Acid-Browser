@@ -1,7 +1,5 @@
 package com.acid.browser;
 
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -22,7 +20,6 @@ import android.widget.LinearLayout;
 import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -424,15 +421,11 @@ public class AcidMarkdownView extends LinearLayout {
         card.setOnLongClickListener(new View.OnLongClickListener() {
             @Override
             public boolean onLongClick(View v) {
-                ClipboardManager cm = (ClipboardManager) finalCtx.getSystemService(Context.CLIPBOARD_SERVICE);
-                if (cm != null) {
-                    StringBuilder sb = new StringBuilder();
-                    for (String tLine : finalTableLines) {
-                        sb.append(tLine).append("\n");
-                    }
-                    cm.setPrimaryClip(ClipData.newPlainText("table", sb.toString().trim()));
-                    AcidFeedback.ok(finalCtx, "已复制表格 Markdown 到剪贴板");
+                StringBuilder sb = new StringBuilder();
+                for (String tLine : finalTableLines) {
+                    sb.append(tLine).append("\n");
                 }
+                AcidIo.copyToClipboard(finalCtx, "table", sb.toString().trim(), "已复制表格 Markdown 到剪贴板");
                 return true;
             }
         });

@@ -44,13 +44,6 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
         setRootPage(buildSelectorPage());
     }
 
-    public void showSelector() {
-        if (mModelStore == null) return;
-        mFilterQuery = "";
-        setRootPage(buildSelectorPage());
-        show();
-    }
-
     @Override
     public void show() {
         if (getPageDepth() == 0) {

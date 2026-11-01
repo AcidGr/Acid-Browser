@@ -53,13 +53,6 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         setRootPage(buildProvidersListPage());
     }
 
-    public void showConfig() {
-        if (mModelStore == null) return;
-        mAddTabCustomMode = false;
-        setRootPage(buildProvidersListPage());
-        show();
-    }
-
     // =========================================================================
     // LEVEL 1: Configured Providers List Page
     // =========================================================================

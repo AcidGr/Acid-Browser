@@ -16,7 +16,7 @@ import android.view.inputmethod.InputMethodManager;
  * <p>Single source of truth for:
  * <ul>
  *   <li>Neutral Day/Night OLED palettes (eliminating mixed warm/cool dark greys)</li>
- *   <li>5-level Typography Hierarchy ({@code SP_H1_SHEET} .. {@code SP_BADGE})</li>
+ *   <li>Semantic Typography Hierarchy ({@code SP_SHEET_TITLE} .. {@code SP_MICRO})</li>
  *   <li>3-tier Corner Radius Scale ({@code RADIUS_SHEET}, {@code RADIUS_CARD}, {@code RADIUS_CONTROL})</li>
  *   <li>Stateful press-feedback drawables ({@link #interactiveBg})</li>
  * </ul>
@@ -51,13 +51,6 @@ public final class AcidTheme {
     public static final float SP_BADGE = 10.5f;
     /** Micro badge / unread counter (9.5sp Bold). */
     public static final float SP_MICRO = 9.5f;
-
-    // Legacy compatibility aliases
-    public static final float SP_H1_SHEET = SP_SHEET_TITLE;
-    public static final float SP_H2_SECTION = SP_OVERLINE;
-    public static final float SP_H3_CARD = SP_HERO;
-    public static final float SP_H4_ITEM = SP_ITEM;
-    public static final float SP_LABEL = SP_FIELD_LABEL;
 
     // =====================================================================
     // 2. Corner Radius & Layout Geometry Scale (in DP)

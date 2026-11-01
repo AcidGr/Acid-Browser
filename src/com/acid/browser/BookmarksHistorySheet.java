@@ -73,18 +73,6 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         mSearchQuery = "";
     }
 
-    public void showBookmarks(String currentTitle, String currentUrl) {
-        prepareTab(TAB_BOOKMARKS, currentTitle, currentUrl);
-        setRootPage(buildActiveTabPage());
-        show();
-    }
-
-    public void showHistory(String currentTitle, String currentUrl) {
-        prepareTab(TAB_HISTORY, currentTitle, currentUrl);
-        setRootPage(buildActiveTabPage());
-        show();
-    }
-
     private SheetPage buildActiveTabPage() {
         final Context ctx = getContext();
 
@@ -419,8 +407,8 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
 
     private void showEditBookmarkDialog(final int index, final BrowserDataStore.EntryItem item) {
         final Context ctx = getContext();
-        final EditText etTitle = AcidWidgets.inputField(ctx, mIsDarkMode, "网站标题", item.title, false);
-        final EditText etUrl = AcidWidgets.inputField(ctx, mIsDarkMode, "网址 (URL)", item.url, false);
+        final EditText etTitle = AcidWidgets.inputField(ctx, mIsDarkMode, item.title, "网站标题", true);
+        final EditText etUrl = AcidWidgets.inputField(ctx, mIsDarkMode, item.url, "网址 (URL)", true);
         etUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
 
         LinearLayout layout = new LinearLayout(ctx);

@@ -1,19 +1,12 @@
 package com.acid.browser;
 
 import android.content.Context;
-import android.content.res.AssetManager;
 import android.util.Log;
 import android.webkit.WebView;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -74,17 +67,17 @@ public class UserscriptManager {
     }
 
     private void loadBridgeAndDefaultUserscripts() {
-        mBridgeJs = readAssetText("agent_bridge.js");
+        mBridgeJs = AcidIo.readAssetUtf8OrEmpty(mContext, "agent_bridge.js");
         if (mBridgeJs.isEmpty()) {
             Log.e(TAG, "agent_bridge.js asset is missing or empty; page automation will be unavailable");
         }
 
         File defaultScript = new File(mUserscriptsDir, "anti_app_hijack.user.js");
         if (!defaultScript.exists()) {
-            String src = readAssetText("userscripts/anti_app_hijack.user.js");
+            String src = AcidIo.readAssetUtf8OrEmpty(mContext, "userscripts/anti_app_hijack.user.js");
             if (src.isEmpty()) {
                 Log.w(TAG, "Bundled userscript asset missing; skipping default install");
-            } else if (!writeFileText(defaultScript, src)) {
+            } else if (!AcidIo.writeFileUtf8Safe(defaultScript, src)) {
                 Log.w(TAG, "Could not install default userscript to " + defaultScript.getAbsolutePath());
             }
         }
@@ -113,7 +106,7 @@ public class UserscriptManager {
                 if (files != null) {
                     for (File f : files) {
                         if (!f.isFile() || !f.getName().endsWith(".js")) continue;
-                        String code = readFileText(f);
+                        String code = AcidIo.readFileUtf8OrEmpty(f, MAX_SCRIPT_BYTES);
                         if (code.isEmpty()) continue;
                         mScripts.add(UserscriptMeta.parse(f.getName(), code));
                     }
@@ -157,17 +150,6 @@ public class UserscriptManager {
         } catch (Exception e) {
             Log.w(TAG, "Failed to inject userscripts at " + runAt, e);
         }
-    }
-
-    /** Convenience overload for callers that only have the WebView. */
-    public void injectRuntimeAndUserscripts(WebView wv) {
-        String url = null;
-        try {
-            url = wv != null ? wv.getUrl() : null;
-        } catch (Exception e) {
-            Log.w(TAG, "Could not read the current URL before injection", e);
-        }
-        injectRuntimeAndUserscripts(wv, url, UserscriptMeta.RUN_AT_IDLE);
     }
 
     /**
@@ -222,14 +204,6 @@ public class UserscriptManager {
     // Management
     // =========================================================================
 
-    public JSONArray listUserscriptsJson() {
-        JSONArray arr = new JSONArray();
-        for (UserscriptMeta m : loadedScripts()) {
-            arr.put(m.toJson());
-        }
-        return arr;
-    }
-
     /**
      * Installs a script after validating it.
      *
@@ -253,16 +227,12 @@ public class UserscriptManager {
 
         String safeName = safeFileName(fileName);
         File f = new File(mUserscriptsDir, safeName);
-        if (!writeFileText(f, content)) {
+        if (!AcidIo.writeFileUtf8Safe(f, content)) {
             return "写入文件失败: " + f.getAbsolutePath();
         }
         invalidateCache();
         Log.i(TAG, "Installed " + safeName + " (" + meta.describeScope() + ")");
         return null;
-    }
-
-    public boolean saveUserscript(String name, String code) {
-        return installUserscript(name, code) == null;
     }
 
     public boolean deleteUserscript(String name) {
@@ -280,7 +250,7 @@ public class UserscriptManager {
         if (fileName == null) return false;
         File f = new File(mUserscriptsDir, fileName);
         if (!f.exists()) return false;
-        String content = readFileText(f);
+        String content = AcidIo.readFileUtf8OrEmpty(f, MAX_SCRIPT_BYTES);
         if (content.isEmpty()) return false;
 
         String pattern = "(?m)^\\s*//+\\s*@acid-enabled\\s+.*$";
@@ -301,22 +271,7 @@ public class UserscriptManager {
                 newContent = replacement + "\n" + content;
             }
         }
-        boolean ok = writeFileText(f, newContent);
-        if (ok) invalidateCache();
-        return ok;
-    }
-
-    /** Replaces the body of an existing script while preserving its metadata header. */
-    public boolean updateScriptBody(String fileName, String newBody) {
-        File f = new File(mUserscriptsDir, fileName);
-        if (!f.exists()) return false;
-        String original = readFileText(f);
-        if (original.isEmpty()) return false;
-
-        int end = original.indexOf("==/UserScript==");
-        if (end < 0) return false;
-        String header = original.substring(0, end + "==/UserScript==".length());
-        boolean ok = writeFileText(f, header + "\n\n" + (newBody != null ? newBody : ""));
+        boolean ok = AcidIo.writeFileUtf8Safe(f, newContent);
         if (ok) invalidateCache();
         return ok;
     }
@@ -327,89 +282,5 @@ public class UserscriptManager {
         base = base.replaceAll("[^a-zA-Z0-9._-]", "_");
         if (!base.endsWith(".js")) base += ".user.js";
         return base;
-    }
-
-    // =========================================================================
-    // File helpers
-    // =========================================================================
-
-    public String readAssetText(String path) {
-        try {
-            AssetManager am = mContext.getAssets();
-            InputStream is = am.open(path);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int n;
-            while ((n = is.read(buf)) != -1) {
-                baos.write(buf, 0, n);
-            }
-            is.close();
-            return baos.toString("UTF-8");
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    public String readFileText(File f) {
-        if (f == null) return "";
-        FileInputStream fis = null;
-        try {
-            if (!f.exists()) return "";
-            long len = f.length();
-            if (len > MAX_SCRIPT_BYTES) {
-                Log.w(TAG, "File exceeds MAX_SCRIPT_BYTES (" + len + " > " + MAX_SCRIPT_BYTES + "): " + f.getAbsolutePath());
-                return "";
-            }
-            fis = new FileInputStream(f);
-            byte[] data = new byte[(int) len];
-            int offset = 0;
-            int n;
-            while (offset < len && (n = fis.read(data, offset, (int) len - offset)) != -1) {
-                offset += n;
-            }
-            return new String(data, 0, offset, StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to read " + (f != null ? f.getAbsolutePath() : "?"), e);
-            return "";
-        } finally {
-            if (fis != null) {
-                try {
-                    fis.close();
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to close input stream", e);
-                }
-            }
-        }
-    }
-
-    /**
-     * Writes UTF-8 text and reports whether it actually landed on disk.
-     * Returns false (with a log line) instead of silently discarding the failure.
-     */
-    public boolean writeFileText(File f, String content) {
-        if (f == null) return false;
-        FileOutputStream fos = null;
-        try {
-            File parent = f.getParentFile();
-            if (parent != null && !parent.exists() && !parent.mkdirs()) {
-                Log.e(TAG, "Cannot create parent directory: " + parent.getAbsolutePath());
-                return false;
-            }
-            fos = new FileOutputStream(f);
-            fos.write(content.getBytes(StandardCharsets.UTF_8));
-            fos.flush();
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to write " + f.getAbsolutePath(), e);
-            return false;
-        } finally {
-            if (fos != null) {
-                try {
-                    fos.close();
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to close " + f.getAbsolutePath(), e);
-                }
-            }
-        }
     }
 }
