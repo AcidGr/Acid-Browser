@@ -163,6 +163,7 @@ public class SkillManager {
     private final Context mContext;
     private final File mWorkspaceDir;
     private final File mSkillsDir;
+    private final SkillStorageVault mVault;
     private final Set<String> mDisabledSkills = new HashSet<String>();
     private final List<OnSkillsChangedListener> mListeners = new ArrayList<OnSkillsChangedListener>();
 
@@ -173,8 +174,13 @@ public class SkillManager {
         if (!mSkillsDir.exists()) {
             mSkillsDir.mkdirs();
         }
+        mVault = new SkillStorageVault(mSkillsDir);
         loadDisabledState();
         syncDefaultSkills();
+    }
+
+    public SkillStorageVault getVault() {
+        return mVault;
     }
 
     public File getSkillsDir() {
@@ -629,15 +635,18 @@ public class SkillManager {
         while (clean.startsWith("/")) clean = clean.substring(1);
         if (clean.startsWith("skills/")) clean = clean.substring(7);
 
+        if (clean.isEmpty()) return false;
+
         // Check if it refers to a directory package (e.g. "my-skill/SKILL.md" or "my-skill")
         int slash = clean.indexOf('/');
         if (slash > 0) {
             String topDirName = clean.substring(0, slash);
-            File topDir = new File(mSkillsDir, topDirName);
+            SkillSlug slug = SkillSlug.from(topDirName, "");
+            File topDir = mVault.resolveSkillDir(slug);
             File entry = topDir.exists() && topDir.isDirectory() ? findDirectorySkillEntry(topDir) : null;
             // If deleting the entry file of the skill package, delete the entire package folder
             if (entry != null && clean.equalsIgnoreCase(topDirName + "/" + entry.getName())) {
-                boolean ok = deleteRecursive(topDir);
+                boolean ok = mVault.deleteSkillDir(slug);
                 if (ok) {
                     mDisabledSkills.remove(normalizeSkillKey(topDirName));
                     saveDisabledState();
@@ -648,8 +657,8 @@ public class SkillManager {
         }
 
         File target = new File(mSkillsDir, clean);
-        if (target.exists()) {
-            boolean ok = target.isDirectory() ? deleteRecursive(target) : target.delete();
+        if (target.exists() && !target.equals(mSkillsDir)) {
+            boolean ok = target.isDirectory() ? SkillStorageVault.deleteRecursiveSafe(target) : target.delete();
             if (ok) {
                 if (slash <= 0) {
                     mDisabledSkills.remove(normalizeSkillKey(clean));

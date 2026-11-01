@@ -69,6 +69,21 @@ public class WebAutomationDriver {
     }
 
     public String evaluateJsSync(final String jsExpr, long timeoutMs) {
+        // Enforce thread contract: never allow blocking latch.await on Android's UI message loop
+        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+            Log.w(TAG, "evaluateJsSync called directly on MainLooper; dispatching asynchronously without latch await to prevent UI deadlock");
+            BrowserController.TabSession targetTab = mHost.getTargetTab();
+            if (targetTab == null || targetTab.webView == null) {
+                return "{\"ok\":false,\"error\":\"NO_TARGET_TAB\"}";
+            }
+            try {
+                targetTab.webView.evaluateJavascript(jsExpr, null);
+                return "{\"ok\":true,\"dispatched\":true}";
+            } catch (Exception e) {
+                return "{\"ok\":false,\"error\":" + JSONObject.quote(String.valueOf(e.getMessage())) + "}";
+            }
+        }
+
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<String> ref = new AtomicReference<String>("{\"ok\":false,\"error\":\"TIMEOUT\"}");
 

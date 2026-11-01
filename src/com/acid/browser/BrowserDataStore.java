@@ -232,6 +232,18 @@ public class BrowserDataStore {
         }
     }
 
+    /**
+     * Stops the inotify FileObserver and releases OS watch descriptors.
+     */
+    public synchronized void stopWatchingSettingsFile() {
+        if (mFileObserver != null) {
+            try {
+                mFileObserver.stopWatching();
+            } catch (Exception ignored) {}
+            mFileObserver = null;
+        }
+    }
+
     public void setOnSettingsChangedListener(OnSettingsChangedListener l) {
         mSettingsChangedListener = l;
     }

@@ -1731,7 +1731,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mHttpServer.stop();
         }
         if (mController != null) {
-            mController.getDownloadCoordinator().destroy();
+            mController.destroy();
+        }
+        if (mDataStore != null) {
+            mDataStore.stopWatchingSettingsFile();
         }
         super.onDestroy();
     }
