@@ -131,7 +131,7 @@ public class DownloadWorker implements Runnable {
 
                 // If chunk has fixed boundary, guard against overshooting
                 if (endByte >= 0) {
-                    long remaining = endByte - (seekOffset + mChunk.downloadedBytes) + 1;
+                    long remaining = endByte - mChunk.getCurrentSeekOffset() + 1;
                     if (remaining <= 0) break;
                     if (n > remaining) {
                         n = (int) remaining;
@@ -146,13 +146,16 @@ public class DownloadWorker implements Runnable {
                     mListener.onChunkProgress(mTask, mChunk, n);
                 }
 
-                if (endByte >= 0 && (seekOffset + mChunk.downloadedBytes) > endByte) {
+                if (endByte >= 0 && mChunk.getCurrentSeekOffset() > endByte) {
                     break;
                 }
             }
 
-            if (endByte < 0 || (seekOffset + mChunk.downloadedBytes) > endByte) {
+            if (endByte < 0 || mChunk.getCurrentSeekOffset() > endByte) {
                 mChunk.completed = true;
+            } else {
+                throw new IOException("Premature EOF for chunk " + mChunk.chunkIndex
+                    + " at offset " + mChunk.getCurrentSeekOffset() + " (expected endByte " + endByte + ")");
             }
 
             if (mListener != null) {

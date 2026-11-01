@@ -6,10 +6,18 @@ import com.acid.browser.download.ChunkDivider;
 import com.acid.browser.download.DownloadChunk;
 import com.acid.browser.download.DownloadItem;
 import com.acid.browser.download.DownloadTask;
+import com.acid.browser.download.DownloadWorker;
 import com.acid.browser.download.HttpProbe;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.RandomAccessFile;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -675,6 +683,123 @@ public final class TestRunner {
 
             task.cleanCheckpointFile();
             assertTrue(!task.checkpointFile.exists(), "Checkpoint file cleaned up");
+
+            // 3b. Progress dispatch 200ms throttle check
+            assertTrue(task.shouldDispatchProgress(1000L), "First progress dispatch allowed");
+            assertTrue(!task.shouldDispatchProgress(1050L), "Progress within 50ms throttled");
+            assertTrue(!task.shouldDispatchProgress(1199L), "Progress at 199ms throttled");
+            assertTrue(task.shouldDispatchProgress(1200L), "Progress at 200ms allowed");
+
+            // 3c. Real HTTP Range stream write & mid-chunk breakpoint resume via DownloadWorker
+            final byte[] expectedPayload = new byte[40000];
+            for (int i = 0; i < expectedPayload.length; i++) {
+                expectedPayload[i] = (byte) ((i * 31 + 7) & 0xFF);
+            }
+
+            final ServerSocket rangeServer = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
+            final List<String> observedRanges = new ArrayList<String>();
+            Thread serverThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Socket client = rangeServer.accept();
+                        client.setSoTimeout(5000);
+                        BufferedReader br = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.US_ASCII));
+                        String line;
+                        int rangeStart = 0;
+                        int rangeEnd = expectedPayload.length - 1;
+                        while ((line = br.readLine()) != null && !line.isEmpty()) {
+                            if (line.toLowerCase().startsWith("range:")) {
+                                String spec = line.substring(6).trim();
+                                observedRanges.add(spec);
+                                if (spec.startsWith("bytes=")) {
+                                    String[] parts = spec.substring(6).split("-");
+                                    rangeStart = Integer.parseInt(parts[0].trim());
+                                    if (parts.length > 1 && !parts[1].trim().isEmpty()) {
+                                        rangeEnd = Integer.parseInt(parts[1].trim());
+                                    }
+                                }
+                            }
+                        }
+                        int sliceLen = rangeEnd - rangeStart + 1;
+                        OutputStream os = client.getOutputStream();
+                        String respHeaders = "HTTP/1.1 206 Partial Content\r\n"
+                            + "Content-Type: application/octet-stream\r\n"
+                            + "Accept-Ranges: bytes\r\n"
+                            + "Content-Range: bytes " + rangeStart + "-" + rangeEnd + "/" + expectedPayload.length + "\r\n"
+                            + "Content-Length: " + sliceLen + "\r\n"
+                            + "Connection: close\r\n\r\n";
+                        os.write(respHeaders.getBytes(StandardCharsets.US_ASCII));
+                        os.write(expectedPayload, rangeStart, sliceLen);
+                        os.flush();
+                        client.close();
+                    } catch (Exception ignored) {}
+                }
+            });
+            serverThread.start();
+
+            try {
+                String localUrl = "http://127.0.0.1:" + rangeServer.getLocalPort() + "/stream.bin";
+                DownloadTask streamTask = new DownloadTask(1001L, localUrl, "stream.bin", "application/octet-stream", tempDir, headers);
+                streamTask.contentLength = expectedPayload.length;
+                streamTask.supportsRange = true;
+
+                // Simulate Chunk 1 [10000..39999] (30,000 bytes) already having 12,000 bytes written before pause
+                RandomAccessFile preRaf = new RandomAccessFile(streamTask.destinationFile, "rw");
+                preRaf.setLength(expectedPayload.length);
+                preRaf.seek(10000L);
+                preRaf.write(expectedPayload, 10000, 12000);
+                preRaf.close();
+
+                DownloadChunk partialChunk = new DownloadChunk(1, 10000L, 39999L, 12000L, false);
+                List<DownloadChunk> singleChunkList = new ArrayList<DownloadChunk>();
+                singleChunkList.add(partialChunk);
+                streamTask.setChunks(singleChunkList);
+                streamTask.downloadedBytes = 12000L;
+                assertTrue(streamTask.saveCheckpoint(), "Saved mid-chunk checkpoint");
+
+                DownloadTask resumedStreamTask = new DownloadTask(1001L, localUrl, "stream.bin", "application/octet-stream", tempDir, headers);
+                assertTrue(resumedStreamTask.loadCheckpoint(), "Loaded mid-chunk checkpoint");
+                DownloadChunk chunkToResume = resumedStreamTask.chunks.get(0);
+                assertEquals(22000L, Long.valueOf(chunkToResume.getCurrentSeekOffset()), "Resume seek offset starts at 22000");
+
+                final boolean[] completedFlag = new boolean[]{false};
+                final Exception[] workerErr = new Exception[]{null};
+                DownloadWorker worker = new DownloadWorker(resumedStreamTask, chunkToResume, new DownloadWorker.WorkerListener() {
+                    @Override public void onChunkProgress(DownloadTask t, DownloadChunk c, int bytesRead) {}
+                    @Override public void onChunkCompleted(DownloadTask t, DownloadChunk c) { completedFlag[0] = true; }
+                    @Override public void onChunkFailed(DownloadTask t, DownloadChunk c, Exception error) { workerErr[0] = error; }
+                });
+                worker.run();
+                serverThread.join(2000);
+
+                if (workerErr[0] != null) {
+                    throw workerErr[0];
+                }
+                assertTrue(completedFlag[0], "DownloadWorker completed resumed chunk");
+                assertTrue(chunkToResume.completed, "Chunk marked completed after reaching endByte");
+                assertEquals("bytes=22000-39999", observedRanges.get(0), "DownloadWorker requested exact remaining Range header");
+                assertEquals(30000L, Long.valueOf(chunkToResume.downloadedBytes), "Full 30000 chunk bytes downloaded without premature truncation");
+                assertEquals(30000L, Long.valueOf(resumedStreamTask.downloadedBytes), "Task total downloadedBytes updated to 30000");
+
+                byte[] verifyBuf = new byte[30000];
+                RandomAccessFile verifyRaf = new RandomAccessFile(resumedStreamTask.destinationFile, "r");
+                verifyRaf.seek(10000L);
+                verifyRaf.readFully(verifyBuf);
+                verifyRaf.close();
+
+                boolean byteExact = true;
+                for (int i = 0; i < verifyBuf.length; i++) {
+                    if (verifyBuf[i] != expectedPayload[10000 + i]) {
+                        byteExact = false;
+                        break;
+                    }
+                }
+                assertTrue(byteExact, "Resumed chunk file content matches expected byte stream 100%");
+                resumedStreamTask.cleanCheckpointFile();
+            } finally {
+                try { rangeServer.close(); } catch (Exception ignored) {}
+            }
         } finally {
             File[] files = tempDir.listFiles();
             if (files != null) {

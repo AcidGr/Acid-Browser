@@ -52,9 +52,11 @@ public class DownloadTask {
     public volatile boolean isPaused = false;
     public volatile boolean isCanceled = false;
 
-    // Rolling speed tracking
+    // Rolling speed tracking & progress dispatch throttling
+    public static final long PROGRESS_THROTTLE_MS = 200L;
     private long mLastSpeedSampleTime = 0;
     private long mLastSpeedSampleBytes = 0;
+    private long mLastProgressDispatchTime = 0;
     public volatile long currentSpeedBytesPerSec = 0;
 
     public DownloadTask(long id,
@@ -90,6 +92,18 @@ public class DownloadTask {
             downloadedBytes += bytes;
             updateSpeedSample();
         }
+    }
+
+    /**
+     * Returns true at most once every {@link #PROGRESS_THROTTLE_MS} milliseconds so
+     * multi-threaded workers do not flood the main thread or SharedPreferences on every 8KB read.
+     */
+    public synchronized boolean shouldDispatchProgress(long nowMs) {
+        if (nowMs - mLastProgressDispatchTime >= PROGRESS_THROTTLE_MS) {
+            mLastProgressDispatchTime = nowMs;
+            return true;
+        }
+        return false;
     }
 
     private void updateSpeedSample() {

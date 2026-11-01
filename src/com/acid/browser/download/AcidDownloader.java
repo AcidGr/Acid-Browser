@@ -199,7 +199,9 @@ public class AcidDownloader {
             DownloadWorker.WorkerListener workerListener = new DownloadWorker.WorkerListener() {
                 @Override
                 public void onChunkProgress(DownloadTask t, DownloadChunk c, int bytesRead) {
-                    dispatchProgress(t);
+                    if (t.shouldDispatchProgress(System.currentTimeMillis())) {
+                        dispatchProgress(t);
+                    }
                 }
 
                 @Override
