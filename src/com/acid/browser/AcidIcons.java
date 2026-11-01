@@ -79,6 +79,8 @@ public class AcidIcons {
     public static final int ICON_FILE_AUDIO = 46;     // music note
     public static final int ICON_FILE_OTHER = 47;     // generic unknown file
     public static final int ICON_ADBLOCK = 48;        // adblock shield with slash
+    public static final int ICON_FULLSCREEN = 49;     // fullscreen expand corners
+    public static final int ICON_FULLSCREEN_EXIT = 50;// fullscreen collapse corners
 
     /**
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
@@ -587,6 +589,26 @@ public class AcidIcons {
                 // Clean Info Circle with generous spacing between dot and stem (no clumping)
                 p.addCircle(12f, 12f, 9f, Path.Direction.CW);
                 p.addPath(parseSvgPath("M 12 7.5 H 12.01 M 12 11.8 V 16.5"));
+                break;
+
+            case ICON_FULLSCREEN:
+                // Four outward expand corners
+                p.addPath(parseSvgPath(
+                    "M 3 8.5 V 3.5 H 8.5 " +
+                    "M 15.5 3.5 H 20.5 V 8.5 " +
+                    "M 20.5 15.5 V 20.5 H 15.5 " +
+                    "M 8.5 20.5 H 3.5 V 15.5"
+                ));
+                break;
+
+            case ICON_FULLSCREEN_EXIT:
+                // Four inward collapse corners
+                p.addPath(parseSvgPath(
+                    "M 8.5 3.5 V 8.5 H 3.5 " +
+                    "M 15.5 3.5 V 8.5 H 20.5 " +
+                    "M 20.5 15.5 H 15.5 V 20.5 " +
+                    "M 3.5 15.5 H 8.5 V 20.5"
+                ));
                 break;
 
 

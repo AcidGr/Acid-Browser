@@ -50,6 +50,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         void onOpenSkills();
         void onOpenAdBlock();
         void onOpenSettings();
+        void onToggleFullscreenMode();
     }
 
     /**
@@ -352,6 +353,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
     private final StateSource.MutableBoolState mDarkState;
     private final StateSource.MutableBoolState mIncognitoState;
     private final StateSource.MutableBoolState mDesktopState;
+    private final StateSource.MutableBoolState mFullscreenState;
     private final StateSource.MutableBoolState mAdBlockState;
     private final StateSource.MutableBoolState mMcpState;
 
@@ -371,12 +373,21 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         mDarkState = new StateSource.MutableBoolState(false);
         mIncognitoState = new StateSource.MutableBoolState(false);
         mDesktopState = new StateSource.MutableBoolState(false);
+        mFullscreenState = new StateSource.MutableBoolState(
+            dataStore != null && dataStore.isFullscreenEnabled()
+        );
         mAdBlockState = new StateSource.MutableBoolState(
             dataStore != null ? dataStore.isAdBlockEnabled() : AdBlockManager.getInstance(context).isEnabled()
         );
         mMcpState = new StateSource.MutableBoolState(false);
 
         if (dataStore != null) {
+            dataStore.observe(AcidSettings.FULLSCREEN_ENABLED, new AcidSettings.KeyObserver<Boolean>() {
+                @Override
+                public void onSettingChanged(Boolean newValue) {
+                    mFullscreenState.syncExternal(newValue != null && newValue.booleanValue());
+                }
+            });
             dataStore.observe(AcidSettings.ADBLOCK_ENABLED, new AcidSettings.KeyObserver<Boolean>() {
                 @Override
                 public void onSettingChanged(Boolean newValue) {
@@ -469,6 +480,12 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
             AcidIcons.ICON_TERMINAL, "MCP", mMcpState,
             new Runnable() {
                 @Override public void run() { if (listener != null) listener.onOpenMcp(); }
+            }
+        ));
+        list.add(new TileSpec(
+            AcidIcons.ICON_FULLSCREEN, AcidIcons.ICON_FULLSCREEN_EXIT, "全屏模式", "退出全屏", false, mFullscreenState,
+            new Runnable() {
+                @Override public void run() { if (listener != null) listener.onToggleFullscreenMode(); }
             }
         ));
         list.add(TileSpec.route(AcidIcons.ICON_INFO, "关于", new Runnable() {
@@ -654,13 +671,14 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         int providerCount,
         int modelCount
     ) {
-        updateCards(isDarkMode, isIncognito, isDesktop, mMcpState != null && mMcpState.get(), providerCount, modelCount);
+        updateCards(isDarkMode, isIncognito, isDesktop, mFullscreenState.get(), mMcpState != null && mMcpState.get(), providerCount, modelCount);
     }
 
     public void updateCards(
         boolean isDarkMode,
         boolean isIncognito,
         boolean isDesktop,
+        boolean isFullscreen,
         boolean isMcpRunning,
         int providerCount,
         int modelCount
@@ -668,6 +686,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         mDarkState.syncExternal(isDarkMode);
         mIncognitoState.syncExternal(isIncognito);
         mDesktopState.syncExternal(isDesktop);
+        mFullscreenState.syncExternal(isFullscreen);
         mAdBlockState.syncExternal(AdBlockManager.getInstance(getContext()).isEnabled());
         mMcpState.syncExternal(isMcpRunning);
         refreshTileVisuals();

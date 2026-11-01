@@ -21,6 +21,8 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowManager;
+import android.webkit.WebChromeClient;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -109,6 +111,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private AboutSheet mAboutSheet;
     private McpSheet mMcpSheet;
     private DownloadConfirmSheet mDownloadConfirmSheet;
+
+    // Fullscreen and CustomView Video
+    private FrameLayout mCustomViewContainer;
+    private int mOriginalOrientation;
+    private boolean mIsFullscreenMode = false;
+    private FrameLayout mBtnExitFullscreen;
 
     private BroadcastReceiver mDownloadReceiver;
 
@@ -695,6 +703,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
                 mOverlayStack.openRootModal(mSettingsSheet);
             }
+
+            @Override
+            public void onToggleFullscreenMode() {
+                toggleFullscreenMode();
+            }
         }, mDataStore);
         attachModalSheet(mMenuSheet);
     }
@@ -933,7 +946,42 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mRootContainer.addView(mMainContentLayout, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
+
+        // Video / CustomView Fullscreen layer
+        mCustomViewContainer = new FrameLayout(this);
+        mCustomViewContainer.setBackgroundColor(Color.BLACK);
+        mCustomViewContainer.setVisibility(View.GONE);
+        mRootContainer.addView(mCustomViewContainer, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        // Floating Exit Fullscreen pill button
+        mBtnExitFullscreen = buildExitFullscreenButton();
+        mBtnExitFullscreen.setVisibility(View.GONE);
+        FrameLayout.LayoutParams exitLp = new FrameLayout.LayoutParams(
+            dp(42), dp(42), Gravity.BOTTOM | Gravity.END
+        );
+        exitLp.rightMargin = dp(16);
+        exitLp.bottomMargin = dp(24);
+        mRootContainer.addView(mBtnExitFullscreen, exitLp);
+
         return mRootContainer;
+    }
+
+    private FrameLayout buildExitFullscreenButton() {
+        FrameLayout btn = new FrameLayout(this);
+        btn.setClickable(true);
+        btn.setFocusable(true);
+        btn.setBackground(AcidTheme.pillBg(this, Color.parseColor("#99000000"), Color.parseColor("#44FFFFFF"), dp(21)));
+        AcidIcons.SvgIconView icon = new AcidIcons.SvgIconView(this, AcidIcons.ICON_FULLSCREEN_EXIT, Color.WHITE, 20);
+        btn.addView(icon, new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER));
+        btn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                setFullscreenMode(false);
+            }
+        });
+        return btn;
     }
 
     private LinearLayout buildTakeoverBanner() {
@@ -1124,6 +1172,74 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         );
     }
 
+    public void setFullscreenMode(boolean enabled) {
+        mIsFullscreenMode = enabled;
+        if (mDataStore != null) {
+            mDataStore.setFullscreenEnabled(enabled);
+        }
+        applyFullscreenWindowFlags(enabled);
+
+        mTopBar.setVisibility(enabled ? View.GONE : View.VISIBLE);
+        mTopBarDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
+        mBottomBar.setVisibility(enabled ? View.GONE : View.VISIBLE);
+        mBottomDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
+
+        if (mBtnExitFullscreen != null) {
+            mBtnExitFullscreen.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        }
+        updateMenuSheetCards();
+    }
+
+    public void toggleFullscreenMode() {
+        setFullscreenMode(!mIsFullscreenMode);
+        AcidFeedback.info(
+            this,
+            mIsFullscreenMode ? "已开启全屏浏览模式 (按返回键或点右下角退出)" : "已退出全屏模式"
+        );
+    }
+
+    private void applyFullscreenWindowFlags(boolean fullscreen) {
+        Window window = getWindow();
+        if (window == null) return;
+        View decorView = window.getDecorView();
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                java.lang.reflect.Method getInsetsController = window.getClass().getMethod("getInsetsController");
+                Object controller = getInsetsController.invoke(window);
+                if (controller != null) {
+                    Class<?> insetsClass = controller.getClass();
+                    if (fullscreen) {
+                        java.lang.reflect.Method setBehavior = insetsClass.getMethod("setSystemBarsBehavior", int.class);
+                        setBehavior.invoke(controller, 2); // BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE = 2
+                        java.lang.reflect.Method hide = insetsClass.getMethod("hide", int.class);
+                        hide.invoke(controller, 7); // Type.systemBars() = 7
+                    } else {
+                        java.lang.reflect.Method show = insetsClass.getMethod("show", int.class);
+                        show.invoke(controller, 7);
+                    }
+                    return;
+                }
+            } catch (Exception ignored) {}
+        }
+
+        int flags = decorView.getSystemUiVisibility();
+        final int FULLSCREEN_FLAGS = View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            | View.SYSTEM_UI_FLAG_FULLSCREEN
+            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+
+        if (fullscreen) {
+            flags |= FULLSCREEN_FLAGS;
+            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        } else {
+            flags &= ~FULLSCREEN_FLAGS;
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        }
+        decorView.setSystemUiVisibility(flags);
+    }
+
     private void startMcpServerInternal() {
         if (mHttpServer == null) return;
         if (!mHttpServer.isRunning()) {
@@ -1193,6 +1309,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mIsDarkMode,
             mIncognitoMode,
             mController != null && mController.isDesktopMode(),
+            mIsFullscreenMode,
             mHttpServer != null && mHttpServer.isRunning(),
             providerCount,
             modelCount
@@ -1285,6 +1402,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         );
 
         mOverlayStack.applyTheme(dark);
+
+        if (mIsFullscreenMode || (mController != null && mController.isCustomViewShowing())) {
+            applyFullscreenWindowFlags(true);
+        }
     }
 
     private void updateTopAgentButton(boolean running, boolean pausedForTakeover) {
@@ -1472,7 +1593,48 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
+    public void onShowCustomView(final View view, final WebChromeClient.CustomViewCallback callback) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (view == null) return;
+                mOriginalOrientation = getRequestedOrientation();
+                mCustomViewContainer.removeAllViews();
+                mCustomViewContainer.addView(view, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                ));
+                mCustomViewContainer.setVisibility(View.VISIBLE);
+                mMainContentLayout.setVisibility(View.INVISIBLE);
+                applyFullscreenWindowFlags(true);
+                view.setKeepScreenOn(true);
+            }
+        });
+    }
+
+    @Override
+    public void onHideCustomView() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mCustomViewContainer.setVisibility(View.GONE);
+                mCustomViewContainer.removeAllViews();
+                mMainContentLayout.setVisibility(View.VISIBLE);
+                setRequestedOrientation(mOriginalOrientation);
+                applyFullscreenWindowFlags(mIsFullscreenMode);
+            }
+        });
+    }
+
+    @Override
     public void onBackPressed() {
+        if (mController != null && mController.isCustomViewShowing()) {
+            mController.hideCustomView();
+            return;
+        }
+        if (mIsFullscreenMode) {
+            setFullscreenMode(false);
+            return;
+        }
         if (mOverlayStack.handleBackPressed()) {
             return;
         }

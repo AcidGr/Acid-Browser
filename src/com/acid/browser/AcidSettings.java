@@ -346,6 +346,10 @@ public final class AcidSettings {
         "dark_mode", "dark_mode", false, "夜间模式", true, false
     ));
 
+    public static final BoolKey FULLSCREEN_ENABLED = register(new BoolKey(
+        "fullscreen_enabled", "fullscreen_enabled", false, "全屏模式", true, false
+    ));
+
     public static final BoolKey ADBLOCK_ENABLED = register(new BoolKey(
         "adblock_enabled", "adblock_enabled", true, "广告拦截", true, false
     ));

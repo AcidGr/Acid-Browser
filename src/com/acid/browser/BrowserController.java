@@ -73,6 +73,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         void onDownloadRequested(String url, String fileName, String userAgent, String contentDisposition, String mimeType, long contentLength);
         void onUserscriptInstallRequested(String url, String fileName);
         void onSettingsReloaded();
+        void onShowCustomView(View view, WebChromeClient.CustomViewCallback callback);
+        void onHideCustomView();
     }
 
     public static class TabSession {
@@ -270,6 +272,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private String mLastBlockedDeepLink = "";
     private final List<DownloadItem> mDownloads = new ArrayList<DownloadItem>();
     private final AcidDownloader mDownloader;
+    private View mCustomView = null;
+    private WebChromeClient.CustomViewCallback mCustomViewCallback = null;
     private BrowserDataStore mDataStore = null;
     /** Guards against stacking overlapping DownloadManager passes. */
     private volatile boolean mSyncInFlight = false;
@@ -951,6 +955,28 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     }
                 }
             }
+
+            @Override
+            public void onShowCustomView(View view, CustomViewCallback callback) {
+                if (mCustomView != null) {
+                    if (callback != null) {
+                        try {
+                            callback.onCustomViewHidden();
+                        } catch (Exception ignored) {}
+                    }
+                    return;
+                }
+                mCustomView = view;
+                mCustomViewCallback = callback;
+                if (mListener != null) {
+                    mListener.onShowCustomView(view, callback);
+                }
+            }
+
+            @Override
+            public void onHideCustomView() {
+                hideCustomView();
+            }
         });
 
         wv.setDownloadListener(new DownloadListener() {
@@ -1236,6 +1262,27 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             return true;
         }
         if (trimmed.contains("/acid_workspace/homepage/index.html") || trimmed.startsWith("workspace://homepage/index.html")) {
+            return true;
+        }
+        return false;
+    }
+
+    public boolean isCustomViewShowing() {
+        return mCustomView != null;
+    }
+
+    public boolean hideCustomView() {
+        if (mCustomView != null) {
+            if (mCustomViewCallback != null) {
+                try {
+                    mCustomViewCallback.onCustomViewHidden();
+                } catch (Exception ignored) {}
+                mCustomViewCallback = null;
+            }
+            mCustomView = null;
+            if (mListener != null) {
+                mListener.onHideCustomView();
+            }
             return true;
         }
         return false;

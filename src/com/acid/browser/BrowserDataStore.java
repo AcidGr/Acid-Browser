@@ -568,6 +568,9 @@ public class BrowserDataStore {
     public boolean isDarkMode() { return get(AcidSettings.DARK_MODE).booleanValue(); }
     public void setDarkMode(boolean dark) { set(AcidSettings.DARK_MODE, Boolean.valueOf(dark)); }
 
+    public boolean isFullscreenEnabled() { return get(AcidSettings.FULLSCREEN_ENABLED).booleanValue(); }
+    public void setFullscreenEnabled(boolean enabled) { set(AcidSettings.FULLSCREEN_ENABLED, Boolean.valueOf(enabled)); }
+
     public boolean isAdBlockEnabled() { return get(AcidSettings.ADBLOCK_ENABLED).booleanValue(); }
     public void setAdBlockEnabled(boolean enabled) { set(AcidSettings.ADBLOCK_ENABLED, Boolean.valueOf(enabled)); }
 
