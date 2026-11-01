@@ -1,128 +1,159 @@
-# Skill: Custom Homepage Design & Authoring
+# 自定义主页编写规范
 
-Autonomous, bespoke browser homepage creation and styling inside Acid Android Browser via standard `write` and `edit`.
-
----
-
-## 1. Overview & Trigger Criteria
-
-Acid Android Browser empowers the user to completely replace and customize their default new-tab homepage. The homepage is backed by a dedicated directory inside the workspace sandbox (`homepage/index.html`) that enjoys full local file access, offline instant loading, and seamless integration with browser search and user bookmarks.
-
-### When to Use This Skill
-- **Use this skill when**:
-  - The user requests to create, design, or customize their browser homepage (e.g. "帮我做一个主页", "重新设计我的主页", "把主页换成赛博朋克风/极简风", "主页加一个时钟和语录").
-  - The user asks to tweak existing homepage elements (e.g. change wallpaper, add widgets, adjust bookmark grid).
-- **Do NOT use this skill when**:
-  - The user asks to write a userscript for an external website (use `skills/userscript_dev.md` instead).
-  - The user only wants to navigate to an external URL or manage settings.
+本文件规定 Acid Android 浏览器自定义主页的编写方式。主页是用户打开浏览器和新标签页时看到的页面。
 
 ---
 
-## 2. Interactive Discovery Workflow (Mandatory First Turn)
+## 1. 何时使用本规范
 
-> **CRITICAL RULE**: When asked to create or redesign a homepage, DO NOT write code immediately unless the user has already specified all visual, functional, and layout details in their opening prompt.
->
-> In your very first reply, act as a professional UX/UI designer and ask clarifying questions so the resulting homepage perfectly matches their personal taste.
+用户要求设计、修改、美化浏览器主页时使用。
 
-### Discovery Question Template
-Present clear, structured options in your response:
-
-```markdown
-没问题！我是你的专属主页设计师。为了做出完全符合你心意的主页，想先了解一下你的偏好：
-
-1. **视觉风格与背景**：
-   - A. 极简冷淡（纯黑 OLED / 纯白 / 磨砂深灰）
-   - B. 动态与流光（经典三色平滑渐变、极光微动效）
-   - C. 高清每日壁纸（必应每日美图、二次元动漫风景、随机高质风景摄影）
-   - D. 毛玻璃质感（深色磨砂卡片拟态 Glassmorphism）
-
-2. **核心头部组件**（可多选）：
-   - [ ] 炫彩大数字时钟 + 实时日期星期
-   - [ ] 一言语录（点击可换一句，动漫/文学/游戏金句）
-   - [ ] 每日精选古诗词
-   - [ ] 极简天气微件（基于 IP 自动获取温度与天气）
-
-3. **快捷方式（书签）**：
-   - 是否需要我直接读取你当前的浏览器书签（`bookmarks.json`），自动生成类似 Via 风格的应用卡片磁贴？
-
-4. **搜索栏偏好**：
-   - 居中圆角搜索框（回车直接调用默认搜索引擎），是否需要添加常用引擎快捷切换？
-```
-
-Once the user replies with their preferences, proceed to build the homepage according to their choices.
+涉及以下需求时不要动主页：修改浏览器设置 → 用设置面板；修改书签数据 → 编辑 `bookmarks.json`。
 
 ---
 
-## 3. Recommended Stable & Zero-Key APIs
+## 2. 先问清偏好，再动手
 
-The Acid WebView sandbox permits cross-origin network requests (`fetch`) from `file:///` origins. When designing dynamic widgets, prefer these reliable, fast, zero-authentication endpoints:
+主页是高度个人化的界面。首次接到主页需求时，先向用户确认以下问题，不要直接开始写代码：
 
-### 1. Dynamic Quotes & Poetry
-- **Hitokoto (一言)**:
-  - Anime / Comic / Games: `https://v1.hitokoto.cn/?c=a&c=b&c=c&max_length=30`
-  - Literature / Philosophy / Original: `https://v1.hitokoto.cn/?c=d&c=e&c=k&max_length=30`
-  - JSON format: `{"hitokoto": "句子内容", "from": "出处", "from_who": "作者"}`
-- **Jinrishici (今日诗词)**:
-  - `https://v2.jinrishici.com/one.json`
-  - Automatically matches seasonal and temporal Chinese poetry based on client IP: `{"data": {"content": "...", "origin": {"title": "...", "author": "..."}}}`
+1. **风格倾向**：极简纯色 / 毛玻璃 / 深色科技 / 自然风景 / 二次元
+2. **主色或壁纸**：指定颜色、指定图片，还是交给浏览器每日随机
+3. **需要哪些组件**：时钟、日期、搜索框、书签、便签、天气、一言、倒计时
+4. **布局**：居中单列 / 上下分区 / 卡片网格
+5. **是否保留官方默认**：完全重做，还是在默认模板上调整
 
-### 2. High-Definition Wallpapers & Backgrounds
-- **Bing Daily Wallpaper (1920x1080 Direct Image)**:
-  - `https://bing.biturl.top/?resolution=1920&format=image&index=0&mkt=zh-CN`
-- **Lorem Picsum High-Res Photography (Ideal for Blurred Backgrounds)**:
-  - Blurred portrait photo: `https://picsum.photos/1080/1920?blur=2`
-  - Crisp photography: `https://picsum.photos/1080/1920`
-- **Anime Landscape Wallpaper**:
-  - `https://api.paugram.com/wallpaper/` (Fast HTTPS direct image)
-
-### 3. Lightweight Weather
-- **wttr.in Weather API**:
-  - `https://wttr.in/?format=j1` (Returns JSON with current condition, temperature in °C, wind, and forecast)
+用户已明确说明的项直接采用，不必重复询问。
 
 ---
 
-## 4. Architecture & Engineering Standards
+## 3. 文件结构
 
-### File Structure
-- Primary entry point: **`homepage/index.html`** (relative to sandbox workspace).
-- Supporting files (optional): `homepage/style.css`, `homepage/app.js`, `homepage/bg.jpg`.
-- The `homepage/` directory is permanently protected in Acid Browser and will **NEVER** be deleted during workspace temp cleanup.
-- **Official Default Marker Removal (MANDATORY UPON CUSTOMIZATION)**: The official default template contains `<!-- ACID_DEFAULT_HOMEPAGE -->` on its first line. Whenever you create, edit, or customize `homepage/index.html` for the user, you **MUST REMOVE/DESTROY** the `<!-- ACID_DEFAULT_HOMEPAGE -->` header comment. Removing this marker declares ownership to the browser and guarantees the user's customized homepage will **NEVER** be overwritten by official default template syncs during future browser version updates or app restarts.
+| 路径 | 说明 |
+| :--- | :--- |
+| `homepage/index.html` | 入口文件，必需 |
+| `homepage/style.css` | 可选，样式 |
+| `homepage/app.js` | 可选，脚本 |
+| `homepage/icons/<域名>.png` | 可选，自定义图标 |
 
-### Viewport & Theme Declarations
-Always declare modern mobile viewport and color-scheme in `<head>`:
+`homepage/` 目录在浏览器清理工作区临时文件时不会被删除。
+
+### 默认模板标记
+
+官方默认主页第一行含 `<!-- ACID_DEFAULT_HOMEPAGE -->`。浏览器检测到该标记时会用官方模板覆盖它。
+
+**一旦为用户定制主页，必须删除这一行。** 删除后浏览器不再覆盖该文件，用户的定制内容在应用重启和版本升级后都会保留。
+
+---
+
+## 4. 必需的头部声明
+
 ```html
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+</head>
+</html>
 ```
 
-### Native Search Integration (`acid://search`)
-Acid Browser natively intercepts `acid://search?q=...` navigation and routes it to the user's currently configured search engine (Google, Bing, Baidu, DuckDuckGo, etc.).
-Always submit searches via:
+---
+
+## 5. 原生搜索协议
+
+浏览器拦截 `acid://search?q=...` 并交给用户当前配置的搜索引擎（Google、Bing、百度、DuckDuckGo 等）。
+
 ```javascript
-function doSearch(kw) {
-    if (!kw || !kw.trim()) return;
-    window.location.href = 'acid://search?q=' + encodeURIComponent(kw.trim());
+function doSearch(keyword) {
+    if (!keyword || !keyword.trim()) return;
+    window.location.href = 'acid://search?q=' + encodeURIComponent(keyword.trim());
 }
 ```
-Or via standard form:
+
+用表单提交：
+
 ```html
 <form action="acid://search" method="get">
-    <input type="text" name="q" placeholder="搜索或输入网址..." autocomplete="off">
+    <input type="text" name="q" placeholder="搜索或输入网址" autocomplete="off">
 </form>
 ```
 
-### Bookmark Data Integration & Favicon Caching
-- **Real-Time Bookmark Sync**: Acid Browser automatically injects live bookmark updates into any open homepage tab via `window.__updateAcidBookmarks(bookmarksArray)` and also stores bookmarks at `../bookmarks.json`.
-  - Always implement `window.__updateAcidBookmarks = function(list) { renderBookmarks(list); }` AND load `../bookmarks.json` via `XMLHttpRequest` on startup/focus so adding or deleting a bookmark updates the homepage grid in real time without hardcoding static links.
-- **Scrollable Bookmark Region**: Keep the top header and search bar fixed (`flex-shrink: 0` inside a `height: 100%; overflow: hidden` container) and make the bookmark grid container independently scrollable (`flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;`).
-- **Favicon Caching**:
-  - Cache verified working favicon URLs per hostname in `localStorage` (`acid_favicon_verified_v1`) so subsequent loads hit the WebView disk cache on the first request without repeating 404 probes, and fall back to a colorful letter avatar if offline.
-  - You may also download custom icons into `homepage/icons/<domain>.png` if needed.
+---
 
-### Dark Mode Adaptation
-Always use CSS variables and `@media (prefers-color-scheme: dark)`:
+## 6. 书签集成
+
+书签数据存放在工作区根目录的 `../bookmarks.json`。
+
+浏览器在书签变化时调用 `window.__updateAcidBookmarks(bookmarksArray)` 推送最新数据。
+
+### 必须实现
+
+```javascript
+window.__updateAcidBookmarks = function (list) {
+    renderBookmarks(list);
+};
+
+// 首次加载时读取本地数据
+function loadBookmarks() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '../bookmarks.json', true);
+    xhr.onload = function () {
+        try {
+            renderBookmarks(JSON.parse(xhr.responseText));
+        } catch (e) {}
+    };
+    xhr.send();
+}
+
+loadBookmarks();
+window.addEventListener('focus', loadBookmarks);
+```
+
+`bookmarks.json` 结构：
+
+```json
+[
+  { "title": "知乎", "url": "https://www.zhihu.com" },
+  { "title": "GitHub", "url": "https://github.com" }
+]
+```
+
+### 可滚动书签区
+
+头部和搜索框固定，书签区独立滚动：
+
+```css
+body { height: 100vh; margin: 0; display: flex; flex-direction: column; overflow: hidden; }
+.header { flex-shrink: 0; }
+.bookmarks {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+```
+
+### 图标
+
+按域名缓存已验证可用的图标地址到 `localStorage` 的 `acid_favicon_verified_v1`，避免每次加载重复探测 404。
+
+```javascript
+function faviconFor(host) {
+    var cache = JSON.parse(localStorage.getItem('acid_favicon_verified_v1') || '{}');
+    if (cache[host]) return cache[host];
+    return 'https://' + host + '/favicon.ico';
+}
+```
+
+图标不可用时用首字母色块替代。
+
+---
+
+## 7. 深色模式
+
+用 CSS 变量配合 `prefers-color-scheme`：
+
 ```css
 :root {
     --bg: #F8FAFC;
@@ -130,6 +161,7 @@ Always use CSS variables and `@media (prefers-color-scheme: dark)`:
     --text: #0F172A;
     --muted: #64748B;
 }
+
 @media (prefers-color-scheme: dark) {
     :root {
         --bg: #0A0E14;
@@ -142,15 +174,54 @@ Always use CSS variables and `@media (prefers-color-scheme: dark)`:
 
 ---
 
-## 5. Delivery & Verification Closed Loop
+## 8. 可用接口
 
-After creating or updating `homepage/index.html`:
-1. **Navigate to the homepage**:
-   `browser(action='navigate', url='acid://home')`
-2. **Observe rendered page**:
-   `browser(action='observe')`
-3. **Verify visual integrity**:
-   - Check that clock, search bar, and bookmark tiles are cleanly centered and visible.
-   - Confirm there are no broken images, missing elements, or horizontal overflow bars.
-4. **Present the result to the user**:
-   Summarize the implemented theme, widgets, and APIs in clean Markdown, and inform the user that clicking the Home icon or opening a new tab will show their new homepage immediately.
+主页从 `file:///` 源发起跨域 `fetch` 不受限制，可直接使用以下免密钥接口。
+
+### 一言（随机句子）
+
+```
+https://v1.hitokoto.cn/?c=a&c=b&c=c&max_length=30     动漫游戏
+https://v1.hitokoto.cn/?c=d&c=e&c=k&max_length=30     文学哲理
+```
+
+返回：`{"hitokoto": "句子", "from": "出处", "from_who": "作者"}`
+
+### 今日诗词
+
+```
+https://v2.jinrishici.com/one.json
+```
+
+返回：`{"data": {"content": "...", "origin": {"title": "...", "author": "..."}}}`
+
+### 壁纸
+
+```
+https://bing.biturl.top/?resolution=1920&format=image&index=0&mkt=zh-CN     必应每日
+https://picsum.photos/1080/1920?blur=2                                      高斯模糊照片
+https://picsum.photos/1080/1920                                             清晰照片
+https://api.paugram.com/wallpaper/                                          二次元风景
+```
+
+### 天气
+
+```
+https://wttr.in/?format=j1
+```
+
+返回 JSON，含当前温度（°C）、天气状况、风速和预报。
+
+---
+
+## 9. 交付流程
+
+1. 写入 `homepage/index.html`（删除 `<!-- ACID_DEFAULT_HOMEPAGE -->`）
+2. 跳转验证：`browser(action='navigate', url='acid://home')`
+3. 观察渲染：`browser(action='observe')`
+4. 检查项：
+   - 时钟、搜索框、书签正常显示
+   - 无图片加载失败
+   - 无横向滚动条
+   - 深色模式下文字可读
+5. 向用户说明已实现的组件与配色，告知点击主页按钮或新建标签页即可看到效果。

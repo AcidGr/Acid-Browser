@@ -687,7 +687,9 @@ public class BrowserDataStore {
                 "homepage".equals(name) ||
                 "userscripts".equals(name) ||
                 "adblock".equals(name) ||
-                "skills".equals(name)) {
+                "skills".equals(name) ||
+                "skills_sync.json".equals(name) ||
+                "userscript_storage.json".equals(name)) {
                 continue;
             }
             if (f.isDirectory()) {

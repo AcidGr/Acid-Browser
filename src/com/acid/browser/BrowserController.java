@@ -164,6 +164,62 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mDataStore = dataStore;
 
         mUserscriptManager = new UserscriptManager(context);
+        mUserscriptManager.setHost(new UserscriptNativeBridge.Host() {
+            @Override
+            public void openInTab(final String url, final boolean active) {
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        createNewTab(url, active);
+                    }
+                });
+            }
+
+            @Override
+            public void download(final String url, final String fileName) {
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        requestDownload(url, fileName, null, null, null, 0);
+                    }
+                });
+            }
+
+            @Override
+            public void onInjectionRequested(final UserscriptNativeBridge bridge, final int phase) {
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        WebView wv = bridge.getWebView();
+                        if (wv == null) return;
+                        String url;
+                        try {
+                            url = wv.getUrl();
+                        } catch (Exception e) {
+                            return;
+                        }
+                        mUserscriptManager.injectPhase(wv, url, phase);
+                    }
+                });
+            }
+
+            @Override
+            public String isScriptInstalled(String name, String namespace) {
+                UserscriptMeta m = mUserscriptManager.findInstalled(name, namespace);
+                return m == null ? null : m.fileName;
+            }
+
+            @Override
+            public void notify(final String title, final String text) {
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        String msg = (title == null || title.isEmpty()) ? text : (title + "：" + text);
+                        if (msg != null && !msg.trim().isEmpty()) AcidFeedback.info(mContext, msg);
+                    }
+                });
+            }
+        });
         mSkillManager = new SkillManager(context, getWorkspaceDir());
         AdBlockManager adBlock = AdBlockManager.getInstance(context);
         adBlock.setWorkspaceDir(getWorkspaceDir());
@@ -632,11 +688,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 tab.isLoading = true;
                 tab.url = url;
-                // Earliest available hook: scripts declaring @run-at document-start run
-                // here. The DOM is not built yet, so such scripts are limited to window
-                // level work (patching fetch, navigator, injecting early CSS).
-                mUserscriptManager.injectRuntimeAndUserscripts(
-                    view, url, UserscriptMeta.RUN_AT_START);
+                // Install the phase bootstrap first; it reports document-start / end / idle
+                // back to us when the page really reaches them.
+                mUserscriptManager.injectBootstrap(view, url);
                 AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
                 if (mDataStore != null && mDataStore.isDoNotTrackEnabled()) {
                     view.evaluateJavascript("try{Object.defineProperty(navigator,'doNotTrack',{get:function(){return'1';},configurable:true,enumerable:true});}catch(e){}", null);
@@ -651,8 +705,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onPageFinished(WebView view, String url) {
                 tab.isLoading = false;
                 tab.url = url;
-                mUserscriptManager.injectRuntimeAndUserscripts(
-                    view, url, UserscriptMeta.RUN_AT_END);
+                // Userscript phases are driven by the page bootstrap now; onPageFinished is
+                // only a safety net for pages whose bootstrap never fired (e.g. JS disabled).
+                mUserscriptManager.injectBootstrap(view, url);
                 AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
 
                 if (Build.VERSION.SDK_INT >= 21) {
@@ -687,10 +742,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onProgressChanged(WebView view, int newProgress) {
                 tab.progress = newProgress;
                 tab.isLoading = (newProgress < 100);
-                if (newProgress > 40) {
-                    mUserscriptManager.injectRuntimeAndUserscripts(
-                        view, view.getUrl(), UserscriptMeta.RUN_AT_IDLE);
-                }
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onProgressChanged(newProgress, tab.isLoading);
                 }
@@ -1444,5 +1495,16 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             ? "[PLUGIN] Ran " + meta.fileName
             : "[PLUGIN] " + meta.fileName + " does not apply to this page");
         return ok;
+    }
+
+    /** Menu commands registered by userscripts on the active page. */
+    public void queryUserscriptCommands(UserscriptManager.MenuCommandsCallback cb) {
+        TabSession tab = getActiveTab();
+        mUserscriptManager.queryMenuCommands(tab != null ? tab.webView : null, cb);
+    }
+
+    public void runUserscriptCommand(UserscriptManager.MenuCommand cmd) {
+        TabSession tab = getActiveTab();
+        if (tab != null) mUserscriptManager.runMenuCommand(tab.webView, cmd);
     }
 }

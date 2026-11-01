@@ -6,6 +6,7 @@ import android.graphics.Typeface;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.CompoundButton;
 import android.widget.LinearLayout;
 import android.widget.Switch;
@@ -31,6 +32,9 @@ public class UserscriptSheet extends AcidBottomSheetView {
     public interface OnScriptActionListener {
         void onRunScript(UserscriptMeta meta);
         void onScriptsChanged();
+        /** Lists commands scripts registered on the current page; null callback result = none. */
+        void onQueryCommands(UserscriptManager.MenuCommandsCallback cb);
+        void onRunCommand(UserscriptManager.MenuCommand cmd);
     }
 
     private final UserscriptManager mManager;
@@ -78,6 +82,11 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 mManager.invalidateCache();
 
                 Context ctx = getContext();
+                final LinearLayout commandBox = new LinearLayout(ctx);
+                commandBox.setOrientation(LinearLayout.VERTICAL);
+                container.addView(commandBox);
+                loadCommands(ctx, commandBox);
+
                 List<UserscriptMeta> scripts = mManager.getScripts();
                 if (scripts.isEmpty()) {
                     container.addView(AcidWidgets.emptyState(
@@ -95,6 +104,35 @@ public class UserscriptSheet extends AcidBottomSheetView {
             @Override
             public void onClick(View v) {
                 showImportDialog();
+            }
+        });
+    }
+
+    /** Fills {@code box} with the commands scripts registered on the page behind this sheet. */
+    private void loadCommands(final Context ctx, final LinearLayout box) {
+        if (mActionListener == null) return;
+        mActionListener.onQueryCommands(new UserscriptManager.MenuCommandsCallback() {
+            @Override
+            public void onCommands(List<UserscriptManager.MenuCommand> commands) {
+                if (commands == null || commands.isEmpty()) return;
+                box.removeAllViews();
+                box.addView(AcidWidgets.sectionHeader(
+                    ctx, mIsDarkMode, "当前页面的脚本命令 (" + commands.size() + ")"));
+                for (final UserscriptManager.MenuCommand cmd : commands) {
+                    LinearLayout row = new AcidWidgets.ListRow()
+                        .leadingIcon(AcidIcons.ICON_CLICK, AcidTheme.accent(mIsDarkMode), 19)
+                        .title(cmd.title)
+                        .subtitle(cmd.scriptName)
+                        .build(ctx, mIsDarkMode);
+                    row.setOnClickListener(new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            closeEntireModalFlow();
+                            mActionListener.onRunCommand(cmd);
+                        }
+                    });
+                    box.addView(row);
+                }
             }
         });
     }
@@ -184,6 +222,18 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 if (mActionListener != null) mActionListener.onRunScript(meta);
             }
         }));
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_EDIT, "编辑源码", new Runnable() {
+            @Override
+            public void run() {
+                showEditor(meta);
+            }
+        }));
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RELOAD, "检查更新", new Runnable() {
+            @Override
+            public void run() {
+                checkUpdate(meta);
+            }
+        }));
         actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_INFO, "查看脚本详情", new Runnable() {
             @Override
             public void run() {
@@ -252,7 +302,14 @@ public class UserscriptSheet extends AcidBottomSheetView {
                     }
                     sb.append("\n");
                 }
+                if (!TextUtils.isEmpty(meta.author)) sb.append("作者: ").append(meta.author).append("\n");
                 if (!TextUtils.isEmpty(meta.version)) sb.append("版本: v").append(meta.version).append("\n");
+                if (!TextUtils.isEmpty(meta.homepageUrl)) sb.append("主页: ").append(meta.homepageUrl).append("\n");
+                if (!TextUtils.isEmpty(meta.supportUrl)) sb.append("反馈: ").append(meta.supportUrl).append("\n");
+                if (!TextUtils.isEmpty(UserscriptManager.updateUrlOf(meta))) {
+                    sb.append("更新源: ").append(UserscriptManager.updateUrlOf(meta)).append("\n");
+                }
+                if (meta.unwrap) sb.append("运行方式: @unwrap (页面作用域)\n");
                 sb.append("文件名: ").append(meta.fileName);
                 info.setText(sb.toString());
                 info.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
@@ -291,11 +348,130 @@ public class UserscriptSheet extends AcidBottomSheetView {
                     }
                 );
                 footer.addView(AcidWidgets.buttonRow(ctx, btnToggle, btnRun));
+
+                TextView btnEdit = AcidWidgets.secondaryButton(
+                    ctx, mIsDarkMode, "编辑源码", AcidTheme.text(mIsDarkMode),
+                    new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            showEditor(meta);
+                        }
+                    }
+                );
+                LinearLayout.LayoutParams editLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                editLp.topMargin = AcidTheme.dp(ctx, 10);
+                footer.addView(btnEdit, editLp);
+            }
+        }).withAction(AcidIcons.ICON_RELOAD, "检查更新", new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                checkUpdate(meta);
             }
         }).withAction(AcidIcons.ICON_TRASH, "删除", AcidTheme.COLOR_RED, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 confirmDelete(meta);
+            }
+        });
+    }
+
+    /** Full-screen source editor; saves back to the same file and reloads the engine. */
+    private void showEditor(final UserscriptMeta meta) {
+        final Context ctx = getContext();
+        final String original = readScriptSource(meta);
+        if (original == null) {
+            AcidFeedback.error(ctx, "无法读取脚本文件");
+            return;
+        }
+        AcidDialogs.inputMultiLine(
+            ctx, mIsDarkMode,
+            "编辑「" + meta.name + "」",
+            "脚本源码",
+            original,
+            "// ==UserScript== ...",
+            12, 40,
+            "保存",
+            "脚本内容不能为空",
+            new AcidDialogs.InputSubmitListener() {
+                @Override
+                public boolean onSubmit(String input) {
+                    if (input.equals(original.trim())) return true;
+                    UserscriptMeta fresh = UserscriptMeta.parse(meta.fileName, input);
+                    if (!fresh.hasMetadata) {
+                        AcidFeedback.warn(ctx, "缺少 ==UserScript== 元数据块");
+                        return false;
+                    }
+                    String err = mManager.installUserscript(meta.fileName, input);
+                    if (err != null) {
+                        AcidFeedback.error(ctx, "保存失败: " + err);
+                        return false;
+                    }
+                    AcidFeedback.ok(ctx, "已保存「" + fresh.name + "」");
+                    if (mActionListener != null) mActionListener.onScriptsChanged();
+                    refreshActivePage();
+                    return true;
+                }
+            }
+        );
+    }
+
+    private String readScriptSource(UserscriptMeta meta) {
+        java.io.File f = new java.io.File(mManager.getUserscriptsDir(), meta.fileName);
+        if (!f.exists()) return null;
+        String src = AcidIo.readFileUtf8OrEmpty(f, 20 * 1024 * 1024);
+        return src.isEmpty() ? null : src;
+    }
+
+    /** Checks {@code @updateURL} in the background and offers to install a newer version. */
+    private void checkUpdate(final UserscriptMeta meta) {
+        final Context ctx = getContext();
+        if (UserscriptManager.updateUrlOf(meta).isEmpty()) {
+            AcidFeedback.warn(ctx, "该脚本未声明 @updateURL / @downloadURL");
+            return;
+        }
+        AcidFeedback.info(ctx, "正在检查更新...");
+        AcidAsync.run(new AcidAsync.Task<UserscriptManager.UpdateInfo>() {
+            @Override
+            public UserscriptManager.UpdateInfo execute() {
+                return mManager.checkForUpdate(meta);
+            }
+        }, new AcidAsync.Callback<UserscriptManager.UpdateInfo>() {
+            @Override
+            public void onSuccess(final UserscriptManager.UpdateInfo info) {
+                if (info == null) {
+                    AcidFeedback.warn(ctx, "检查更新失败，请检查网络或更新源");
+                    return;
+                }
+                if (!info.newer) {
+                    AcidFeedback.ok(ctx, "已是最新版本 v" + meta.version);
+                    return;
+                }
+                AcidDialogs.confirmDanger(
+                    ctx, mIsDarkMode,
+                    "发现新版本",
+                    "「" + meta.name + "」v" + meta.version + " → v" + info.remoteVersion + "，是否更新？",
+                    "更新",
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            String err = mManager.applyUpdate(meta, info.remoteContent);
+                            if (err == null) {
+                                AcidFeedback.ok(ctx, "已更新到 v" + info.remoteVersion);
+                                if (mActionListener != null) mActionListener.onScriptsChanged();
+                                setRootPage(buildScriptsListPage());
+                            } else {
+                                AcidFeedback.error(ctx, "更新失败: " + err);
+                            }
+                        }
+                    }
+                );
+            }
+
+            @Override
+            public void onError(Exception error) {
+                AcidFeedback.error(ctx, "检查更新失败");
             }
         });
     }

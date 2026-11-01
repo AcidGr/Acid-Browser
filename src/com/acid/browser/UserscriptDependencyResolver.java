@@ -64,10 +64,14 @@ public class UserscriptDependencyResolver {
         }
 
         final List<String> urlsToFetch = new ArrayList<String>();
+        final List<String> resourceUrls = new ArrayList<String>();
         urlsToFetch.addAll(meta.requires);
         for (String resLine : meta.resources) {
             String url = extractResourceUrl(resLine);
-            if (!url.isEmpty()) urlsToFetch.add(url);
+            if (!url.isEmpty()) {
+                urlsToFetch.add(url);
+                resourceUrls.add(url);
+            }
         }
 
         AcidAsync.run(new AcidAsync.Task<int[]>() {
@@ -77,8 +81,10 @@ public class UserscriptDependencyResolver {
                 int failure = 0;
                 for (String u : urlsToFetch) {
                     try {
-                        String code = resolveDependency(u);
-                        if (!code.isEmpty()) {
+                        boolean ok = resourceUrls.contains(u)
+                            ? resolveResourceBytes(u).length > 0
+                            : !resolveDependency(u).isEmpty();
+                        if (ok) {
                             success++;
                         } else {
                             failure++;
@@ -116,6 +122,110 @@ public class UserscriptDependencyResolver {
             }
         }
         return list;
+    }
+
+
+    /**
+     * Cache-only variant of {@link #loadRequiresForScript}: never touches the network, so it is
+     * safe on the UI thread. Returns null when at least one {@code @require} is not cached yet.
+     */
+    public List<String> loadRequiresCachedOnly(UserscriptMeta meta) {
+        List<String> list = new ArrayList<String>();
+        if (meta == null) return list;
+        for (String reqUrl : meta.requires) {
+            if (reqUrl == null || reqUrl.trim().isEmpty()) continue;
+            File f = getLocalFileForUrl(reqUrl.trim());
+            if (!f.exists() || f.length() == 0) return null;
+            String code = AcidIo.readFileUtf8OrEmpty(f, 15 * 1024 * 1024);
+            if (code.isEmpty()) return null;
+            list.add(code);
+        }
+        return list;
+    }
+
+    // -------------------------------------------------------------------------
+    // @resource: raw bytes, so images/fonts survive (text-only caching corrupts them)
+    // -------------------------------------------------------------------------
+
+    private static final int MAX_RESOURCE_BYTES = 15 * 1024 * 1024;
+
+    /** Cached bytes of a resource, downloading on first use. Blocking; call off the UI thread. */
+    public byte[] resolveResourceBytes(String url) {
+        if (url == null || url.trim().isEmpty()) return new byte[0];
+        String safeUrl = url.trim();
+        File f = getResourceFile(safeUrl);
+        try {
+            if (f.exists() && f.length() > 0) return readAll(f);
+            if (!safeUrl.startsWith("http://") && !safeUrl.startsWith("https://")) return new byte[0];
+            File tmp = new File(f.getPath() + ".part");
+            AcidHttp.downloadToFile(safeUrl, tmp, 8000, 15000, MAX_RESOURCE_BYTES);
+            if (!tmp.renameTo(f)) {
+                byte[] data = readAll(tmp);
+                tmp.delete();
+                return data;
+            }
+            return readAll(f);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to fetch userscript resource: " + safeUrl, e);
+            return new byte[0];
+        }
+    }
+
+    /** Resource decoded as UTF-8 text, or null when unavailable. */
+    public String resolveResourceText(String url) {
+        byte[] data = resolveResourceBytes(url);
+        if (data.length == 0) return null;
+        try {
+            return new String(data, "UTF-8");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Resource as a {@code data:} URL, or null when unavailable. */
+    public String resolveResourceDataUrl(String url) {
+        byte[] data = resolveResourceBytes(url);
+        if (data.length == 0) return null;
+        return "data:" + guessMime(url) + ";base64,"
+            + android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP);
+    }
+
+    public static String guessMime(String url) {
+        String u = url == null ? "" : url.toLowerCase(java.util.Locale.ROOT);
+        int q = u.indexOf('?');
+        if (q >= 0) u = u.substring(0, q);
+        if (u.endsWith(".css")) return "text/css";
+        if (u.endsWith(".js")) return "application/javascript";
+        if (u.endsWith(".json")) return "application/json";
+        if (u.endsWith(".html") || u.endsWith(".htm")) return "text/html";
+        if (u.endsWith(".svg")) return "image/svg+xml";
+        if (u.endsWith(".png")) return "image/png";
+        if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return "image/jpeg";
+        if (u.endsWith(".gif")) return "image/gif";
+        if (u.endsWith(".webp")) return "image/webp";
+        if (u.endsWith(".ico")) return "image/x-icon";
+        if (u.endsWith(".woff2")) return "font/woff2";
+        if (u.endsWith(".woff")) return "font/woff";
+        if (u.endsWith(".ttf")) return "font/ttf";
+        if (u.endsWith(".txt")) return "text/plain";
+        return "application/octet-stream";
+    }
+
+    private File getResourceFile(String url) {
+        return new File(mDepsDir, "res_" + hashUrl(url));
+    }
+
+    private static byte[] readAll(File f) throws java.io.IOException {
+        java.io.FileInputStream in = new java.io.FileInputStream(f);
+        try {
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            return bos.toByteArray();
+        } finally {
+            in.close();
+        }
     }
 
     public static String extractResourceUrl(String resourceDeclaration) {
