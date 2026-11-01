@@ -100,6 +100,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private String mTakeoverReason = "";
     private int mBlockedDeepLinks = 0;
     private String mLastBlockedDeepLink = "";
+    private volatile int mTriggeredDownloads = 0;
+    private volatile String mLastTriggeredDownloadInfo = "";
     private View mCustomView = null;
     private WebChromeClient.CustomViewCallback mCustomViewCallback = null;
     private BrowserDataStore mDataStore = null;
@@ -782,9 +784,17 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     return;
                 }
 
+                mTriggeredDownloads++;
+                mLastTriggeredDownloadInfo = fileName + " ("
+                    + com.acid.browser.download.DownloadItem.formatSize(contentLength)
+                    + ", " + resolvedMime + ")";
+
                 mMainHandler.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (getControlMode() == AgentOverlayView.MODE_AGENT) {
+                            setControlMode(AgentOverlayView.MODE_HUMAN, "");
+                        }
                         if (mListener != null) {
                             mListener.onDownloadRequested(url, fileName, userAgent, contentDisposition, resolvedMime, contentLength);
                         } else {
@@ -1212,6 +1222,16 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     @Override
     public String getLastBlockedDeepLink() {
         return mLastBlockedDeepLink;
+    }
+
+    @Override
+    public int getTriggeredDownloadsCount() {
+        return mTriggeredDownloads;
+    }
+
+    @Override
+    public String getLastTriggeredDownloadInfo() {
+        return mLastTriggeredDownloadInfo;
     }
 
     /**

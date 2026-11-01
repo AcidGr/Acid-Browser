@@ -32,11 +32,13 @@ public class SkillManager {
 
     public static final String SKILL_USERSCRIPT = "userscript_dev.md";
     public static final String SKILL_HOMEPAGE = "homepage_dev.md";
+    public static final String SKILL_CLOUD_DRIVE = "cloud_drive_download.md";
 
     private static final Set<String> BUILTIN_SKILLS = new HashSet<String>();
     static {
         BUILTIN_SKILLS.add(SKILL_USERSCRIPT);
         BUILTIN_SKILLS.add(SKILL_HOMEPAGE);
+        BUILTIN_SKILLS.add(SKILL_CLOUD_DRIVE);
     }
 
     public interface OnSkillsChangedListener {

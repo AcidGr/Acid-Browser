@@ -29,6 +29,7 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
     private String mPendingContentDisposition = null;
     private String mPendingMimeType = null;
     private long mPendingContentLength = 0;
+    private boolean mHandled = true;
 
     public DownloadConfirmSheet(Context context, DownloadCoordinator downloads) {
         super(context);
@@ -54,7 +55,32 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
         mPendingContentDisposition = contentDisposition;
         mPendingMimeType = mimeType;
         mPendingContentLength = contentLength;
+        mHandled = false;
         setRootPage(buildConfirmPage());
+    }
+
+    private void saveToDownloadsIfPending() {
+        if (mHandled) return;
+        mHandled = true;
+        if (mDownloads != null && mPendingUrl != null && !mPendingUrl.isEmpty()) {
+            mDownloads.saveDownloadForLater(
+                mPendingUrl,
+                mPendingFileName,
+                mPendingUserAgent,
+                mPendingContentDisposition,
+                mPendingMimeType,
+                mPendingContentLength
+            );
+        }
+    }
+
+    @Override
+    public void dismiss() {
+        boolean wasShowing = isShowing();
+        super.dismiss();
+        if (wasShowing && !mHandled) {
+            saveToDownloadsIfPending();
+        }
     }
 
     private SheetPage buildConfirmPage() {
@@ -156,10 +182,13 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
 
                 container.addView(infoCard);
 
-                // 2. Pinned Footer Action Bar: [取消] [立即下载]
-                TextView btnCancel = AcidWidgets.secondaryButton(ctx, mIsDarkMode, "取消", muted, new OnClickListener() {
+                // 2. Pinned Footer Action Bar: [先收起 (暂存)] [立即下载]
+                TextView btnCollapse = AcidWidgets.secondaryButton(ctx, mIsDarkMode, "先收起", muted, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
+                        String customName = etFileName.getText() != null ? etFileName.getText().toString().trim() : "";
+                        if (!customName.isEmpty()) mPendingFileName = customName;
+                        saveToDownloadsIfPending();
                         closeEntireModalFlow();
                     }
                 });
@@ -168,6 +197,7 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                     public void onClick(View v) {
                         String customName = etFileName.getText() != null ? etFileName.getText().toString().trim() : "";
                         if (customName.isEmpty()) customName = mPendingFileName;
+                        mHandled = true;
                         closeEntireModalFlow();
                         if (mDownloads != null) {
                             mDownloads.startDownload(
@@ -181,7 +211,13 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                         }
                     }
                 });
-                footer.addView(AcidWidgets.buttonRow(ctx, btnCancel, btnConfirm));
+                footer.addView(AcidWidgets.buttonRow(ctx, btnCollapse, btnConfirm));
+            }
+        }).withAction(AcidIcons.ICON_TRASH, "丢弃", AcidTheme.COLOR_RED, new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mHandled = true;
+                closeEntireModalFlow();
             }
         });
     }

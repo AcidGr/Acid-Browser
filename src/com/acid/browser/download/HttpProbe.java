@@ -132,36 +132,118 @@ public final class HttpProbe {
     }
 
     /**
-     * Parses filename from Content-Disposition header (supports filename* and filename).
+     * Parses filename from Content-Disposition header (supports filename* and filename,
+     * case-insensitive, with automatic URL percent-decoding and sanitization).
      */
     public static String parseFileNameFromDisposition(String disposition) {
         if (disposition == null || disposition.isEmpty()) return null;
 
-        // Try RFC 5987 / 6266 filename*=UTF-8''...
-        int fnStar = disposition.indexOf("filename*=");
+        String lower = disposition.toLowerCase();
+
+        // 1. Try RFC 5987 / 6266 filename*=UTF-8''... (highest priority)
+        int fnStar = lower.indexOf("filename*=");
         if (fnStar >= 0) {
             String val = disposition.substring(fnStar + 10).trim();
             int semi = val.indexOf(';');
             if (semi >= 0) val = val.substring(0, semi).trim();
-            if (val.toLowerCase().startsWith("utf-8''")) {
-                try {
-                    return URLDecoder.decode(val.substring(7), "UTF-8");
-                } catch (Exception ignored) {}
+            if (val.startsWith("\"") && val.endsWith("\"") && val.length() >= 2) {
+                val = val.substring(1, val.length() - 1).trim();
+            }
+            String valLower = val.toLowerCase();
+            if (valLower.startsWith("utf-8''")) {
+                val = val.substring(7);
+            } else {
+                int quoteQuote = val.indexOf("''");
+                if (quoteQuote >= 0 && quoteQuote < 16) {
+                    val = val.substring(quoteQuote + 2);
+                }
+            }
+            String decoded = decodeAndSanitizeFileName(val);
+            if (decoded != null && !decoded.isEmpty()) {
+                return decoded;
             }
         }
 
-        // Try standard filename="..."
-        int fn = disposition.indexOf("filename=");
-        if (fn >= 0) {
-            String val = disposition.substring(fn + 9).trim();
-            int semi = val.indexOf(';');
-            if (semi >= 0) val = val.substring(0, semi).trim();
-            if (val.startsWith("\"") && val.endsWith("\"") && val.length() >= 2) {
-                val = val.substring(1, val.length() - 1);
+        // 2. Try standard filename="..." or filename=...;
+        int searchFrom = 0;
+        while (searchFrom < disposition.length()) {
+            int fn = lower.indexOf("filename=", searchFrom);
+            if (fn < 0) break;
+            // Ensure we didn't match the tail of "filename*="
+            if (fn > 0 && disposition.charAt(fn - 1) == '*') {
+                searchFrom = fn + 9;
+                continue;
             }
-            if (!val.isEmpty()) return val;
+            String val = disposition.substring(fn + 9).trim();
+            if (val.startsWith("\"")) {
+                int endQuote = val.indexOf('"', 1);
+                if (endQuote >= 1) {
+                    val = val.substring(1, endQuote);
+                } else {
+                    val = val.substring(1);
+                }
+            } else if (val.startsWith("'")) {
+                int endQuote = val.indexOf('\'', 1);
+                if (endQuote >= 1) {
+                    val = val.substring(1, endQuote);
+                } else {
+                    val = val.substring(1);
+                }
+            } else {
+                int semi = val.indexOf(';');
+                if (semi >= 0) val = val.substring(0, semi).trim();
+            }
+            String decoded = decodeAndSanitizeFileName(val);
+            if (decoded != null && !decoded.isEmpty()) {
+                return decoded;
+            }
+            searchFrom = fn + 9;
         }
 
         return null;
+    }
+
+    /**
+     * Percent-decodes UTF-8 sequences (preserving literal '+') and strips illegal path characters.
+     */
+    public static String decodeAndSanitizeFileName(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        if (s.isEmpty()) return null;
+
+        // Strip trailing "; filename*=..." if an upstream caller passed an unsplit value
+        int semiIdx = s.indexOf(';');
+        if (semiIdx > 0) {
+            String tail = s.substring(semiIdx + 1).trim().toLowerCase();
+            if (tail.startsWith("filename") || tail.startsWith("size=")) {
+                s = s.substring(0, semiIdx).trim();
+            }
+        }
+
+        if (s.startsWith("\"") && s.endsWith("\"") && s.length() >= 2) {
+            s = s.substring(1, s.length() - 1).trim();
+        }
+
+        // Decode percent-encoded UTF-8 up to 2 passes (handles single and double encoding)
+        for (int pass = 0; pass < 2; pass++) {
+            if (s.indexOf('%') < 0) break;
+            try {
+                String decoded = URLDecoder.decode(s.replace("+", "%2B"), "UTF-8");
+                if (decoded.equals(s)) break;
+                s = decoded;
+            } catch (Exception ignored) {
+                break;
+            }
+        }
+
+        // Strip any directory components
+        int lastSlash = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+        if (lastSlash >= 0 && lastSlash < s.length() - 1) {
+            s = s.substring(lastSlash + 1);
+        }
+
+        // Replace filesystem-reserved characters
+        s = s.replaceAll("[\\\\/:*?\"<>|;\\r\\n\\t\\x00]", "_").trim();
+        return s.isEmpty() ? null : s;
     }
 }

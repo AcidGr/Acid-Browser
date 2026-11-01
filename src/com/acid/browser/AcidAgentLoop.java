@@ -257,7 +257,8 @@ public class AcidAgentLoop {
         if (skillsCatalog.isEmpty()) {
             skillsCatalog = "## On-Demand Skills\n" +
                 "- When asked to develop, create, or tweak a userscript or browser feature, FIRST call `read(file_path='skills/userscript_dev.md')`.\n" +
-                "- When asked to design, customize, or style the browser homepage, FIRST call `read(file_path='skills/homepage_dev.md')`.\n\n";
+                "- When asked to design, customize, or style the browser homepage, FIRST call `read(file_path='skills/homepage_dev.md')`.\n" +
+                "- When asked to download files from cloud drives (Baidu Netdisk, UC Drive, Quark, 123Pan, Lanzou) without an app, FIRST call `read(file_path='skills/cloud_drive_download.md')`.\n\n";
         }
         return "You are Acid Agent, an autonomous AI agent living natively inside the Acid Android Browser.\n" +
             "You have full access to 5 core tools inside the app:\n" +
