@@ -56,6 +56,7 @@ public class UserscriptManager {
 
     public UserscriptManager(Context context) {
         mContext = context.getApplicationContext();
+        UserscriptShaper.init(mContext);
         mWorkspaceDir = new File(mContext.getFilesDir(), "acid_workspace");
         if (!mWorkspaceDir.exists()) {
             mWorkspaceDir.mkdirs();

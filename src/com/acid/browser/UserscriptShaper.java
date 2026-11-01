@@ -1,5 +1,7 @@
 package com.acid.browser;
 
+import android.content.Context;
+
 import org.json.JSONObject;
 
 import java.io.File;
@@ -20,6 +22,16 @@ import java.util.concurrent.ConcurrentHashMap;
 public class UserscriptShaper {
 
     private static final Map<String, String> sTemplateCache = new ConcurrentHashMap<String, String>();
+    private static Context sContext;
+
+    /**
+     * Initializes the shaper with an application context for resolving assets inside the APK.
+     */
+    public static void init(Context context) {
+        if (context != null) {
+            sContext = context.getApplicationContext();
+        }
+    }
 
     private static final String[] APIS = {
         "GM_setValue", "GM_getValue", "GM_deleteValue", "GM_listValues",
@@ -179,6 +191,13 @@ public class UserscriptShaper {
     }
 
     private static String loadFromDiskOrStream(String path) {
+        if (sContext != null) {
+            String asset = AcidIo.readAssetUtf8OrEmpty(sContext, path);
+            if (asset != null && !asset.isEmpty()) {
+                return asset;
+            }
+        }
+
         try {
             File f = new File("assets", path);
             if (f.exists() && f.length() > 0) {
