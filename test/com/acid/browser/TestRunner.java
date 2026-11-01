@@ -255,20 +255,32 @@ public final class TestRunner {
 
         StateSource.BoolState dntState = store.boolState(AcidSettings.DO_NOT_TRACK);
         StateSource.BoolState darkState = store.boolState(AcidSettings.DARK_MODE);
+        StateSource.BoolState fullscreenState = store.boolState(AcidSettings.FULLSCREEN_ENABLED);
 
         final int[] dntEvents = new int[]{0};
         final int[] darkEvents = new int[]{0};
+        final int[] fullscreenEvents = new int[]{0};
         dntState.observe(new StateSource.Observer() {
             @Override public void onChanged(boolean value) { dntEvents[0]++; }
         });
         darkState.observe(new StateSource.Observer() {
             @Override public void onChanged(boolean value) { darkEvents[0]++; }
         });
+        fullscreenState.observe(new StateSource.Observer() {
+            @Override public void onChanged(boolean value) { fullscreenEvents[0]++; }
+        });
 
         dntState.toggle();
         assertTrue(dntState.get(), "dnt toggled on");
         assertEquals(1, Integer.valueOf(dntEvents[0]), "dnt observer fired once");
         assertEquals(0, Integer.valueOf(darkEvents[0]), "dark observer untouched");
+
+        fullscreenState.toggle();
+        assertTrue(fullscreenState.get(), "fullscreen toggled on");
+        assertEquals(1, Integer.valueOf(fullscreenEvents[0]), "fullscreen observer fired once");
+        assertTrue(store.isFullscreenEnabled(), "store reflects fullscreen state");
+        fullscreenState.set(false);
+        assertEquals(2, Integer.valueOf(fullscreenEvents[0]), "fullscreen observer fired on toggle off");
 
         // Setting same value does not re-fire
         dntState.set(true);
