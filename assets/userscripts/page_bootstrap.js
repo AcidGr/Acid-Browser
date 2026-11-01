@@ -1,13 +1,12 @@
 (function(){
   if (window.__acid_bootstrapped) return;
   window.__acid_bootstrapped = true;
-  var SECRET = /*__SECRET__*/"";
   var fired = {};
   function req(phase) {
     if (fired[phase]) return; fired[phase] = 1;
     var host = window.__acid_gm_host__;
     if (!host || !host.call) return;
-    try { host.call('requestInjection', JSON.stringify({ secret: SECRET, runAt: phase })); } catch(e){}
+    try { host.call('requestInjection', JSON.stringify({ runAt: phase })); } catch(e){}
   }
   function headReady() {
     if (document.head) { req(1); return true; }

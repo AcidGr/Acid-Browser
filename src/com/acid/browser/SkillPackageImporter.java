@@ -388,8 +388,18 @@ public class SkillPackageImporter {
                 dst.getParentFile().mkdirs();
             }
             if (!src.renameTo(dst)) {
-                byte[] bytes = AcidIo.readFileUtf8OrEmpty(src, (int) MAX_IMPORT_TOTAL_BYTES).getBytes(StandardCharsets.UTF_8);
-                writeBytesSafe(dst, bytes);
+                java.io.FileInputStream fis = new java.io.FileInputStream(src);
+                try {
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = fis.read(buf)) != -1) {
+                        bos.write(buf, 0, n);
+                    }
+                    writeBytesSafe(dst, bos.toByteArray());
+                } finally {
+                    fis.close();
+                }
             }
         }
     }
@@ -422,23 +432,27 @@ public class SkillPackageImporter {
                 throw new Exception("HTTP " + code + (err != null && !err.isEmpty() ? ": " + err.substring(0, Math.min(120, err.length())) : ""));
             }
 
-            InputStream is = new BufferedInputStream(conn.getInputStream());
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int n;
-            long total = 0;
-            while ((n = is.read(buf)) != -1) {
-                total += n;
-                if (total > maxBytes) {
-                    is.close();
-                    conn.disconnect();
-                    throw new Exception("文件超过最大大小限制 (" + (maxBytes / 1024 / 1024) + "MB)");
+            InputStream is = null;
+            try {
+                is = new BufferedInputStream(conn.getInputStream());
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                long total = 0;
+                while ((n = is.read(buf)) != -1) {
+                    total += n;
+                    if (total > maxBytes) {
+                        throw new Exception("文件超过最大大小限制 (" + (maxBytes / 1024 / 1024) + "MB)");
+                    }
+                    bos.write(buf, 0, n);
                 }
-                bos.write(buf, 0, n);
+                return bos.toByteArray();
+            } finally {
+                if (is != null) {
+                    try { is.close(); } catch (Exception ignored) {}
+                }
+                conn.disconnect();
             }
-            is.close();
-            conn.disconnect();
-            return bos.toByteArray();
         }
         throw new Exception("重定向次数过多");
     }

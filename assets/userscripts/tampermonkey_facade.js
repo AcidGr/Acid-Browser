@@ -1,7 +1,6 @@
 (function(){
   if (window.__acid_tm_facade) return;
   window.__acid_tm_facade = true;
-  var SECRET = /*__SECRET__*/"";
   var host = window.__acid_gm_host__;
   var _safeStr = (function(){
     try {
@@ -14,7 +13,7 @@
     if (!host || !host.call) return false;
     try {
       var r = JSON.parse(host.call('isInstalled', _safeStr({
-        secret: SECRET, name: String(name || ''), namespace: String(ns || '') })));
+        name: String(name || ''), namespace: String(ns || '') })));
       return !!(r && r.value);
     } catch(e) { return false; }
   }

@@ -386,15 +386,17 @@ public final class TestRunner {
         assertTrue(!UserscriptManager.isNewerVersion("0.9", "1.0"), "older is not newer");
         assertTrue(UserscriptManager.isNewerVersion("1.0", ""), "empty local means newer");
 
-        // bootstrap + facade are well-formed and carry the token
+        // bootstrap + facade are well-formed and do NOT leak the token into untrusted page context
         String boot = UserscriptShaper.bootstrap("TOK");
         assertTrue(boot.contains("requestInjection"), "bootstrap requests injection");
         assertTrue(boot.contains("DOMContentLoaded"), "bootstrap listens for DOMContentLoaded");
         assertTrue(boot.contains("__acid_bootstrapped"), "bootstrap is idempotent");
+        assertTrue(!boot.contains("TOK"), "bootstrap never embeds token into untrusted page scope");
         String facade = UserscriptShaper.tampermonkeyFacade("TOK");
         assertTrue(facade.contains("window.external.Tampermonkey"), "facade exposes Tampermonkey");
         assertTrue(facade.contains("isInstalled"), "facade supports isInstalled");
         assertTrue(facade.contains("getVersion"), "facade supports getVersion");
+        assertTrue(!facade.contains("TOK"), "facade never embeds token into untrusted page scope");
 
         // script-site detection (only these hosts get the facade)
         assertTrue(UserscriptManager.isScriptSite("https://greasyfork.org/zh-CN/scripts/1"), "greasyfork");
@@ -415,8 +417,12 @@ public final class TestRunner {
             }, null);
         b2.call("requestInjection", "{\"secret\":\"TOK\",\"runAt\":4}");
         assertEquals(Integer.valueOf(4), Integer.valueOf(phase[0]), "phase forwarded");
+        b2.call("requestInjection", "{\"runAt\":2}");
+        assertEquals(Integer.valueOf(2), Integer.valueOf(phase[0]), "public requestInjection allowed without token");
         assertTrue(b2.call("isInstalled", "{\"secret\":\"TOK\",\"name\":\"found\"}").contains("true"), "isInstalled true");
+        assertTrue(b2.call("isInstalled", "{\"name\":\"found\"}").contains("true"), "public isInstalled allowed without token");
         assertTrue(b2.call("isInstalled", "{\"secret\":\"TOK\",\"name\":\"nope\"}").contains("false"), "isInstalled false");
+        assertEquals("", b2.call("setValue", "{\"name\":\"k\",\"value\":\"v\"}"), "privileged setValue strictly rejected without token");
     }
 
     private static void testSkillBuiltinSync() throws Exception {

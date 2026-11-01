@@ -847,7 +847,7 @@ public class BrowserDataStore {
             .apply();
 
         if (syncFile && mBookmarksJsonFile != null) {
-            saveBookmarksToJsonFile();
+            saveBookmarksToJsonFile(arr);
         }
         if (mBookmarksMutatedListener != null) {
             dispatchCallback(mBookmarksMutatedListener);
@@ -855,16 +855,23 @@ public class BrowserDataStore {
     }
 
     public synchronized boolean saveBookmarksToJsonFile() {
+        return saveBookmarksToJsonFile(null);
+    }
+
+    public synchronized boolean saveBookmarksToJsonFile(JSONArray cachedArr) {
         if (mBookmarksJsonFile == null) return false;
         try {
-            List<EntryItem> list = loadBookmarks();
-            JSONArray arr = new JSONArray();
-            for (EntryItem item : list) {
-                if (item == null) continue;
-                JSONObject o = new JSONObject();
-                o.put("title", item.title);
-                o.put("url", item.url);
-                arr.put(o);
+            JSONArray arr = cachedArr;
+            if (arr == null) {
+                List<EntryItem> list = loadBookmarks();
+                arr = new JSONArray();
+                for (EntryItem item : list) {
+                    if (item == null) continue;
+                    JSONObject o = new JSONObject();
+                    o.put("title", item.title);
+                    o.put("url", item.url);
+                    arr.put(o);
+                }
             }
             mLastBookmarksSelfSaveTime = System.currentTimeMillis();
             String formatted;
@@ -966,7 +973,7 @@ public class BrowserDataStore {
             .apply();
 
         if (mHistoryJsonFile != null) {
-            saveHistoryToJsonFile();
+            saveHistoryToJsonFile(new JSONArray());
         }
 
         dispatchCallback(new Runnable() {
@@ -980,17 +987,24 @@ public class BrowserDataStore {
     }
 
     public synchronized boolean saveHistoryToJsonFile() {
+        return saveHistoryToJsonFile(null);
+    }
+
+    public synchronized boolean saveHistoryToJsonFile(JSONArray cachedArr) {
         if (mHistoryJsonFile == null) return false;
         try {
-            List<EntryItem> list = loadHistory();
-            JSONArray arr = new JSONArray();
-            for (EntryItem item : list) {
-                if (item == null) continue;
-                JSONObject o = new JSONObject();
-                o.put("title", item.title);
-                o.put("url", item.url);
-                o.put("time", item.time);
-                arr.put(o);
+            JSONArray arr = cachedArr;
+            if (arr == null) {
+                List<EntryItem> list = loadHistory();
+                arr = new JSONArray();
+                for (EntryItem item : list) {
+                    if (item == null) continue;
+                    JSONObject o = new JSONObject();
+                    o.put("title", item.title);
+                    o.put("url", item.url);
+                    o.put("time", item.time);
+                    arr.put(o);
+                }
             }
             mLastHistorySelfSaveTime = System.currentTimeMillis();
             String formatted;
@@ -1086,7 +1100,7 @@ public class BrowserDataStore {
         prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
 
         if (mHistoryJsonFile != null) {
-            saveHistoryToJsonFile();
+            saveHistoryToJsonFile(next);
         }
 
         dispatchCallback(new Runnable() {

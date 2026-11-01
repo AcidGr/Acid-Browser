@@ -28,7 +28,7 @@ public class UserscriptHttpHandler {
 
     private static final String TAG = "AcidUserscriptHttp";
     private static final int DEFAULT_TIMEOUT_MS = 15000;
-    private static final int MAX_RESPONSE_BYTES = 30 * 1024 * 1024; // 30 MB
+    private static final int MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB safe cap for JS evaluation
 
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
@@ -144,6 +144,7 @@ public class UserscriptHttpHandler {
         String statusText = "";
         Map<String, List<String>> headerFields = null;
 
+        boolean connected = false;
         for (int redirects = 0; redirects < 5; redirects++) {
             URL url = new URL(currentUrl);
             conn = (HttpURLConnection) url.openConnection();
@@ -219,14 +220,21 @@ public class UserscriptHttpHandler {
                 if (loc != null && !loc.trim().isEmpty()) {
                     currentUrl = new URL(new URL(currentUrl), loc.trim()).toString();
                     conn.disconnect();
-                    if (statusCode == HttpURLConnection.HTTP_SEE_OTHER) {
+                    if (statusCode == HttpURLConnection.HTTP_SEE_OTHER
+                        || statusCode == HttpURLConnection.HTTP_MOVED_PERM
+                        || statusCode == HttpURLConnection.HTTP_MOVED_TEMP) {
                         method = "GET";
                         data = null;
                     }
                     continue;
                 }
             }
+            connected = true;
             break;
+        }
+
+        if (!connected || conn == null) {
+            throw new java.io.IOException("Too many redirects (max 5)");
         }
 
         try {
@@ -254,17 +262,18 @@ public class UserscriptHttpHandler {
             }
         }
 
-        // Read response body
-        InputStream in;
-        if (statusCode >= 200 && statusCode < 400) {
-            in = conn.getInputStream();
-        } else {
-            in = conn.getErrorStream();
-        }
-
+        // Read response body safely with guaranteed resource cleanup
         byte[] bodyBytes = new byte[0];
-        if (in != null) {
-            try {
+        String finalUrl = conn.getURL().toString();
+        InputStream in = null;
+        try {
+            if (statusCode >= 200 && statusCode < 400) {
+                in = conn.getInputStream();
+            } else {
+                in = conn.getErrorStream();
+            }
+
+            if (in != null) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
                 byte[] buf = new byte[4096];
                 int n;
@@ -275,13 +284,13 @@ public class UserscriptHttpHandler {
                     bos.write(buf, 0, n);
                 }
                 bodyBytes = bos.toByteArray();
-            } finally {
-                in.close();
             }
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (Throwable ignored) {}
+            }
+            conn.disconnect();
         }
-
-        String finalUrl = conn.getURL().toString();
-        conn.disconnect();
 
         JSONObject resp = new JSONObject();
         resp.put("status", statusCode);

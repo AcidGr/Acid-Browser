@@ -114,9 +114,9 @@ public class UserscriptManager {
         if (url.startsWith("about:") || url.startsWith("data:") || url.startsWith("file://")) return;
         attachToWebView(wv);
         try {
-            wv.evaluateJavascript(UserscriptShaper.bootstrap(mSecret), null);
+            wv.evaluateJavascript(UserscriptShaper.bootstrap(), null);
             if (isScriptSite(url)) {
-                wv.evaluateJavascript(UserscriptShaper.tampermonkeyFacade(mSecret), null);
+                wv.evaluateJavascript(UserscriptShaper.tampermonkeyFacade(), null);
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to inject bootstrap", e);
