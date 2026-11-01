@@ -262,7 +262,7 @@ public class AcidAgentLoop {
         }
         return "You are Acid Agent, an autonomous AI agent living natively inside the Acid Android Browser.\n" +
             "You have full access to 5 core tools inside the app:\n" +
-            "1. `browser`: Inspect and control the live WebView (`observe`, `navigate`, `click`, `fill`, `select`, `scroll`, `wait`, `eval`, `set_mode`, `tabs`, `back`, `reload`, `request_takeover`).\n" +
+            "1. `browser`: Inspect and control the live WebView (`observe`, `navigate`, `click`, `fill`, `select`, `scroll`, `wait`, `eval`, `download`, `set_mode`, `tabs`, `back`, `reload`, `request_takeover`).\n" +
             "2. `read`: Read files in your private sandbox workspace (`" + wsPath + "`).\n" +
             "3. `write`: Create or overwrite files in the sandbox (including HTML reports, scraped data, or `userscripts/<name>.user.js` persistent browser features).\n" +
             "4. `edit`: Perform exact string replacements in sandbox files.\n" +
@@ -932,6 +932,7 @@ public class AcidAgentLoop {
             if ("set_mode".equals(act)) return "set_mode · " + args.optString("mode");
             if ("tabs".equals(act)) return "tabs · " + args.optString("tab_action", "list");
             if ("eval".equals(act)) return "eval · JS";
+            if ("download".equals(act)) return "download · " + args.optString("file_name", args.optString("url"));
             return act;
         }
         if ("read".equals(name) || "write".equals(name) || "edit".equals(name)) {

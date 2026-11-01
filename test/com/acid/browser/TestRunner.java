@@ -838,6 +838,12 @@ public final class TestRunner {
 
         assertTrue(SkillManager.isBuiltin(SkillManager.SKILL_CLOUD_DRIVE), "cloud_drive_download.md registered as builtin skill");
         assertEquals(0, DownloadItem.STATUS_SAVED, "DownloadItem.STATUS_SAVED is 0");
+
+        String baiduLargeUrl = "https://appall01.baidupcs.com/file/23154b?fid=123&size=179795556&fin=%E9%AB%98%E5%BE%B7%E5%9C%B0%E5%9B%BE+16.20.0.2022%E5%8E%BB%E5%B9%BF%E5%91%8A%E7%A7%92%E5%AE%9A%E4%BD%8D%E7%89%88.apk";
+        assertTrue(com.acid.browser.download.DownloadCoordinator.isCloudDriveDirectStreamUrl(baiduLargeUrl), "baidupcs file stream recognized for direct interception");
+        assertEquals(179795556L, com.acid.browser.download.DownloadCoordinator.extractContentLengthFromUrlQuery(baiduLargeUrl), "size extracted from baidupcs query string");
+        Map<String, String> baiduHeaders = com.acid.browser.download.DownloadCoordinator.buildCloudDriveAwareHeaders(baiduLargeUrl, null);
+        assertEquals(com.acid.browser.download.DownloadCoordinator.UA_BAIDU_NETDISK, baiduHeaders.get("User-Agent"), "Baidu PCS automatically injects netdisk client UA");
     }
 
     private static void testAcidIoAndDownloadItem() throws Exception {

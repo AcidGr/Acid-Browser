@@ -94,6 +94,7 @@ public class AcidSandboxTools {
                     "- 'scroll': Scroll viewport ('direction': 'down'|'up'|'top'|'bottom', 'amount': 0.8).\n" +
                     "- 'wait': Wait for a specific condition ('condition': 'networkidle'|'selector'|'stable'|'text'|'gone'|'ms', optional 'selector', 'text', 'quiet_ms', 'ms', 'timeout_ms'). Returns a receipt {satisfied, timed_out, elapsed_ms, error_code?} followed by the latest page observation. Always check 'satisfied' before proceeding.\n" +
                     "- 'eval': Evaluate JavaScript ('code') on current page and return {ok, result, result_type}. Accepts an expression, multiple statements (value of the last statement is returned automatically), or a function body with explicit 'return'. Supports async/await; Promises are awaited. Syntax errors return SYNTAX_ERROR without executing.\n" +
+                    "- 'download': Open the browser's built-in multi-threaded download confirmation sheet for a direct file URL ('url', optional 'file_name', 'user_agent'). Automatically injects cloud-drive client User-Agent & Cookies (Baidu PCS, Quark, UC, 115) so WebView never hits HTTP 403.\n" +
                     "- 'set_mode': Switch browser identity ('mode': 'desktop' for 1280px PC view or 'mobile'), or toggle 'som' (true/false).\n" +
                     "- 'tabs': Manage tabs ('tab_action': 'list'|'new'|'switch'|'close', optional 'tab_id', 'url').\n" +
                     "- 'back': Navigate back in current tab history.\n" +
@@ -101,10 +102,12 @@ public class AcidSandboxTools {
                     "- 'request_takeover': Pause automation loop and ask human user to manually handle login/CAPTCHA ('reason').",
                     new String[]{
                         "observe", "navigate", "click", "fill", "select",
-                        "scroll", "wait", "eval", "set_mode", "tabs", "back", "reload", "request_takeover"
+                        "scroll", "wait", "eval", "download", "set_mode", "tabs", "back", "reload", "request_takeover"
                     }
                 ));
-                browserProps.put("url", prop("string", "Target URL for 'navigate' or 'tabs' (new)."));
+                browserProps.put("url", prop("string", "Target URL for 'navigate', 'download', or 'tabs' (new)."));
+                browserProps.put("file_name", prop("string", "Optional save filename override for 'download' (e.g. 'app.apk')."));
+                browserProps.put("user_agent", prop("string", "Optional custom User-Agent header for 'download' (auto-populated for Baidu/Quark/UC/115 if omitted)."));
                 browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'fill', 'select', or container 'scroll'. Supports auto-healing if the DOM refreshed."));
                 browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', visible element text for semantic 'click' (e.g. '消息'/'发送'), or expected text for 'wait'."));
                 browserProps.put("selector", prop("string", "CSS selector for 'click', 'fill', or 'wait' (e.g. 'a[href*=\"/user/self\"]', 'input[name=\"q\"]')."));
@@ -510,6 +513,26 @@ public class AcidSandboxTools {
             long pollWait = (code.contains("location") || code.contains(".click(") || code.contains("download")) ? 1800 : 0;
             String dlNotice = awaitAndFormatDownloadNotice(dlBefore, pollWait);
             return new ToolExecResult(dlNotice + "=== [BROWSER ACTION: EVAL] ===\n" + raw, false, null);
+        }
+
+        if ("download".equals(action)) {
+            String url = args.optString("url", "").trim();
+            if (url.isEmpty() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+                return new ToolExecResult("Error: browser(action='download') requires a valid http/https 'url'.", false, null);
+            }
+            String customFileName = args.optString("file_name", "").trim();
+            if (customFileName.isEmpty()) customFileName = null;
+            String customUa = args.optString("user_agent", "").trim();
+            if (customUa.isEmpty()) customUa = null;
+            long contentLength = args.optLong("size", -1);
+
+            String info = mController.requestDownload(url, customFileName, customUa, null, null, contentLength);
+            return new ToolExecResult(
+                "[DOWNLOAD SHEET OPENED] File: " + info
+                + " — Native download confirmation dialog is now open on screen for the user to tap '立即下载' (Download Now) or '先收起' (Save for Later). Do NOT re-trigger this download.",
+                false,
+                null
+            );
         }
 
         if ("set_mode".equals(action)) {
