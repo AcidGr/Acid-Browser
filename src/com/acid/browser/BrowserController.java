@@ -1373,7 +1373,15 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void setSomEnabled(boolean enabled) {
         mSomEnabled = enabled;
-        mAutomationDriver.evaluateJsSync("window.__acidBridge && window.__acidBridge.setSomEnabled(" + enabled + ");", 1500);
+        TabSession target = getTargetTab();
+        if (target != null && target.webView != null) {
+            try {
+                target.webView.evaluateJavascript(
+                    "if(window.__acidBridge){window.__acidBridge.setSomEnabled(" + enabled + ");}",
+                    null
+                );
+            } catch (Exception ignored) {}
+        }
         if (mListener != null) {
             mListener.onModeChanged(mIsDesktopMode, mOverlayView.getControlMode(), mSomEnabled);
         }
@@ -1451,5 +1459,29 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void runUserscriptCommand(UserscriptManager.MenuCommand cmd) {
         TabSession tab = getActiveTab();
         if (tab != null) mUserscriptManager.runMenuCommand(tab.webView, cmd);
+    }
+
+    /**
+     * Cascading lifecycle teardown for all browser subsystems, WebViews, and native Chromium contexts.
+     */
+    public void destroy() {
+        List<TabSession> tabsCopy = new ArrayList<TabSession>(mTabs);
+        mTabs.clear();
+        mActiveTab = null;
+        for (TabSession t : tabsCopy) {
+            if (t != null && t.webView != null) {
+                try {
+                    if (mWebViewContainer != null) {
+                        mWebViewContainer.removeView(t.webView);
+                    }
+                    t.webView.stopLoading();
+                    t.webView.removeAllViews();
+                    t.webView.destroy();
+                } catch (Exception ignored) {}
+            }
+        }
+        if (mDownloadCoordinator != null) {
+            mDownloadCoordinator.destroy();
+        }
     }
 }

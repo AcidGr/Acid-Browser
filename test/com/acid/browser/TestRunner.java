@@ -96,6 +96,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testSkillBuiltinSync(); }
         });
 
+        run("SkillStorageVault boundaries & SkillSlug domain invariants", new TestCase() {
+            @Override public void execute() throws Exception { testSkillVaultAndSlugSecurity(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
             System.exit(1);
@@ -1376,5 +1380,38 @@ public final class TestRunner {
         assertTrue(!FaviconManager.isValidFaviconBytes(garbage), "garbage bytes rejected");
         assertEquals("image/png", FaviconManager.detectFaviconMime(pngBytes), "detect PNG mime");
         assertEquals("image/x-icon", FaviconManager.detectFaviconMime(icoBytes), "detect ICO mime");
+    }
+
+    private static void testSkillVaultAndSlugSecurity() throws Exception {
+        // 1. SkillSlug invariant validation
+        assertEquals("my-skill", SkillSlug.from("my-skill").value(), "normal slug sanitized");
+        assertEquals("test_skill", SkillSlug.from("---test_skill---").value(), "trim leading/trailing hyphens");
+        assertEquals("imported_skill", SkillSlug.from("---").value(), "fallback when all sanitized away");
+        assertEquals("custom_fallback", SkillSlug.from("...", "custom_fallback").value(), "custom fallback honored");
+
+        // 2. SkillStorageVault containment invariants
+        File tmpVaultDir = new File(System.getProperty("java.io.tmpdir"), "acid_vault_test_" + System.currentTimeMillis());
+        tmpVaultDir.mkdirs();
+        try {
+            SkillStorageVault vault = new SkillStorageVault(tmpVaultDir);
+            SkillSlug slug = SkillSlug.from("safe_skill");
+            File skillDir = vault.resolveSkillDir(slug);
+            assertEquals(new File(tmpVaultDir, "safe_skill").getCanonicalPath(), skillDir.getCanonicalPath(), "valid child resolved");
+
+            // Staging and promotion invariants
+            File staging = vault.createStagingDir();
+            assertTrue(staging.exists(), "staging dir created");
+            File testFile = new File(staging, "SKILL.md");
+            AcidIo.writeFileUtf8Safe(testFile, "# Test Skill\nDescription here");
+
+            File promoted = vault.promoteStagingDir(staging, slug);
+            assertTrue(promoted.exists(), "promoted dir exists");
+            assertTrue(new File(promoted, "SKILL.md").exists(), "content moved");
+            assertTrue(vault.deleteSkillDir(slug), "skill safely deleted");
+            assertTrue(!promoted.exists(), "promoted dir no longer exists");
+            assertTrue(tmpVaultDir.exists(), "vault root strictly preserved and never deleted");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(tmpVaultDir);
+        }
     }
 }

@@ -138,6 +138,15 @@ public class UserscriptHttpHandler {
         JSONObject headers = details.optJSONObject("headers");
         String data = details.optString("data", null);
 
+        Map<String, String> customHeaders = new java.util.LinkedHashMap<String, String>();
+        if (headers != null) {
+            Iterator<?> keys = headers.keys();
+            while (keys.hasNext()) {
+                String key = (String) keys.next();
+                customHeaders.put(key, headers.optString(key));
+            }
+        }
+
         String currentUrl = urlStr;
         HttpURLConnection conn = null;
         int statusCode = 0;
@@ -152,7 +161,7 @@ public class UserscriptHttpHandler {
             conn.setRequestMethod(method);
             conn.setConnectTimeout(timeout);
             conn.setReadTimeout(timeout);
-            conn.setInstanceFollowRedirects(true);
+            conn.setInstanceFollowRedirects(false); // Manually handle redirects to enforce security policy and sync cookies
             conn.setRequestProperty("User-Agent", ua);
 
             // Inject site cookies if available
@@ -166,13 +175,9 @@ public class UserscriptHttpHandler {
                 }
             } catch (Throwable ignored) {}
 
-            // Custom headers
-            if (headers != null) {
-                Iterator<?> keys = headers.keys();
-                while (keys.hasNext()) {
-                    String key = (String) keys.next();
-                    conn.setRequestProperty(key, headers.optString(key));
-                }
+            // Apply custom headers
+            for (Map.Entry<String, String> entry : customHeaders.entrySet()) {
+                conn.setRequestProperty(entry.getKey(), entry.getValue());
             }
 
             // Request body for POST / PUT / PATCH
@@ -211,14 +216,18 @@ public class UserscriptHttpHandler {
                 }
             }
 
-            // Handle cross-protocol redirects or when followRedirects fails
+            // Handle cross-protocol/cross-origin redirects according to RFC 7235 & Fetch standard
             if (statusCode == HttpURLConnection.HTTP_MOVED_PERM ||
                 statusCode == HttpURLConnection.HTTP_MOVED_TEMP ||
                 statusCode == HttpURLConnection.HTTP_SEE_OTHER ||
                 statusCode == 307 || statusCode == 308) {
                 String loc = conn.getHeaderField("Location");
                 if (loc != null && !loc.trim().isEmpty()) {
-                    currentUrl = new URL(new URL(currentUrl), loc.trim()).toString();
+                    URL nextUrl = new URL(new URL(currentUrl), loc.trim());
+                    if (!isSameOrigin(new URL(currentUrl), nextUrl)) {
+                        stripSensitiveHeadersOnCrossDomain(customHeaders);
+                    }
+                    currentUrl = nextUrl.toString();
                     conn.disconnect();
                     if (statusCode == HttpURLConnection.HTTP_SEE_OTHER
                         || statusCode == HttpURLConnection.HTTP_MOVED_PERM
@@ -343,5 +352,27 @@ public class UserscriptHttpHandler {
                 }
             }
         });
+    }
+
+    private static boolean isSameOrigin(URL a, URL b) {
+        if (a == null || b == null) return false;
+        String protoA = a.getProtocol() != null ? a.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
+        String protoB = b.getProtocol() != null ? b.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
+        String hostA = a.getHost() != null ? a.getHost().toLowerCase(java.util.Locale.ROOT) : "";
+        String hostB = b.getHost() != null ? b.getHost().toLowerCase(java.util.Locale.ROOT) : "";
+        int portA = a.getPort() != -1 ? a.getPort() : a.getDefaultPort();
+        int portB = b.getPort() != -1 ? b.getPort() : b.getDefaultPort();
+        return protoA.equals(protoB) && hostA.equals(hostB) && portA == portB;
+    }
+
+    private static void stripSensitiveHeadersOnCrossDomain(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) return;
+        Iterator<String> it = headers.keySet().iterator();
+        while (it.hasNext()) {
+            String k = it.next().toLowerCase(java.util.Locale.ROOT);
+            if ("authorization".equals(k) || "cookie".equals(k) || "proxy-authorization".equals(k)) {
+                it.remove();
+            }
+        }
     }
 }

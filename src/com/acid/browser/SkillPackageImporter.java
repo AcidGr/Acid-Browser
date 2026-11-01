@@ -49,10 +49,12 @@ public class SkillPackageImporter {
 
     private final SkillManager mManager;
     private final File mSkillsDir;
+    private final SkillStorageVault mVault;
 
     public SkillPackageImporter(SkillManager manager) {
         mManager = manager;
         mSkillsDir = manager != null ? manager.getSkillsDir() : null;
+        mVault = mSkillsDir != null ? new SkillStorageVault(mSkillsDir) : null;
     }
 
     /**
@@ -171,15 +173,15 @@ public class SkillPackageImporter {
     }
 
     public SkillManager.ImportResult importFromGitHubDirectory(GitHubSkillCoordinates gh) {
-        if (mSkillsDir == null) return SkillManager.ImportResult.error("技能目录未就绪");
+        if (mSkillsDir == null || mVault == null) return SkillManager.ImportResult.error("技能目录未就绪");
         try {
-            String dirSlug = gh.path.isEmpty()
+            String rawSlug = gh.path.isEmpty()
                 ? gh.repo
                 : gh.path.substring(gh.path.lastIndexOf('/') + 1);
-            dirSlug = sanitizeSlug(dirSlug);
-            if (dirSlug.isEmpty()) dirSlug = "imported_skill";
+            SkillSlug slug = SkillSlug.from(rawSlug, "imported_skill");
+            String dirSlug = slug.value();
 
-            File targetDir = new File(mSkillsDir, dirSlug);
+            File targetDir = mVault.resolveSkillDir(slug);
             int[] fileCounter = new int[] { 0 };
             long[] byteCounter = new long[] { 0L };
 
@@ -190,7 +192,7 @@ public class SkillPackageImporter {
             }
             File entry = SkillManager.findDirectorySkillEntry(targetDir);
             if (entry == null) {
-                SkillManager.deleteRecursive(targetDir);
+                mVault.deleteSkillDir(slug);
                 return SkillManager.ImportResult.error("该目录下未包含 SKILL.md 或任何 .md 技能主文档");
             }
 
@@ -285,14 +287,12 @@ public class SkillPackageImporter {
         if (zipBytes == null || zipBytes.length == 0) {
             return SkillManager.ImportResult.error("ZIP 压缩包为空");
         }
-        if (mSkillsDir == null) {
+        if (mSkillsDir == null || mVault == null) {
             return SkillManager.ImportResult.error("技能目录未就绪");
         }
-        String slug = sanitizeSlug(fallbackSlug);
-        if (slug.isEmpty()) slug = "imported_skill";
+        SkillSlug slug = SkillSlug.from(fallbackSlug, "imported_skill");
 
-        File tempExtractDir = new File(mSkillsDir, ".tmp_zip_" + System.currentTimeMillis());
-        tempExtractDir.mkdirs();
+        File tempExtractDir = mVault.createStagingDir();
 
         try {
             ZipInputStream zis = new ZipInputStream(new java.io.ByteArrayInputStream(zipBytes));
@@ -335,7 +335,7 @@ public class SkillPackageImporter {
             zis.close();
 
             if (fileCount == 0) {
-                SkillManager.deleteRecursive(tempExtractDir);
+                SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
                 return SkillManager.ImportResult.error("ZIP 包中未找到有效文件");
             }
 
@@ -343,33 +343,31 @@ public class SkillPackageImporter {
             File[] topChildren = tempExtractDir.listFiles();
             if (topChildren != null && topChildren.length == 1 && topChildren[0].isDirectory()) {
                 sourceRoot = topChildren[0];
-                if ("imported_skill".equals(slug) || slug.endsWith(".zip")) {
-                    slug = sanitizeSlug(sourceRoot.getName());
+                if ("imported_skill".equals(slug.value()) || slug.value().endsWith(".zip")) {
+                    slug = SkillSlug.from(sourceRoot.getName(), slug.value());
                 }
             }
 
             File entryMd = SkillManager.findDirectorySkillEntry(sourceRoot);
             if (entryMd == null) {
-                SkillManager.deleteRecursive(tempExtractDir);
+                SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
                 return SkillManager.ImportResult.error("ZIP 包中未找到 SKILL.md 或任何 .md 技能文档");
             }
 
-            File finalDir = new File(mSkillsDir, slug);
-            if (finalDir.exists()) {
-                SkillManager.deleteRecursive(finalDir);
+            File finalDir = mVault.promoteStagingDir(sourceRoot, slug);
+            if (!sourceRoot.equals(tempExtractDir)) {
+                SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
             }
-            moveDirectoryRecursive(sourceRoot, finalDir);
-            SkillManager.deleteRecursive(tempExtractDir);
 
             if (mManager != null) mManager.notifyExternalMutation();
             File finalEntry = SkillManager.findDirectorySkillEntry(finalDir);
-            String relEntry = slug + "/" + (finalEntry != null ? finalEntry.getName() : "SKILL.md");
+            String relEntry = slug.value() + "/" + (finalEntry != null ? finalEntry.getName() : "SKILL.md");
             SkillManager.SkillMeta meta = (finalEntry != null && mManager != null)
                 ? mManager.findSkillMetaForFile(finalEntry)
                 : null;
-            return SkillManager.ImportResult.ok(relEntry, meta != null ? meta.title : slug, fileCount);
+            return SkillManager.ImportResult.ok(relEntry, meta != null ? meta.title : slug.value(), fileCount);
         } catch (Exception e) {
-            SkillManager.deleteRecursive(tempExtractDir);
+            SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
             return SkillManager.ImportResult.error("解压技能包失败: " + e.getMessage());
         }
     }
@@ -517,10 +515,6 @@ public class SkillPackageImporter {
     }
 
     public static String sanitizeSlug(String raw) {
-        if (raw == null) return "";
-        String s = raw.trim().replaceAll("[^a-zA-Z0-9_\\-\\u4e00-\\u9fa5]", "_");
-        while (s.startsWith("_") || s.startsWith("-")) s = s.substring(1);
-        while (s.endsWith("_") || s.endsWith("-")) s = s.substring(0, s.length() - 1);
-        return s;
+        return SkillSlug.sanitize(raw);
     }
 }

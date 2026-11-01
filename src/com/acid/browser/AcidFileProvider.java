@@ -38,26 +38,50 @@ public class AcidFileProvider extends ContentProvider {
 
     @Override
     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+        File targetFile = resolveSafeFile(uri);
+        return ParcelFileDescriptor.open(targetFile, ParcelFileDescriptor.MODE_READ_ONLY);
+    }
+
+    /**
+     * Resolves a Content URI to a local File while strictly verifying that the resolved canonical
+     * path resides exclusively inside an authorized Download directory, preventing path traversal.
+     */
+    private File resolveSafeFile(Uri uri) throws FileNotFoundException {
         if (uri == null) throw new FileNotFoundException("Null URI");
         String fileName = uri.getLastPathSegment();
-        if (fileName == null || fileName.isEmpty()) {
+        if (fileName == null || fileName.trim().isEmpty() || ".".equals(fileName) || "..".equals(fileName)) {
             throw new FileNotFoundException("Invalid filename in URI: " + uri);
         }
+
         File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        File targetFile = new File(downloadDir, fileName);
-        if (!targetFile.exists()) {
+        File targetFile = resolveAndVerifyBoundary(downloadDir, fileName);
+
+        if (targetFile == null || !targetFile.exists()) {
             Context ctx = getContext();
             if (ctx != null) {
-                File alt = new File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName);
-                if (alt.exists()) {
-                    targetFile = alt;
+                File alt = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (alt != null) {
+                    targetFile = resolveAndVerifyBoundary(alt, fileName);
                 }
             }
         }
-        if (!targetFile.exists()) {
-            throw new FileNotFoundException("File not found: " + fileName);
+
+        if (targetFile == null || !targetFile.exists()) {
+            throw new FileNotFoundException("File not found or access denied: " + fileName);
         }
-        return ParcelFileDescriptor.open(targetFile, ParcelFileDescriptor.MODE_READ_ONLY);
+        return targetFile;
+    }
+
+    private static File resolveAndVerifyBoundary(File baseDir, String relativeName) {
+        if (baseDir == null) return null;
+        try {
+            File baseCanon = baseDir.getCanonicalFile();
+            File target = new File(baseCanon, relativeName).getCanonicalFile();
+            if (!target.equals(baseCanon) && target.getPath().startsWith(baseCanon.getPath() + File.separator)) {
+                return target;
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     @Override
@@ -79,8 +103,12 @@ public class AcidFileProvider extends ContentProvider {
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
         if (uri == null) return null;
         String fileName = uri.getLastPathSegment();
-        File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        File targetFile = new File(downloadDir, fileName != null ? fileName : "");
+        File targetFile;
+        try {
+            targetFile = resolveSafeFile(uri);
+        } catch (Exception e) {
+            targetFile = null;
+        }
 
         String[] cols = projection != null ? projection : new String[]{
             OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE
