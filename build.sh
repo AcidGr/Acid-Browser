@@ -85,9 +85,5 @@ fi
     --out "build/Acid-browser.apk" \
     "build/apk/aligned.apk"
 
-# Backward compatibility alias for the legacy typo filename
-cp -f "build/Acid-browser.apk" "build/Acid-broswer.apk"
-cp -f "build/Acid-browser.apk.idsig" "build/Acid-broswer.apk.idsig" 2>/dev/null || true
-
-echo "[Acid-browser] Build successful: build/Acid-browser.apk (alias: build/Acid-broswer.apk)"
+echo "[Acid-browser] Build successful: build/Acid-browser.apk"
 ls -lh build/Acid-browser.apk

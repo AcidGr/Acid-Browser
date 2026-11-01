@@ -22,7 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Pure SVG Vector Icon Engine for Acid-broswer (24x24 viewBox coordinate space).
+ * Pure SVG Vector Icon Engine for Acid-browser (24x24 viewBox coordinate space).
  * Zero emoji, crisp anti-aliased vector geometry at any screen DPI.
  */
 public class AcidIcons {

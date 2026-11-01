@@ -1,5 +1,5 @@
 /**
- * Acid-broswer In-Page Agent Bridge Runtime (v0.1.0)
+ * Acid-browser In-Page Agent Bridge Runtime (v0.1.0)
  * Combines DOM semantic distillation, Set-of-Marks (SoM) overlay,
  * anti-occlusion top-element verification, React/Vue-safe form filling,
  * and Desktop/Mobile viewport spoofing.
