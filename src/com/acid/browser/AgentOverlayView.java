@@ -8,7 +8,6 @@ import android.graphics.RectF;
 import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
-import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -79,7 +78,7 @@ public class AgentOverlayView extends View {
         mTipCardBorderPaint.setColor(Color.argb(180, 16, 185, 129)); // emerald green border
 
         mTipTitlePaint.setColor(AcidTheme.DARK_ACCENT);
-        mTipTitlePaint.setTextSize(AcidTheme.spPx(context, AcidTheme.SP_H3_CARD));
+        mTipTitlePaint.setTextSize(AcidTheme.spPx(context, AcidTheme.SP_HERO));
         mTipTitlePaint.setFakeBoldText(true);
         mTipTitlePaint.setTextAlign(Paint.Align.CENTER);
 

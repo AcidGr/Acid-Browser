@@ -1,7 +1,6 @@
 package com.acid.browser;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -10,7 +9,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -32,11 +30,6 @@ import java.util.TreeMap;
 public class AcidAgentLoop {
 
     private static final String TAG = "AcidAgentLoop";
-
-    private static final String PREF_AGENT = "acid_agent_config";
-    private static final String KEY_BASE_URL = "base_url";
-    private static final String KEY_API_KEY = "api_key";
-    private static final String KEY_MODEL = "model_name";
 
     public static final String DEFAULT_BASE_URL = "https://api.deepseek.com/v1";
     public static final String DEFAULT_MODEL = "deepseek-flash";
@@ -91,29 +84,17 @@ public class AcidAgentLoop {
 
     public String getBaseUrl() {
         AcidModelStore.ConfiguredProvider p = mModelStore.getActiveProvider();
-        if (p != null && !p.baseUrl.isEmpty()) {
-            return p.baseUrl;
-        }
-        SharedPreferences sp = mContext.getSharedPreferences(PREF_AGENT, Context.MODE_PRIVATE);
-        return sp.getString(KEY_BASE_URL, DEFAULT_BASE_URL);
+        return (p != null && !p.baseUrl.isEmpty()) ? p.baseUrl : DEFAULT_BASE_URL;
     }
 
     public String getApiKey() {
         AcidModelStore.ConfiguredProvider p = mModelStore.getActiveProvider();
-        if (p != null) {
-            return p.apiKey != null ? p.apiKey : "";
-        }
-        SharedPreferences sp = mContext.getSharedPreferences(PREF_AGENT, Context.MODE_PRIVATE);
-        return sp.getString(KEY_API_KEY, "");
+        return (p != null && p.apiKey != null) ? p.apiKey : "";
     }
 
     public String getModelName() {
         AcidModelStore.ModelEntry m = mModelStore.getActiveModel();
-        if (m != null && !m.id.isEmpty()) {
-            return m.id;
-        }
-        SharedPreferences sp = mContext.getSharedPreferences(PREF_AGENT, Context.MODE_PRIVATE);
-        return sp.getString(KEY_MODEL, DEFAULT_MODEL);
+        return (m != null && !m.id.isEmpty()) ? m.id : DEFAULT_MODEL;
     }
 
     public String getModelStatusDisplay() {
@@ -303,7 +284,7 @@ public class AcidAgentLoop {
 
     private void runAgentLoopInternal(AcidSessionStore.AgentSession session, String userPrompt) {
         try {
-            JSONObject initObs = mController.observeSync(mController.isSomEnabled(), true, false);
+            JSONObject initObs = mController.getAutomationDriver().observeSync(mController.isSomEnabled(), true, false);
             String initSnapshot = initObs != null ? initObs.optString("compactText", "") : "";
 
             synchronized (mSessionStore) {
@@ -642,8 +623,7 @@ public class AcidAgentLoop {
 
         int code = conn.getResponseCode();
         if (code < 200 || code >= 300) {
-            InputStream es = conn.getErrorStream();
-            String errStr = readStreamUtf8(es);
+            String errStr = AcidIo.readStreamUtf8(conn.getErrorStream());
             conn.disconnect();
             throw new Exception("HTTP " + code + ": " + (errStr.length() > 300 ? errStr.substring(0, 300) : errStr));
         }
@@ -937,18 +917,6 @@ public class AcidAgentLoop {
             resultMsg.put("tool_calls", assembledToolCalls);
         }
         return resultMsg;
-    }
-
-    private String readStreamUtf8(InputStream is) throws Exception {
-        if (is == null) return "";
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096];
-        int n;
-        while ((n = is.read(buf)) != -1) {
-            baos.write(buf, 0, n);
-        }
-        is.close();
-        return new String(baos.toByteArray(), StandardCharsets.UTF_8);
     }
 
     public static String summarizeToolArgs(String name, JSONObject args) {

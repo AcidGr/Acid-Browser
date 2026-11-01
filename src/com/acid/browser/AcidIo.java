@@ -1,0 +1,119 @@
+package com.acid.browser;
+
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.util.Log;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Shared UTF-8 file/stream/asset I/O and system clipboard utility.
+ *
+ * <p>Eliminates duplicated byte-buffer loops and {@link ClipboardManager} boilerplate across
+ * stores, managers, sandbox tools, and UI sheets.
+ */
+public final class AcidIo {
+
+    private static final String TAG = "AcidIo";
+
+    private AcidIo() {}
+
+    public static String readStreamUtf8(InputStream is) throws IOException {
+        if (is == null) return "";
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = is.read(buf)) != -1) {
+                baos.write(buf, 0, n);
+            }
+            return new String(baos.toByteArray(), StandardCharsets.UTF_8);
+        } finally {
+            try {
+                is.close();
+            } catch (IOException ignored) {}
+        }
+    }
+
+    public static String readFileUtf8(File file) throws IOException {
+        if (file == null) throw new IOException("File is null");
+        return readStreamUtf8(new FileInputStream(file));
+    }
+
+    public static String readFileUtf8OrEmpty(File file, long maxBytes) {
+        if (file == null || !file.exists() || !file.isFile()) return "";
+        long len = file.length();
+        if (maxBytes > 0 && len > maxBytes) {
+            Log.w(TAG, "File exceeds size cap (" + len + " > " + maxBytes + "): " + file.getAbsolutePath());
+            return "";
+        }
+        try {
+            return readFileUtf8(file);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to read file: " + file.getAbsolutePath(), e);
+            return "";
+        }
+    }
+
+    public static void writeFileUtf8(File file, String content) throws IOException {
+        if (file == null) throw new IOException("Target file is null");
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Cannot create parent directory: " + parent.getAbsolutePath());
+        }
+        FileOutputStream fos = new FileOutputStream(file);
+        try {
+            byte[] bytes = (content != null ? content : "").getBytes(StandardCharsets.UTF_8);
+            fos.write(bytes);
+            fos.flush();
+        } finally {
+            try {
+                fos.close();
+            } catch (IOException ignored) {}
+        }
+    }
+
+    public static boolean writeFileUtf8Safe(File file, String content) {
+        try {
+            writeFileUtf8(file, content);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to write file: " + (file != null ? file.getAbsolutePath() : "null"), e);
+            return false;
+        }
+    }
+
+    public static String readAssetUtf8OrEmpty(Context context, String assetPath) {
+        if (context == null || assetPath == null) return "";
+        try {
+            return readStreamUtf8(context.getAssets().open(assetPath));
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to read asset: " + assetPath, e);
+            return "";
+        }
+    }
+
+    public static boolean copyToClipboard(Context context, String label, String text, String successMessage) {
+        if (context == null || text == null || text.isEmpty()) return false;
+        try {
+            ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(ClipData.newPlainText(label != null ? label : "text", text));
+                if (successMessage != null && !successMessage.isEmpty()) {
+                    AcidFeedback.ok(context, successMessage);
+                }
+                return true;
+            }
+        } catch (Exception e) {
+            AcidFeedback.error(context, "复制失败: " + e.getMessage());
+        }
+        return false;
+    }
+}

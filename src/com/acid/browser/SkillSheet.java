@@ -1,6 +1,5 @@
 package com.acid.browser;
 
-import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.text.TextUtils;
@@ -53,9 +52,8 @@ public class SkillSheet extends AcidBottomSheetView {
         setRootPage(buildSkillsListPage());
     }
 
-    public void showSkills() {
+    public void renderContent() {
         setRootPage(buildSkillsListPage());
-        show();
     }
 
     @Override
@@ -173,11 +171,7 @@ public class SkillSheet extends AcidBottomSheetView {
                     new OnClickListener() {
                         @Override
                         public void onClick(View v) {
-                            ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
-                            if (cm != null) {
-                                cm.setPrimaryClip(ClipData.newPlainText("Acid Skill", content));
-                                AcidFeedback.ok(ctx, "已复制技能 Markdown 全文");
-                            }
+                            AcidIo.copyToClipboard(ctx, "Acid Skill", content, "已复制技能 Markdown 全文");
                         }
                     }
                 );

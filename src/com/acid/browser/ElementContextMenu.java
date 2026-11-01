@@ -1,12 +1,9 @@
 package com.acid.browser;
 
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.view.View;
-import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -101,7 +98,7 @@ public final class ElementContextMenu {
                 items.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_DOWNLOAD, "下载图片", new Runnable() {
                     @Override
                     public void run() {
-                        controller.startDownload(imageUrl, null, null, null, "image/*", 0);
+                        controller.getDownloadCoordinator().startDownload(imageUrl, null, null, null, "image/*", 0);
                     }
                 }));
             }
@@ -138,15 +135,7 @@ public final class ElementContextMenu {
     }
 
     private static void copyText(Context context, String text, String toastMsg) {
-        try {
-            ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText("text", text));
-                AcidFeedback.ok(context, toastMsg);
-            }
-        } catch (Exception e) {
-            AcidFeedback.error(context, "复制失败");
-        }
+        AcidIo.copyToClipboard(context, "text", text, toastMsg);
     }
 
     private static void shareText(Context context, String text) {

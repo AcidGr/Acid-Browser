@@ -1,8 +1,6 @@
 package com.acid.browser;
 
 import android.app.Dialog;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Typeface;
 import android.util.TypedValue;
@@ -54,11 +52,6 @@ public class McpSheet extends AcidBottomSheetView {
     @Override
     protected void onResetToRootPage() {
         setRootPage(buildMcpPage());
-    }
-
-    public void showMcp() {
-        setRootPage(buildMcpPage());
-        show();
     }
 
     @Override
@@ -345,15 +338,6 @@ public class McpSheet extends AcidBottomSheetView {
     }
 
     private static void copyToClipboard(Context context, String content, String label) {
-        if (context == null || content == null) return;
-        try {
-            ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText("mcp_" + label, content));
-                AcidFeedback.ok(context, "已复制" + label + "到剪贴板");
-            }
-        } catch (Exception e) {
-            AcidFeedback.error(context, "复制失败: " + e.getMessage());
-        }
+        AcidIo.copyToClipboard(context, "mcp_" + label, content, "已复制" + label + "到剪贴板");
     }
 }

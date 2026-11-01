@@ -9,8 +9,6 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -382,10 +380,11 @@ public class AcidSandboxTools {
 
     private ToolExecResult executeBrowserTool(final JSONObject args) throws Exception {
         String action = args.optString("action", "observe").toLowerCase().trim();
+        final WebAutomationDriver driver = mController.getAutomationDriver();
 
         if ("observe".equals(action)) {
             boolean som = args.has("som") ? args.optBoolean("som", mController.isSomEnabled()) : mController.isSomEnabled();
-            JSONObject obs = mController.observeSync(som, true, false);
+            JSONObject obs = driver.observeSync(som, true, false);
             return new ToolExecResult(formatObservationWithActionHeader("OBSERVE", null, obs), false, null);
         }
 
@@ -401,26 +400,26 @@ public class AcidSandboxTools {
                     url = "file://" + possibleLocal.getAbsolutePath();
                 }
             }
-            JSONObject obs = mController.navigateSync(url, 3800);
+            JSONObject obs = driver.navigateSync(url, 3800);
             return new ToolExecResult(formatObservationWithActionHeader("NAVIGATE -> " + url, null, obs), false, null);
         }
 
         if ("click".equals(action)) {
             JSONObject clickRes;
             if (args.has("x") && args.has("y")) {
-                clickRes = mController.clickCoordinateSync((float) args.optDouble("x", 0), (float) args.optDouble("y", 0));
+                clickRes = driver.clickCoordinateSync((float) args.optDouble("x", 0), (float) args.optDouble("y", 0));
             } else if (args.has("ref") || args.has("text") || args.has("selector")) {
                 JSONObject targetOpts = new JSONObject();
                 if (args.has("ref")) targetOpts.put("ref", args.optString("ref").trim());
                 if (args.has("text")) targetOpts.put("text", args.optString("text").trim());
                 if (args.has("selector")) targetOpts.put("selector", args.optString("selector").trim());
                 if (args.has("exact")) targetOpts.put("exact", args.optBoolean("exact", false));
-                clickRes = mController.clickTargetSync(targetOpts, true);
+                clickRes = driver.clickTargetSync(targetOpts, true);
             } else {
                 return new ToolExecResult("Error: browser click requires 'ref' (e.g. 'e1'), semantic 'text', 'selector', or ('x', 'y') coordinates.", false, null);
             }
             Thread.sleep(380); // Let page animations/DOM settle after click
-            JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
+            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             return new ToolExecResult(formatObservationWithActionHeader("CLICK", clickRes, obs), false, null);
         }
 
@@ -431,22 +430,22 @@ public class AcidSandboxTools {
             JSONObject targetOpts = new JSONObject();
             if (args.has("ref")) targetOpts.put("ref", args.optString("ref").trim());
             if (args.has("selector")) targetOpts.put("selector", args.optString("selector").trim());
-            JSONObject fillRes = mController.fillTargetSync(targetOpts, text, clear, submit);
+            JSONObject fillRes = driver.fillSync(targetOpts, text, clear, submit);
             if (submit) {
                 Thread.sleep(650);
             } else {
                 Thread.sleep(150);
             }
-            JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
+            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             return new ToolExecResult(formatObservationWithActionHeader("FILL", fillRes, obs), false, null);
         }
 
         if ("select".equals(action)) {
             String ref = args.optString("ref", "").trim();
             String text = args.optString("text", "");
-            JSONObject selRes = mController.selectOptionSync(ref, text);
+            JSONObject selRes = driver.selectOptionSync(ref, text);
             Thread.sleep(200);
-            JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
+            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             return new ToolExecResult(formatObservationWithActionHeader("SELECT", selRes, obs), false, null);
         }
 
@@ -455,9 +454,9 @@ public class AcidSandboxTools {
             double amount = args.optDouble("amount", 0.75);
             String ref = args.optString("ref", null);
             if (ref != null && ref.isEmpty()) ref = null;
-            JSONObject scrRes = mController.scrollSync(dir, amount, ref);
+            JSONObject scrRes = driver.scrollSync(dir, amount, ref);
             Thread.sleep(250);
-            JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
+            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             return new ToolExecResult(formatObservationWithActionHeader("SCROLL " + dir, scrRes, obs), false, null);
         }
 
@@ -469,7 +468,7 @@ public class AcidSandboxTools {
             if ("ms".equalsIgnoreCase(cond) && args.has("ms")) {
                 quietMs = args.optLong("ms", 1000);
             }
-            JSONObject waitRes = mController.waitSync(cond, target, quietMs, timeoutMs);
+            JSONObject waitRes = driver.waitConditionSync(cond, target, quietMs, timeoutMs);
             boolean sat = waitRes.optBoolean("satisfied", false);
             String status = sat ? "✓ SATISFIED" : ("✗ " + waitRes.optString("error_code", "NOT_SATISFIED"));
             String title = "WAIT " + waitRes.optString("condition", cond).toUpperCase()
@@ -484,7 +483,7 @@ public class AcidSandboxTools {
         if ("eval".equals(action)) {
             String code = args.optString("code", "");
             long timeout = args.optLong("timeout_ms", 10000);
-            String raw = mController.evaluateJsAsync(code, timeout);
+            String raw = driver.evaluateJsAsync(code, timeout);
             return new ToolExecResult("=== [BROWSER ACTION: EVAL] ===\n" + raw, false, null);
         }
 
@@ -506,7 +505,7 @@ public class AcidSandboxTools {
             });
             latch.await(2000, TimeUnit.MILLISECONDS);
             Thread.sleep(600);
-            JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
+            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             return new ToolExecResult(formatObservationWithActionHeader("SET_MODE", null, obs), false, null);
         }
 
@@ -542,7 +541,7 @@ public class AcidSandboxTools {
                   .append("[tab_id=").append(t.id).append("] ")
                   .append(t.title).append(" (").append(t.url).append(")\n");
             }
-            JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
+            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             sb.append("\n").append(obs.optString("compactText", ""));
             return new ToolExecResult(sb.toString(), false, null);
         }
@@ -566,7 +565,7 @@ public class AcidSandboxTools {
             });
             latch.await(2000, TimeUnit.MILLISECONDS);
             Thread.sleep(500);
-            JSONObject obs = mController.observeSync(mController.isSomEnabled(), true, false);
+            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             return new ToolExecResult(formatObservationWithActionHeader(action.toUpperCase(), null, obs), false, null);
         }
 
@@ -666,7 +665,7 @@ public class AcidSandboxTools {
             return "Error: File not found: " + f.getAbsolutePath();
         }
         try {
-            String content = readFileUtf8(f);
+            String content = AcidIo.readFileUtf8(f);
             String[] lines = content.split("\n", -1);
             StringBuilder sb = new StringBuilder();
             sb.append("File: ").append(f.getAbsolutePath())
@@ -710,54 +709,45 @@ public class AcidSandboxTools {
         }
 
         try {
-            File parent = f.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
-            writeFileUtf8(f, content);
+            AcidIo.writeFileUtf8(f, content);
             mController.emitLog("[WRITE] Saved " + f.getName() + " (" + content.length() + " chars)");
-            if (isInsideAdBlock(f)) {
-                AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
-                mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
-            }
-            if ("settings.json".equals(f.getName())) {
-                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadFromJsonFile();
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (reloaded) {
-                            mController.applySettingsHotReload();
-                            mController.emitLog("[SETTINGS] Live hot-reloaded browser settings from settings.json");
-                        }
-                    }
-                });
-            }
-            if ("bookmarks.json".equals(f.getName())) {
-                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadBookmarksFromJsonFile();
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (reloaded) {
-                            mController.emitLog("[BOOKMARKS] Live hot-reloaded bookmarks from bookmarks.json");
-                        }
-                    }
-                });
-            }
-            if ("history.json".equals(f.getName())) {
-                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadHistoryFromJsonFile();
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (reloaded) {
-                            mController.emitLog("[HISTORY] Live hot-reloaded history from history.json");
-                        }
-                    }
-                });
-            }
+            notifyWorkspaceFileMutated(f);
             return "Successfully wrote " + content.length() + " characters to " + f.getAbsolutePath() +
                 " (Accessible in browser via: file://" + f.getAbsolutePath() + ")";
         } catch (Exception e) {
             return "Error writing file: " + e.getMessage();
+        }
+    }
+
+    private void notifyWorkspaceFileMutated(final File f) {
+        if (f == null) return;
+        if (isInsideAdBlock(f)) {
+            AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
+            mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
+            return;
+        }
+        final BrowserDataStore store = mController.getDataStore();
+        if (store == null) return;
+        String name = f.getName();
+        if ("settings.json".equals(name)) {
+            final boolean reloaded = store.reloadFromJsonFile();
+            if (reloaded) {
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        mController.applySettingsHotReload();
+                        mController.emitLog("[SETTINGS] Live hot-reloaded browser settings from settings.json");
+                    }
+                });
+            }
+        } else if ("bookmarks.json".equals(name)) {
+            if (store.reloadBookmarksFromJsonFile()) {
+                mController.emitLog("[BOOKMARKS] Live hot-reloaded bookmarks from bookmarks.json");
+            }
+        } else if ("history.json".equals(name)) {
+            if (store.reloadHistoryFromJsonFile()) {
+                mController.emitLog("[HISTORY] Live hot-reloaded history from history.json");
+            }
         }
     }
 
@@ -800,7 +790,7 @@ public class AcidSandboxTools {
             return "Error: old_string cannot be empty.";
         }
         try {
-            String content = readFileUtf8(f);
+            String content = AcidIo.readFileUtf8(f);
             int firstIdx = content.indexOf(oldStr);
             if (firstIdx < 0) {
                 return "Error: old_string not found in " + f.getAbsolutePath();
@@ -815,46 +805,9 @@ public class AcidSandboxTools {
                 }
                 updated = content.substring(0, firstIdx) + newStr + content.substring(firstIdx + oldStr.length());
             }
-            writeFileUtf8(f, updated);
+            AcidIo.writeFileUtf8(f, updated);
             mController.emitLog("[EDIT] Updated " + f.getName());
-            if (isInsideAdBlock(f)) {
-                AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
-                mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
-            }
-            if ("settings.json".equals(f.getName())) {
-                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadFromJsonFile();
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (reloaded) {
-                            mController.applySettingsHotReload();
-                            mController.emitLog("[SETTINGS] Live hot-reloaded browser settings from settings.json");
-                        }
-                    }
-                });
-            }
-            if ("bookmarks.json".equals(f.getName())) {
-                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadBookmarksFromJsonFile();
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (reloaded) {
-                            mController.emitLog("[BOOKMARKS] Live hot-reloaded bookmarks from bookmarks.json");
-                        }
-                    }
-                });
-            }
-            if ("history.json".equals(f.getName())) {
-                final boolean reloaded = mController.getDataStore() != null && mController.getDataStore().reloadHistoryFromJsonFile();
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (reloaded) {
-                            mController.emitLog("[HISTORY] Live hot-reloaded history from history.json");
-                        }
-                    }
-                });
-            }
+            notifyWorkspaceFileMutated(f);
             return "Successfully edited " + f.getAbsolutePath();
         } catch (Exception e) {
             return "Error editing file: " + e.getMessage();
@@ -936,23 +889,5 @@ public class AcidSandboxTools {
             }
         }
         return false;
-    }
-
-    private String readFileUtf8(File f) throws Exception {
-        FileInputStream fis = new FileInputStream(f);
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096];
-        int n;
-        while ((n = fis.read(buf)) != -1) {
-            baos.write(buf, 0, n);
-        }
-        fis.close();
-        return new String(baos.toByteArray(), StandardCharsets.UTF_8);
-    }
-
-    private void writeFileUtf8(File f, String content) throws Exception {
-        FileOutputStream fos = new FileOutputStream(f);
-        fos.write(content.getBytes(StandardCharsets.UTF_8));
-        fos.close();
     }
 }

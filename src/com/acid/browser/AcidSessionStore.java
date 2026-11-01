@@ -7,11 +7,7 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -223,7 +219,7 @@ public class AcidSessionStore {
             for (File f : files) {
                 if (f.isFile() && f.getName().endsWith(".json")) {
                     try {
-                        String raw = readFileUtf8(f);
+                        String raw = AcidIo.readFileUtf8(f);
                         JSONObject o = new JSONObject(raw);
                         String id = o.optString("id", f.getName().replace(".json", ""));
                         String title = o.optString("title", "新对话");
@@ -299,20 +295,7 @@ public class AcidSessionStore {
             root.put("apiMessages", apiArr);
 
             File f = new File(mSessionsDir, s.id + ".json");
-            FileOutputStream fos = null;
-            try {
-                fos = new FileOutputStream(f);
-                fos.write(root.toString().getBytes(StandardCharsets.UTF_8));
-                fos.flush();
-            } finally {
-                if (fos != null) {
-                    try {
-                        fos.close();
-                    } catch (Exception e) {
-                        Log.w(TAG, "Failed to close session file " + f.getName(), e);
-                    }
-                }
-            }
+            AcidIo.writeFileUtf8(f, root.toString());
         } catch (Exception e) {
             // Losing a session silently is unrecoverable for the user, so always log it.
             Log.e(TAG, "Failed to persist session " + (s != null ? s.id : "?"), e);
@@ -323,7 +306,7 @@ public class AcidSessionStore {
         File f = new File(mSessionsDir, id + ".json");
         if (!f.exists() || !f.isFile()) return null;
         try {
-            String raw = readFileUtf8(f);
+            String raw = AcidIo.readFileUtf8(f);
             JSONObject root = new JSONObject(raw);
             AgentSession s = new AgentSession();
             s.id = root.optString("id", id);
@@ -358,17 +341,5 @@ public class AcidSessionStore {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    private String readFileUtf8(File f) throws Exception {
-        FileInputStream fis = new FileInputStream(f);
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096];
-        int n;
-        while ((n = fis.read(buf)) != -1) {
-            baos.write(buf, 0, n);
-        }
-        fis.close();
-        return new String(baos.toByteArray(), StandardCharsets.UTF_8);
     }
 }
