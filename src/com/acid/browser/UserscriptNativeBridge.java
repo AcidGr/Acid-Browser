@@ -139,9 +139,11 @@ public class UserscriptNativeBridge {
             String scriptId = args.optString("scriptId", "default");
             UserscriptMeta meta = (mResolver != null) ? mResolver.findScript(scriptId) : null;
             String[] needed = grantsFor(action);
-            if (meta != null && needed.length > 0 && !meta.isGranted(needed)) {
-                Log.w(TAG, "Rejected '" + action + "' for " + scriptId + ": missing @grant");
-                return "";
+            if (needed.length > 0) {
+                if (mResolver != null && (meta == null || !meta.isGranted(needed))) {
+                    Log.w(TAG, "Rejected '" + action + "' for " + scriptId + ": unregistered script or missing @grant");
+                    return "";
+                }
             }
 
             if ("setValue".equals(action)) {
@@ -149,7 +151,7 @@ public class UserscriptNativeBridge {
                 Object value = args.opt("value");
                 if (!name.isEmpty() && mStorage != null) {
                     Object old = mStorage.getValue(scriptId, name, null);
-                    mStorage.setValue(scriptId, name, value);
+                    mStorage.setValue(scriptId, name, value, true);
                     if (mValueSink != null) {
                         mValueSink.onValueChanged(this, scriptId, name, old, value);
                     }
@@ -173,7 +175,7 @@ public class UserscriptNativeBridge {
                 String name = args.optString("name", "");
                 if (!name.isEmpty() && mStorage != null) {
                     Object old = mStorage.getValue(scriptId, name, null);
-                    boolean ok = mStorage.deleteValue(scriptId, name);
+                    boolean ok = mStorage.deleteValue(scriptId, name, true);
                     if (ok && mValueSink != null) {
                         mValueSink.onValueChanged(this, scriptId, name, old, null);
                     }

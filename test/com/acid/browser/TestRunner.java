@@ -315,6 +315,22 @@ public final class TestRunner {
             "{\"secret\":\"tok123\",\"scriptId\":\"b.user.js\",\"name\":\"k\"}").contains("value"),
             "granted getValue with token works");
 
+        // Security: fake/unregistered scriptId must be rejected and not bypass grant checks!
+        assertEquals("", bridge.call("setValue",
+            "{\"secret\":\"tok123\",\"scriptId\":\"unregistered.user.js\",\"name\":\"k\",\"value\":\"v\"}"),
+            "setValue denied: unregistered script cannot bypass @grant");
+        assertEquals("unset", storage.getValue("unregistered.user.js", "k", "unset"),
+            "unregistered script must not write storage");
+        assertEquals("", bridge.call("xmlhttpRequest",
+            "{\"secret\":\"tok123\",\"scriptId\":\"unregistered.user.js\",\"url\":\"https://example.org\"}"),
+            "xmlhttpRequest denied: unregistered script cannot invoke network");
+
+        // Storage debounce and flushSync
+        storage.setValue("b.user.js", "debounced_k", "debounced_v", true);
+        storage.flushSync();
+        assertEquals("debounced_v", storage.getValue("b.user.js", "debounced_k", "unset"),
+            "flushSync guarantees debounced value is written");
+
         // Shaper: token embedded in closure, never on window; ungranted APIs are hidden
         String shaped = UserscriptShaper.shape(strict, new ArrayList<String>(), "tok123");
         assertTrue(shaped.contains("\"tok123\""), "token embedded in closure");

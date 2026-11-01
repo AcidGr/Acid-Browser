@@ -349,6 +349,13 @@ public class UserscriptManager {
             evaluate(wv, meta, cached);
             return;
         }
+
+        String urlBeforeFetch = null;
+        try {
+            urlBeforeFetch = wv.getUrl();
+        } catch (Exception ignored) {}
+        final String originUrl = urlBeforeFetch;
+
         // Some @require is not on disk yet: fetch off the UI thread, then inject.
         AcidAsync.run(new AcidAsync.Task<List<String>>() {
             @Override
@@ -358,15 +365,32 @@ public class UserscriptManager {
         }, new AcidAsync.Callback<List<String>>() {
             @Override
             public void onSuccess(List<String> requires) {
+                if (!isPageStillValid(wv, meta, originUrl)) return;
                 evaluate(wv, meta, requires);
             }
 
             @Override
             public void onError(Exception error) {
                 Log.w(TAG, "Dependency fetch failed for " + meta.fileName, error);
+                if (!isPageStillValid(wv, meta, originUrl)) return;
                 evaluate(wv, meta, new ArrayList<String>());
             }
         });
+    }
+
+    private boolean isPageStillValid(WebView wv, UserscriptMeta meta, String originUrl) {
+        if (wv == null) return false;
+        String currentUrl = null;
+        try {
+            currentUrl = wv.getUrl();
+        } catch (Exception ignored) {}
+        if (currentUrl == null || currentUrl.isEmpty()) return false;
+        if (!meta.appliesTo(currentUrl)) {
+            Log.i(TAG, "Aborted async userscript injection for " + meta.fileName
+                + ": page drifted from " + originUrl + " to " + currentUrl);
+            return false;
+        }
+        return true;
     }
 
     private void evaluate(WebView wv, UserscriptMeta meta, List<String> requires) {
