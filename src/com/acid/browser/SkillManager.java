@@ -447,7 +447,7 @@ public class SkillManager {
         return result;
     }
 
-    private static File findDirectorySkillEntry(File dir) {
+    static File findDirectorySkillEntry(File dir) {
         File[] children = dir.listFiles();
         if (children == null || children.length == 0) return null;
 
@@ -662,7 +662,7 @@ public class SkillManager {
         return false;
     }
 
-    private static boolean deleteRecursive(File fileOrDir) {
+    static boolean deleteRecursive(File fileOrDir) {
         if (fileOrDir == null || !fileOrDir.exists()) return false;
         if (fileOrDir.isDirectory()) {
             File[] children = fileOrDir.listFiles();
@@ -893,14 +893,14 @@ public class SkillManager {
         );
     }
 
-    private static String stripBom(String s) {
+    static String stripBom(String s) {
         if (s != null && s.startsWith("\uFEFF")) {
             return s.substring(1);
         }
         return s != null ? s : "";
     }
 
-    private static String unquoteYaml(String s) {
+    static String unquoteYaml(String s) {
         if (s == null) return "";
         String t = s.trim();
         if (t.length() >= 2) {
@@ -912,482 +912,27 @@ public class SkillManager {
     }
 
     // =========================================================================
-    // External Importer: GitHub Folders (Tree), GitHub Files (Blob/Raw), ZIP & URLs
+    // =========================================================================
+    // External Importer Facade (delegates to SkillPackageImporter)
     // =========================================================================
 
-    /**
-     * Coordinates parsed from a GitHub repository URL.
-     */
-    public static class GitHubSkillCoordinates {
-        public final String owner;
-        public final String repo;
-        public final String branch;
-        public final String path;
-        public final boolean isTreeOrFolder;
-
+    public static class GitHubSkillCoordinates extends SkillPackageImporter.GitHubSkillCoordinates {
         public GitHubSkillCoordinates(String owner, String repo, String branch, String path, boolean isTreeOrFolder) {
-            this.owner = owner;
-            this.repo = repo;
-            this.branch = branch;
-            this.path = path;
-            this.isTreeOrFolder = isTreeOrFolder;
+            super(owner, repo, branch, path, isTreeOrFolder);
         }
     }
 
-    /**
-     * Parses GitHub URLs such as:
-     * <ul>
-     *   <li>{@code https://github.com/anthropics/skills/tree/main/skills/frontend-design}</li>
-     *   <li>{@code https://github.com/anthropics/skills/blob/main/skills/frontend-design/SKILL.md}</li>
-     *   <li>{@code https://github.com/owner/my-skill-repo}</li>
-     * </ul>
-     */
     public static GitHubSkillCoordinates parseGitHubUrl(String rawUrl) {
-        if (rawUrl == null) return null;
-        try {
-            URL u = new URL(rawUrl.trim());
-            String host = u.getHost() != null ? u.getHost().toLowerCase(Locale.US) : "";
-            if (!"github.com".equals(host) && !"www.github.com".equals(host)) {
-                return null;
-            }
-            String path = u.getPath();
-            if (path == null) return null;
-            while (path.startsWith("/")) path = path.substring(1);
-            while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
-            if (path.isEmpty()) return null;
-
-            String[] parts = path.split("/");
-            if (parts.length < 2) return null;
-            String owner = parts[0];
-            String repo = parts[1];
-            if (repo.endsWith(".git")) repo = repo.substring(0, repo.length() - 4);
-
-            if (parts.length == 2) {
-                return new GitHubSkillCoordinates(owner, repo, "", "", true);
-            }
-            if (parts.length >= 4 && ("tree".equals(parts[2]) || "blob".equals(parts[2]))) {
-                boolean isTree = "tree".equals(parts[2]);
-                String branch = parts[3];
-                StringBuilder subPath = new StringBuilder();
-                for (int i = 4; i < parts.length; i++) {
-                    if (subPath.length() > 0) subPath.append("/");
-                    subPath.append(URLDecoder.decode(parts[i], "UTF-8"));
-                }
-                String relPath = subPath.toString();
-                // If user pasted a blob URL to .../SKILL.md inside a folder, treat parent folder as package candidate!
-                if (!isTree && (relPath.endsWith("/SKILL.md") || relPath.endsWith("/skill.md"))) {
-                    String parentPath = relPath.substring(0, relPath.lastIndexOf('/'));
-                    return new GitHubSkillCoordinates(owner, repo, branch, parentPath, true);
-                }
-                return new GitHubSkillCoordinates(owner, repo, branch, relPath, isTree);
-            }
-        } catch (Exception ignored) {}
-        return null;
+        SkillPackageImporter.GitHubSkillCoordinates c = SkillPackageImporter.parseGitHubUrl(rawUrl);
+        if (c == null) return null;
+        return new GitHubSkillCoordinates(c.owner, c.repo, c.branch, c.path, c.isTreeOrFolder);
     }
 
-    /**
-     * Imports a skill or multi-file skill package from a GitHub folder link, GitHub blob/raw link,
-     * ZIP archive URL, or direct Markdown URL. Runs network I/O synchronously (call from worker thread).
-     */
     public ImportResult importSkillFromUrl(String rawUrl) {
-        if (rawUrl == null || rawUrl.trim().isEmpty()) {
-            return ImportResult.error("链接不能为空");
-        }
-        String urlStr = rawUrl.trim();
-        if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) {
-            urlStr = "https://" + urlStr;
-        }
-
-        try {
-            // 1. Check if it's a GitHub URL
-            GitHubSkillCoordinates gh = parseGitHubUrl(urlStr);
-            if (gh != null) {
-                if (gh.isTreeOrFolder) {
-                    ImportResult folderRes = importFromGitHubDirectory(gh);
-                    if (folderRes.success) {
-                        return folderRes;
-                    }
-                    // If GitHub API failed and original URL was a blob/SKILL.md link, fall through to raw download
-                    if (!urlStr.contains("/blob/")) {
-                        return folderRes;
-                    }
-                }
-                // Convert GitHub /blob/ URL to raw.githubusercontent.com
-                if (urlStr.contains("github.com/") && urlStr.contains("/blob/")) {
-                    urlStr = urlStr.replaceFirst("https?://(www\\.)?github\\.com/", "https://raw.githubusercontent.com/")
-                                   .replaceFirst("/blob/", "/");
-                }
-            }
-
-            // 2. Check if URL points to a ZIP archive
-            String cleanPath = new URL(urlStr).getPath().toLowerCase(Locale.US);
-            if (cleanPath.endsWith(".zip") || urlStr.contains("/archive/refs/")) {
-                return importFromZipUrl(urlStr);
-            }
-
-            // 3. Direct HTTP(S) download (Markdown or ZIP detected by Content-Type / magic bytes)
-            byte[] data = downloadBytes(urlStr, MAX_IMPORT_TOTAL_BYTES);
-            if (data == null || data.length == 0) {
-                return ImportResult.error("下载内容为空");
-            }
-            // Check ZIP magic header PK\x03\x04
-            if (data.length >= 4 && data[0] == 'P' && data[1] == 'K' && data[2] == 3 && data[3] == 4) {
-                return importFromZipBytes(data, inferSkillSlugFromUrl(urlStr));
-            }
-
-            String content = new String(data, StandardCharsets.UTF_8);
-            if (content.trim().isEmpty()) {
-                return ImportResult.error("下载的文本内容为空");
-            }
-
-            String slug = inferSkillSlugFromUrlAndContent(urlStr, content);
-            String targetFileName = slug.endsWith(".md") ? slug : (slug + ".md");
-            if (isBuiltin(targetFileName)) {
-                targetFileName = "custom_" + targetFileName;
-            }
-            boolean saved = saveSkill(targetFileName, content);
-            if (!saved) {
-                return ImportResult.error("写入本地技能文件失败");
-            }
-            SkillMeta meta = findSkillMetaForFile(new File(mSkillsDir, targetFileName));
-            return ImportResult.ok(targetFileName, meta != null ? meta.title : targetFileName, 1);
-
-        } catch (Exception e) {
-            Log.w(TAG, "importSkillFromUrl failed: " + urlStr, e);
-            return ImportResult.error("导入失败: " + e.getMessage());
-        }
-    }
-
-    private ImportResult importFromGitHubDirectory(GitHubSkillCoordinates gh) {
-        try {
-            String dirSlug = gh.path.isEmpty()
-                ? gh.repo
-                : gh.path.substring(gh.path.lastIndexOf('/') + 1);
-            dirSlug = sanitizeSlug(dirSlug);
-            if (dirSlug.isEmpty()) dirSlug = "imported_skill";
-
-            File targetDir = new File(mSkillsDir, dirSlug);
-            int[] fileCounter = new int[] { 0 };
-            long[] byteCounter = new long[] { 0L };
-
-            fetchGitHubDirectoryRecursive(gh.owner, gh.repo, gh.branch, gh.path, targetDir, fileCounter, byteCounter);
-
-            if (fileCounter[0] == 0) {
-                return ImportResult.error("未在该 GitHub 目录下找到可下载的技能文件");
-            }
-            File entry = findDirectorySkillEntry(targetDir);
-            if (entry == null) {
-                deleteRecursive(targetDir);
-                return ImportResult.error("该目录下未包含 SKILL.md 或任何 .md 技能主文档");
-            }
-
-            notifyChanged();
-            SkillMeta meta = findSkillMetaForFile(entry);
-            String relEntry = dirSlug + "/" + entry.getName();
-            return ImportResult.ok(relEntry, meta != null ? meta.title : dirSlug, fileCounter[0]);
-        } catch (Exception e) {
-            return ImportResult.error("GitHub 目录拉取失败: " + e.getMessage());
-        }
-    }
-
-    private void fetchGitHubDirectoryRecursive(
-        String owner,
-        String repo,
-        String branch,
-        String apiPath,
-        File destDir,
-        int[] fileCounter,
-        long[] byteCounter
-    ) throws Exception {
-        if (fileCounter[0] >= MAX_IMPORT_FILES || byteCounter[0] >= MAX_IMPORT_TOTAL_BYTES) {
-            return;
-        }
-        StringBuilder apiUrl = new StringBuilder("https://api.github.com/repos/")
-            .append(owner).append("/").append(repo).append("/contents");
-        if (apiPath != null && !apiPath.isEmpty()) {
-            String[] segs = apiPath.split("/");
-            for (String s : segs) {
-                if (!s.isEmpty()) {
-                    apiUrl.append("/").append(java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20"));
-                }
-            }
-        }
-        if (branch != null && !branch.isEmpty()) {
-            apiUrl.append("?ref=").append(java.net.URLEncoder.encode(branch, "UTF-8"));
-        }
-
-        byte[] jsonBytes = downloadBytes(apiUrl.toString(), 2 * 1024 * 1024);
-        String jsonStr = new String(jsonBytes, StandardCharsets.UTF_8).trim();
-
-        if (jsonStr.startsWith("{")) {
-            // Single file response
-            JSONObject obj = new JSONObject(jsonStr);
-            if ("file".equals(obj.optString("type"))) {
-                String dlUrl = obj.optString("download_url", "");
-                String name = obj.optString("name", "SKILL.md");
-                if (!dlUrl.isEmpty()) {
-                    byte[] content = downloadBytes(dlUrl, MAX_IMPORT_TOTAL_BYTES - byteCounter[0]);
-                    if (!destDir.exists()) destDir.mkdirs();
-                    writeBytesSafe(new File(destDir, name), content);
-                    fileCounter[0]++;
-                    byteCounter[0] += content.length;
-                }
-            }
-            return;
-        }
-
-        JSONArray items = new JSONArray(jsonStr);
-        for (int i = 0; i < items.length(); i++) {
-            if (fileCounter[0] >= MAX_IMPORT_FILES || byteCounter[0] >= MAX_IMPORT_TOTAL_BYTES) break;
-            JSONObject item = items.getJSONObject(i);
-            String type = item.optString("type", "");
-            String name = item.optString("name", "");
-            if (name.isEmpty() || name.startsWith(".")) continue;
-
-            if ("file".equals(type)) {
-                String dlUrl = item.optString("download_url", "");
-                if (!dlUrl.isEmpty()) {
-                    byte[] content = downloadBytes(dlUrl, MAX_IMPORT_TOTAL_BYTES - byteCounter[0]);
-                    if (!destDir.exists()) destDir.mkdirs();
-                    writeBytesSafe(new File(destDir, name), content);
-                    fileCounter[0]++;
-                    byteCounter[0] += content.length;
-                }
-            } else if ("dir".equals(type)) {
-                String subPath = item.optString("path", "");
-                File subDir = new File(destDir, name);
-                fetchGitHubDirectoryRecursive(owner, repo, branch, subPath, subDir, fileCounter, byteCounter);
-            }
-        }
-    }
-
-    private ImportResult importFromZipUrl(String urlStr) throws Exception {
-        byte[] zipBytes = downloadBytes(urlStr, MAX_IMPORT_TOTAL_BYTES);
-        return importFromZipBytes(zipBytes, inferSkillSlugFromUrl(urlStr));
+        return new SkillPackageImporter(this).importSkillFromUrl(rawUrl);
     }
 
     public synchronized ImportResult importFromZipBytes(byte[] zipBytes, String fallbackSlug) {
-        if (zipBytes == null || zipBytes.length == 0) {
-            return ImportResult.error("ZIP 压缩包为空");
-        }
-        String slug = sanitizeSlug(fallbackSlug);
-        if (slug.isEmpty()) slug = "imported_skill";
-
-        File tempExtractDir = new File(mSkillsDir, ".tmp_zip_" + System.currentTimeMillis());
-        tempExtractDir.mkdirs();
-
-        try {
-            ZipInputStream zis = new ZipInputStream(new java.io.ByteArrayInputStream(zipBytes));
-            ZipEntry entry;
-            int fileCount = 0;
-            long totalBytes = 0;
-            String tempCanon = tempExtractDir.getCanonicalPath();
-
-            while ((entry = zis.getNextEntry()) != null) {
-                if (fileCount >= MAX_IMPORT_FILES || totalBytes >= MAX_IMPORT_TOTAL_BYTES) break;
-                String entryName = entry.getName().replace('\\', '/');
-                while (entryName.startsWith("/")) entryName = entryName.substring(1);
-                if (entryName.isEmpty() || entryName.contains("..") || entryName.startsWith("__MACOSX")) {
-                    zis.closeEntry();
-                    continue;
-                }
-                File out = new File(tempExtractDir, entryName);
-                if (!out.getCanonicalPath().startsWith(tempCanon)) {
-                    zis.closeEntry();
-                    continue; // Zip-slip protection
-                }
-                if (entry.isDirectory()) {
-                    out.mkdirs();
-                } else {
-                    if (out.getParentFile() != null) out.getParentFile().mkdirs();
-                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                    byte[] buf = new byte[4096];
-                    int n;
-                    while ((n = zis.read(buf)) != -1) {
-                        totalBytes += n;
-                        if (totalBytes > MAX_IMPORT_TOTAL_BYTES) break;
-                        bos.write(buf, 0, n);
-                    }
-                    writeBytesSafe(out, bos.toByteArray());
-                    fileCount++;
-                }
-                zis.closeEntry();
-            }
-            zis.close();
-
-            if (fileCount == 0) {
-                deleteRecursive(tempExtractDir);
-                return ImportResult.error("ZIP 包中未找到有效文件");
-            }
-
-            // If the ZIP has a single top-level directory, unwrap it
-            File sourceRoot = tempExtractDir;
-            File[] topChildren = tempExtractDir.listFiles();
-            if (topChildren != null && topChildren.length == 1 && topChildren[0].isDirectory()) {
-                sourceRoot = topChildren[0];
-                if ("imported_skill".equals(slug) || slug.endsWith(".zip")) {
-                    slug = sanitizeSlug(sourceRoot.getName());
-                }
-            }
-
-            File entryMd = findDirectorySkillEntry(sourceRoot);
-            if (entryMd == null) {
-                deleteRecursive(tempExtractDir);
-                return ImportResult.error("ZIP 包中未找到 SKILL.md 或任何 .md 技能文档");
-            }
-
-            File finalDir = new File(mSkillsDir, slug);
-            if (finalDir.exists()) {
-                deleteRecursive(finalDir);
-            }
-            moveDirectoryRecursive(sourceRoot, finalDir);
-            deleteRecursive(tempExtractDir);
-
-            notifyChanged();
-            File finalEntry = findDirectorySkillEntry(finalDir);
-            String relEntry = slug + "/" + (finalEntry != null ? finalEntry.getName() : "SKILL.md");
-            SkillMeta meta = finalEntry != null ? findSkillMetaForFile(finalEntry) : null;
-            return ImportResult.ok(relEntry, meta != null ? meta.title : slug, fileCount);
-        } catch (Exception e) {
-            deleteRecursive(tempExtractDir);
-            return ImportResult.error("解压技能包失败: " + e.getMessage());
-        }
-    }
-
-    private static void moveDirectoryRecursive(File src, File dst) throws Exception {
-        if (src.isDirectory()) {
-            if (!dst.exists()) dst.mkdirs();
-            File[] children = src.listFiles();
-            if (children != null) {
-                for (File c : children) {
-                    moveDirectoryRecursive(c, new File(dst, c.getName()));
-                }
-            }
-        } else {
-            if (dst.getParentFile() != null && !dst.getParentFile().exists()) {
-                dst.getParentFile().mkdirs();
-            }
-            if (!src.renameTo(dst)) {
-                byte[] bytes = AcidIo.readFileUtf8OrEmpty(src, (int) MAX_IMPORT_TOTAL_BYTES).getBytes(StandardCharsets.UTF_8);
-                writeBytesSafe(dst, bytes);
-            }
-        }
-    }
-
-    private static byte[] downloadBytes(String urlStr, long maxBytes) throws Exception {
-        HttpURLConnection conn = null;
-        String currentUrl = urlStr;
-        for (int redirects = 0; redirects < 5; redirects++) {
-            conn = (HttpURLConnection) new URL(currentUrl).openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(20000);
-            conn.setRequestProperty("User-Agent", "AcidBrowser/1.0 (Agent-Skill-Importer)");
-            conn.setRequestProperty("Accept", "application/vnd.github.v3+json, text/markdown, text/plain, */*");
-
-            int code = conn.getResponseCode();
-            if (code == HttpURLConnection.HTTP_MOVED_PERM ||
-                code == HttpURLConnection.HTTP_MOVED_TEMP ||
-                code == HttpURLConnection.HTTP_SEE_OTHER ||
-                code == 307 || code == 308) {
-                String loc = conn.getHeaderField("Location");
-                conn.disconnect();
-                if (loc == null || loc.isEmpty()) break;
-                currentUrl = new URL(new URL(currentUrl), loc).toString();
-                continue;
-            }
-            if (code < 200 || code >= 300) {
-                String err = AcidIo.readStreamUtf8(conn.getErrorStream());
-                conn.disconnect();
-                throw new Exception("HTTP " + code + (err != null && !err.isEmpty() ? ": " + err.substring(0, Math.min(120, err.length())) : ""));
-            }
-
-            InputStream is = new BufferedInputStream(conn.getInputStream());
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int n;
-            long total = 0;
-            while ((n = is.read(buf)) != -1) {
-                total += n;
-                if (total > maxBytes) {
-                    is.close();
-                    conn.disconnect();
-                    throw new Exception("文件超过最大大小限制 (" + (maxBytes / 1024 / 1024) + "MB)");
-                }
-                bos.write(buf, 0, n);
-            }
-            is.close();
-            conn.disconnect();
-            return bos.toByteArray();
-        }
-        throw new Exception("重定向次数过多");
-    }
-
-    private static boolean writeBytesSafe(File target, byte[] data) {
-        try {
-            if (target.getParentFile() != null && !target.getParentFile().exists()) {
-                target.getParentFile().mkdirs();
-            }
-            FileOutputStream fos = new FileOutputStream(target);
-            fos.write(data != null ? data : new byte[0]);
-            fos.flush();
-            fos.close();
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private static String inferSkillSlugFromUrl(String urlStr) {
-        try {
-            String path = new URL(urlStr).getPath();
-            if (path == null) return "imported_skill";
-            while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
-            String last = path.substring(path.lastIndexOf('/') + 1);
-            if (last.toLowerCase(Locale.US).endsWith(".zip")) {
-                last = last.substring(0, last.length() - 4);
-            } else if (last.toLowerCase(Locale.US).endsWith(".md")) {
-                last = last.substring(0, last.length() - 3);
-            }
-            if ("skill".equalsIgnoreCase(last) || "main".equalsIgnoreCase(last) || "master".equalsIgnoreCase(last)) {
-                String parent = path.substring(0, Math.max(0, path.lastIndexOf('/')));
-                if (parent.contains("/")) {
-                    String parentSeg = parent.substring(parent.lastIndexOf('/') + 1);
-                    if (!parentSeg.isEmpty()) last = parentSeg;
-                }
-            }
-            String slug = sanitizeSlug(last);
-            return slug.isEmpty() ? "imported_skill" : slug;
-        } catch (Exception e) {
-            return "imported_skill";
-        }
-    }
-
-    private static String inferSkillSlugFromUrlAndContent(String urlStr, String content) {
-        // First check if YAML frontmatter defines `name:`
-        if (content != null) {
-            String trimmed = stripBom(content).trim();
-            if (trimmed.startsWith("---")) {
-                String[] lines = trimmed.split("\n");
-                for (int i = 1; i < Math.min(lines.length, 20); i++) {
-                    String l = lines[i].trim();
-                    if ("---".equals(l) || "...".equals(l)) break;
-                    if (l.toLowerCase(Locale.US).startsWith("name:")) {
-                        String val = unquoteYaml(l.substring(5).trim());
-                        String slug = sanitizeSlug(val);
-                        if (!slug.isEmpty()) return slug;
-                    }
-                }
-            }
-        }
-        return inferSkillSlugFromUrl(urlStr);
-    }
-
-    private static String sanitizeSlug(String raw) {
-        if (raw == null) return "";
-        String s = raw.trim().replaceAll("[^a-zA-Z0-9_\\-\\u4e00-\\u9fa5]", "_");
-        while (s.startsWith("_") || s.startsWith("-")) s = s.substring(1);
-        while (s.endsWith("_") || s.endsWith("-")) s = s.substring(0, s.length() - 1);
-        return s;
+        return new SkillPackageImporter(this).importFromZipBytes(zipBytes, fallbackSlug);
     }
 }

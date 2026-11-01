@@ -164,62 +164,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mDataStore = dataStore;
 
         mUserscriptManager = new UserscriptManager(context);
-        mUserscriptManager.setHost(new UserscriptNativeBridge.Host() {
-            @Override
-            public void openInTab(final String url, final boolean active) {
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        createNewTab(url, active);
-                    }
-                });
-            }
-
-            @Override
-            public void download(final String url, final String fileName) {
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        requestDownload(url, fileName, null, null, null, 0);
-                    }
-                });
-            }
-
-            @Override
-            public void onInjectionRequested(final UserscriptNativeBridge bridge, final int phase) {
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        WebView wv = bridge.getWebView();
-                        if (wv == null) return;
-                        String url;
-                        try {
-                            url = wv.getUrl();
-                        } catch (Exception e) {
-                            return;
-                        }
-                        mUserscriptManager.injectPhase(wv, url, phase);
-                    }
-                });
-            }
-
-            @Override
-            public String isScriptInstalled(String name, String namespace) {
-                UserscriptMeta m = mUserscriptManager.findInstalled(name, namespace);
-                return m == null ? null : m.fileName;
-            }
-
-            @Override
-            public void notify(final String title, final String text) {
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        String msg = (title == null || title.isEmpty()) ? text : (title + "：" + text);
-                        if (msg != null && !msg.trim().isEmpty()) AcidFeedback.info(mContext, msg);
-                    }
-                });
-            }
-        });
+        mUserscriptManager.setHost(new UserscriptHostBridge(this, mUserscriptManager, mMainHandler, context));
         mSkillManager = new SkillManager(context, getWorkspaceDir());
         AdBlockManager adBlock = AdBlockManager.getInstance(context);
         adBlock.setWorkspaceDir(getWorkspaceDir());
