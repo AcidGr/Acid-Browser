@@ -84,6 +84,18 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testUserscriptFullRuntime(); }
         });
 
+        run("Userscript @grant enforcement, bridge token & GM API surface", new TestCase() {
+            @Override public void execute() throws Exception { testUserscriptSecurityAndApis(); }
+        });
+
+        run("Userscript @unwrap, version compare, bootstrap & TM facade", new TestCase() {
+            @Override public void execute() throws Exception { testUserscriptUnwrapAndUpdates(); }
+        });
+
+        run("Skill builtin sync: version upgrade vs user edits", new TestCase() {
+            @Override public void execute() throws Exception { testSkillBuiltinSync(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
             System.exit(1);
@@ -244,6 +256,215 @@ public final class TestRunner {
 
         String getResp = bridge.call("getValue", "{\"scriptId\":\"script_c\",\"name\":\"status\"}");
         assertTrue(getResp.contains("active"), "bridge getValue response has value");
+    }
+
+    private static void testUserscriptSecurityAndApis() throws Exception {
+        // @grant semantics: none declared = unrestricted; declared = whitelist; none = nothing
+        UserscriptMeta legacy = UserscriptMeta.parse("a.user.js",
+            "// ==UserScript==\n// @name a\n// @match *://*/*\n// ==/UserScript==\nvar x=1;");
+        assertTrue(legacy.isGranted("GM_xmlhttpRequest"), "no @grant = unrestricted");
+
+        UserscriptMeta strict = UserscriptMeta.parse("b.user.js",
+            "// ==UserScript==\n// @name b\n// @match *://*/*\n// @grant GM.getValue\n// ==/UserScript==\nvar x=1;");
+        assertTrue(strict.isGranted("GM_getValue"), "GM.getValue grants GM_getValue");
+        assertTrue(!strict.isGranted("GM_xmlhttpRequest"), "ungranted API denied");
+
+        UserscriptMeta none = UserscriptMeta.parse("c.user.js",
+            "// ==UserScript==\n// @name c\n// @match *://*/*\n// @grant none\n// ==/UserScript==\nvar x=1;");
+        assertTrue(!none.isGranted("GM_getValue"), "@grant none denies everything");
+
+        // @exclude-match and apex-domain matching
+        UserscriptMeta ex = UserscriptMeta.parse("d.user.js",
+            "// ==UserScript==\n// @name d\n// @match https://*.example.com/*\n"
+            + "// @exclude-match https://*.example.com/private/*\n// ==/UserScript==\nvar x=1;");
+        assertTrue(ex.appliesTo("https://example.com/a"), "apex matches *.example.com");
+        assertTrue(ex.appliesTo("https://www.example.com/a"), "subdomain matches");
+        assertTrue(!ex.appliesTo("https://www.example.com/private/x"), "exclude-match wins");
+        assertTrue(!ex.appliesTo("https://evilexample.com/a"), "suffix lookalike rejected");
+
+        // @resource lookup
+        UserscriptMeta res = UserscriptMeta.parse("e.user.js",
+            "// ==UserScript==\n// @name e\n// @match *://*/*\n// @resource css https://x.test/a.css\n"
+            + "// ==/UserScript==\nvar x=1;");
+        assertEquals("https://x.test/a.css", res.findResourceUrl("css"), "resource by name");
+        assertEquals("", res.findResourceUrl("nope"), "unknown resource");
+
+        // Bridge: token and grants are enforced
+        File tmpDir = File.createTempFile("acid_us_sec_", "_dir");
+        tmpDir.delete();
+        tmpDir.mkdirs();
+        UserscriptStorage storage = new UserscriptStorage(tmpDir);
+        final UserscriptMeta granted = strict;
+        UserscriptNativeBridge bridge = new UserscriptNativeBridge(null, storage, null, "tok123")
+            .configure(new UserscriptNativeBridge.ScriptResolver() {
+                @Override public UserscriptMeta findScript(String id) {
+                    return "b.user.js".equals(id) ? granted : null;
+                }
+            }, null, null, null);
+
+        assertEquals("", bridge.call("getValue", "{\"scriptId\":\"b.user.js\",\"name\":\"k\"}"),
+            "missing token rejected");
+        assertEquals("", bridge.call("getValue", "{\"secret\":\"bad\",\"scriptId\":\"b.user.js\",\"name\":\"k\"}"),
+            "wrong token rejected");
+        assertEquals("", bridge.call("setValue",
+            "{\"secret\":\"tok123\",\"scriptId\":\"b.user.js\",\"name\":\"k\",\"value\":\"v\"}"),
+            "setValue denied: script only granted getValue");
+        assertEquals("v", storage.getValue("b.user.js", "k", "unset").equals("unset") ? "v" : "WRITTEN",
+            "denied setValue must not write storage");
+        assertTrue(bridge.call("getValue",
+            "{\"secret\":\"tok123\",\"scriptId\":\"b.user.js\",\"name\":\"k\"}").contains("value"),
+            "granted getValue with token works");
+
+        // Shaper: token embedded in closure, never on window; ungranted APIs are hidden
+        String shaped = UserscriptShaper.shape(strict, new ArrayList<String>(), "tok123");
+        assertTrue(shaped.contains("\"tok123\""), "token embedded in closure");
+        assertTrue(!shaped.contains("window.__acid_secret"), "token not published on window");
+        assertTrue(shaped.contains("GM_getValue, undefined"), "first ungranted arg is undefined");
+        String[] mustHave = {"GM_getResourceText", "GM_getResourceURL", "GM_download", "GM_openInTab",
+            "GM_setValues", "GM_getValues", "GM_deleteValues", "GM_notification",
+            "GM_addValueChangeListener", "abortRequest", "getResourceUrl"};
+        for (String api : mustHave) {
+            assertTrue(shaped.contains(api), "shaper defines " + api);
+        }
+    }
+
+    private static void testUserscriptUnwrapAndUpdates() throws Exception {
+        // @unwrap: body runs at page scope, APIs published, token still hidden
+        UserscriptMeta wrapped = UserscriptMeta.parse("w.user.js",
+            "// ==UserScript==\n// @name w\n// @match *://*/*\n// ==/UserScript==\nvar a=1;");
+        String wjs = UserscriptShaper.shape(wrapped, new ArrayList<String>(), "TOK");
+        assertTrue(wjs.contains("(function(window, unsafeWindow, GM, GM_info"), "default keeps closure");
+
+        UserscriptMeta unwrapped = UserscriptMeta.parse("u.user.js",
+            "// ==UserScript==\n// @name u\n// @match *://*/*\n// @unwrap\n// ==/UserScript==\nvar a=1;");
+        assertTrue(unwrapped.unwrap, "@unwrap parsed");
+        String ujs = UserscriptShaper.shape(unwrapped, new ArrayList<String>(), "TOK");
+        assertTrue(!ujs.contains("(function(window, unsafeWindow, GM, GM_info"), "@unwrap drops wrapper");
+        assertTrue(ujs.contains("window.GM_addStyle"), "@unwrap publishes APIs on window");
+        assertTrue(ujs.contains("var a=1;"), "@unwrap keeps body");
+        assertTrue(!ujs.contains("window.__acid_secret"), "token not published");
+
+        // extra metadata keys, case-insensitive
+        UserscriptMeta meta = UserscriptMeta.parse("m.user.js",
+            "// ==UserScript==\n// @name m\n// @match *://*/*\n// @author someone\n"
+            + "// @homepageURL https://home.test/\n// @supportURL https://help.test/\n"
+            + "// @downloadURL https://dl.test/m.user.js\n// @icon https://i.test/i.png\n"
+            + "// ==/UserScript==\nvar x=1;");
+        assertEquals("someone", meta.author, "author");
+        assertEquals("https://home.test/", meta.homepageUrl, "homepageURL");
+        assertEquals("https://help.test/", meta.supportUrl, "supportURL");
+        assertEquals("https://dl.test/m.user.js", UserscriptManager.updateUrlOf(meta), "update source falls back to downloadURL");
+        assertEquals("https://i.test/i.png", meta.iconUrl, "icon");
+
+        UserscriptMeta withUpdate = UserscriptMeta.parse("n.user.js",
+            "// ==UserScript==\n// @name n\n// @match *://*/*\n"
+            + "// @updateURL https://up.test/n.user.js\n// @downloadURL https://dl.test/n.user.js\n"
+            + "// ==/UserScript==\nvar x=1;");
+        assertEquals("https://up.test/n.user.js", UserscriptManager.updateUrlOf(withUpdate), "updateURL wins");
+
+        // version comparison
+        assertTrue(UserscriptManager.isNewerVersion("1.2.1", "1.2.0"), "patch bump");
+        assertTrue(UserscriptManager.isNewerVersion("2.0", "1.9.9"), "major bump");
+        assertTrue(UserscriptManager.isNewerVersion("1.10", "1.9"), "numeric not lexical");
+        assertTrue(!UserscriptManager.isNewerVersion("1.0.0", "1.0.0"), "equal is not newer");
+        assertTrue(!UserscriptManager.isNewerVersion("0.9", "1.0"), "older is not newer");
+        assertTrue(UserscriptManager.isNewerVersion("1.0", ""), "empty local means newer");
+
+        // bootstrap + facade are well-formed and carry the token
+        String boot = UserscriptShaper.bootstrap("TOK");
+        assertTrue(boot.contains("requestInjection"), "bootstrap requests injection");
+        assertTrue(boot.contains("DOMContentLoaded"), "bootstrap listens for DOMContentLoaded");
+        assertTrue(boot.contains("__acid_bootstrapped"), "bootstrap is idempotent");
+        String facade = UserscriptShaper.tampermonkeyFacade("TOK");
+        assertTrue(facade.contains("window.external.Tampermonkey"), "facade exposes Tampermonkey");
+        assertTrue(facade.contains("isInstalled"), "facade supports isInstalled");
+        assertTrue(facade.contains("getVersion"), "facade supports getVersion");
+
+        // script-site detection (only these hosts get the facade)
+        assertTrue(UserscriptManager.isScriptSite("https://greasyfork.org/zh-CN/scripts/1"), "greasyfork");
+        assertTrue(UserscriptManager.isScriptSite("https://www.greasyfork.org/x"), "subdomain");
+        assertTrue(UserscriptManager.isScriptSite("https://openuserjs.org/scripts/x"), "openuserjs");
+        assertTrue(!UserscriptManager.isScriptSite("https://notgreasyfork.org/x"), "lookalike rejected");
+        assertTrue(!UserscriptManager.isScriptSite("https://example.com/greasyfork.org"), "path not host");
+
+        // bridge routes injection requests and isInstalled probes
+        final int[] phase = {0};
+        UserscriptNativeBridge b2 = new UserscriptNativeBridge(null, null, null, "TOK")
+            .configure(null, null, new UserscriptNativeBridge.Host() {
+                @Override public void openInTab(String url, boolean active) {}
+                @Override public void download(String url, String name) {}
+                @Override public void notify(String title, String text) {}
+                @Override public void onInjectionRequested(UserscriptNativeBridge bridge, int p) { phase[0] = p; }
+                @Override public String isScriptInstalled(String name, String ns) { return "found".equals(name) ? "f.user.js" : null; }
+            }, null);
+        b2.call("requestInjection", "{\"secret\":\"TOK\",\"runAt\":4}");
+        assertEquals(Integer.valueOf(4), Integer.valueOf(phase[0]), "phase forwarded");
+        assertTrue(b2.call("isInstalled", "{\"secret\":\"TOK\",\"name\":\"found\"}").contains("true"), "isInstalled true");
+        assertTrue(b2.call("isInstalled", "{\"secret\":\"TOK\",\"name\":\"nope\"}").contains("false"), "isInstalled false");
+    }
+
+    private static void testSkillBuiltinSync() throws Exception {
+        File ws = File.createTempFile("acid_skill_sync_", "_dir");
+        ws.delete();
+        ws.mkdirs();
+        ws.deleteOnExit();
+
+        // Fresh workspace: official skills installed from APK assets
+        SkillManager m1 = new SkillManager(null, ws);
+        File skillFile = new File(new File(ws, "skills"), SkillManager.SKILL_USERSCRIPT);
+        assertTrue(skillFile.exists(), "official skill installed on first run");
+        String installed = AcidIo.readFileUtf8OrEmpty(skillFile, 2 * 1024 * 1024);
+        assertTrue(installed.length() > 1000, "installed content is non-trivial");
+
+        // Shipped docs must be a pure manual: no experiment/verification language
+        String[] banned = {"Verified 2026", "empirically verified", "earlier revision of this doc",
+            "UNDEFINED", "避坑铁律", "必读"};
+        for (String bad : banned) {
+            assertTrue(!installed.contains(bad), "userscript skill free of '" + bad + "'");
+        }
+        assertTrue(installed.contains("@grant"), "skill documents @grant");
+        assertTrue(installed.contains("GM_xmlhttpRequest"), "skill documents GM_xmlhttpRequest");
+        assertTrue(installed.contains("@unwrap"), "skill documents @unwrap");
+
+        // Sync state records the app version, nothing else
+        File state = new File(ws, "skills_sync.json");
+        assertTrue(state.exists(), "sync state written");
+        assertTrue(!AcidIo.readFileUtf8OrEmpty(state, 256 * 1024).contains("hash"),
+            "sync state no longer stores content hashes");
+
+        // Same version: local edits survive relaunch
+        String edited = installed + "\n<!-- user edit -->\n";
+        AcidIo.writeFileUtf8Safe(skillFile, edited);
+        SkillManager m2 = new SkillManager(null, ws);
+        m2.syncDefaultSkills();
+        assertTrue(AcidIo.readFileUtf8OrEmpty(skillFile, 2 * 1024 * 1024).contains("user edit"),
+            "same-version relaunch keeps local edits");
+
+        // Version bump: official copy overwrites, user edits are replaced
+        java.io.FileOutputStream fos = new java.io.FileOutputStream(state);
+        fos.write(("{\"" + SkillManager.SKILL_USERSCRIPT + "\":{\"versionCode\":0},"
+            + "\"" + SkillManager.SKILL_HOMEPAGE + "\":{\"versionCode\":0},"
+            + "\"" + SkillManager.SKILL_CLOUD_DRIVE + "\":{\"versionCode\":0}}").getBytes("UTF-8"));
+        fos.close();
+        SkillManager m3 = new SkillManager(null, ws);
+        m3.syncDefaultSkills();
+        String afterUpgrade = AcidIo.readFileUtf8OrEmpty(skillFile, 2 * 1024 * 1024);
+        assertTrue(!afterUpgrade.contains("user edit"), "version bump overwrites user edits");
+        assertTrue(afterUpgrade.contains("@grant"), "version bump restores official content");
+
+        // A user-added skill is never touched by the sync
+        File custom = new File(new File(ws, "skills"), "my_custom_skill.md");
+        AcidIo.writeFileUtf8Safe(custom, "# my skill\n");
+        SkillManager m4 = new SkillManager(null, ws);
+        m4.syncDefaultSkills();
+        assertTrue(custom.exists(), "user skill untouched by sync");
+        assertEquals("# my skill\n", AcidIo.readFileUtf8OrEmpty(custom, 1024), "user skill content intact");
+
+        // All three official skills present
+        for (String f : new String[]{SkillManager.SKILL_HOMEPAGE, SkillManager.SKILL_CLOUD_DRIVE}) {
+            File sf = new File(new File(ws, "skills"), f);
+            assertTrue(sf.exists() && sf.length() > 500, f + " installed");
+        }
     }
 
     private static void testAdBlockRuleParsing() {

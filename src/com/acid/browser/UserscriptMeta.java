@@ -45,6 +45,14 @@ public class UserscriptMeta {
     public final List<String> resources = new ArrayList<String>();
     public final List<String> grants = new ArrayList<String>();
     public boolean noFrames = false;
+    /** {@code @unwrap}: run the body without the protective IIFE wrapper. */
+    public boolean unwrap = false;
+    public String author = "";
+    public String homepageUrl = "";
+    public String supportUrl = "";
+    public String updateUrl = "";
+    public String downloadUrl = "";
+    public String iconUrl = "";
     public String runAt = RUN_AT_IDLE;
     /** Whether this script is active. Can be toggled on/off in the userscripts sheet. */
     public boolean enabled = true;
@@ -120,6 +128,8 @@ public class UserscriptMeta {
 
     private void applyKey(String key, String value) {
         if (key == null || value == null) return;
+        // Tampermonkey keys are case-insensitive (@homepageURL == @homepageurl).
+        key = key.toLowerCase(java.util.Locale.ROOT);
 
         if ("name".equals(key)) {
             name = value;
@@ -133,7 +143,7 @@ public class UserscriptMeta {
             if (!value.isEmpty()) matches.add(value);
         } else if ("include".equals(key)) {
             if (!value.isEmpty()) includes.add(value);
-        } else if ("exclude".equals(key)) {
+        } else if ("exclude".equals(key) || "exclude-match".equals(key)) {
             if (!value.isEmpty()) excludes.add(value);
         } else if ("require".equals(key)) {
             if (!value.isEmpty()) requires.add(value);
@@ -143,6 +153,20 @@ public class UserscriptMeta {
             if (!value.isEmpty()) grants.add(value);
         } else if ("noframes".equals(key)) {
             noFrames = true;
+        } else if ("unwrap".equals(key)) {
+            unwrap = true;
+        } else if ("author".equals(key)) {
+            author = value;
+        } else if ("homepageurl".equals(key)) {
+            homepageUrl = value;
+        } else if ("supporturl".equals(key)) {
+            supportUrl = value;
+        } else if ("updateurl".equals(key)) {
+            updateUrl = value;
+        } else if ("downloadurl".equals(key)) {
+            downloadUrl = value;
+        } else if ("icon".equals(key) || "iconurl".equals(key)) {
+            iconUrl = value;
         } else if ("run-at".equals(key)) {
             String v = value.toLowerCase();
             if (RUN_AT_START.equals(v) || RUN_AT_END.equals(v) || RUN_AT_IDLE.equals(v)) {
@@ -151,6 +175,63 @@ public class UserscriptMeta {
         } else if ("acid-enabled".equals(key) || "enabled".equals(key)) {
             enabled = !"false".equalsIgnoreCase(value) && !"0".equals(value);
         }
+    }
+
+    // =========================================================================
+    // @grant enforcement & @resource lookup
+    // =========================================================================
+
+    /** Canonical lower-case grant name; {@code GM.foo} and {@code GM_foo} compare equal. */
+    public static String normalizeGrant(String g) {
+        if (g == null) return "";
+        String n = g.trim().toLowerCase(java.util.Locale.ROOT);
+        if (n.startsWith("gm.")) n = "gm_" + n.substring(3);
+        return n;
+    }
+
+    /**
+     * True when this script may use any of the given GM APIs.
+     *
+     * <p>A script with no {@code @grant} line at all stays unrestricted: scripts written by
+     * the agent follow a template without one, and that legacy behaviour is kept. As soon as a
+     * script declares grants, only those APIs are available ({@code @grant none} = none).
+     */
+    public boolean isGranted(String... apis) {
+        if (grants.isEmpty()) return true;
+        for (String api : apis) {
+            String want = normalizeGrant(api);
+            for (String g : grants) {
+                String have = normalizeGrant(g);
+                if (!"none".equals(have) && have.equals(want)) return true;
+            }
+        }
+        return false;
+    }
+
+    /** Name part of a {@code @resource name url} declaration. */
+    public static String resourceName(String decl) {
+        if (decl == null) return "";
+        String t = decl.trim();
+        int sp = indexOfWhitespace(t);
+        return sp < 0 ? "" : t.substring(0, sp);
+    }
+
+    /** URL of the named {@code @resource}, or empty when the script declares no such name. */
+    public String findResourceUrl(String name) {
+        if (name == null) return "";
+        for (String decl : resources) {
+            if (name.equals(resourceName(decl))) {
+                return UserscriptDependencyResolver.extractResourceUrl(decl);
+            }
+        }
+        return "";
+    }
+
+    private static int indexOfWhitespace(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            if (Character.isWhitespace(s.charAt(i))) return i;
+        }
+        return -1;
     }
 
     private static String stripExtension(String fileName) {
@@ -209,10 +290,15 @@ public class UserscriptMeta {
     }
 
     private static String globToRegex(String glob) {
+        // Tampermonkey semantics: "*.example.com" also matches the bare "example.com".
+        glob = glob.replace("://*.", "://\u0000");
         StringBuilder sb = new StringBuilder("^");
         for (int i = 0; i < glob.length(); i++) {
             char c = glob.charAt(i);
             switch (c) {
+                case '\u0000':
+                    sb.append("(?:[^/]*\\.)?");
+                    break;
                 case '*':
                     sb.append(".*");
                     break;
@@ -269,6 +355,13 @@ public class UserscriptMeta {
             o.put("enabled", enabled);
             o.put("hasMetadata", hasMetadata);
             o.put("noFrames", noFrames);
+            o.put("unwrap", unwrap);
+            o.put("author", author);
+            o.put("homepageUrl", homepageUrl);
+            o.put("supportUrl", supportUrl);
+            o.put("updateUrl", updateUrl);
+            o.put("downloadUrl", downloadUrl);
+            o.put("iconUrl", iconUrl);
             JSONArray m = new JSONArray();
             for (String s : matches) m.put(s);
             o.put("matches", m);

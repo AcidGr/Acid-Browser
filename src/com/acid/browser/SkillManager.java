@@ -52,6 +52,9 @@ public class SkillManager {
     public static final String SKILL_HOMEPAGE = "homepage_dev.md";
     public static final String SKILL_CLOUD_DRIVE = "cloud_drive_download.md";
 
+    /** Records the app version that last wrote the official skills. */
+    private static final String SYNC_STATE_FILE = "skills_sync.json";
+
     private static final String DISABLED_STATE_FILE = ".disabled_skills.json";
     private static final int MAX_IMPORT_FILES = 50;
     private static final long MAX_IMPORT_TOTAL_BYTES = 8L * 1024L * 1024L; // 8 MB safety cap
@@ -285,17 +288,75 @@ public class SkillManager {
     // =========================================================================
 
     /**
-     * Synchronizes bundled default skills from assets if missing or empty.
+     * Installs or upgrades the three official skills bundled in the APK.
+     *
+     * <p>Official skills follow app updates: when {@code VERSION_CODE} rises above the version
+     * that last wrote them, the bundled copy overwrites whatever is on disk. Nothing else in
+     * {@code skills/} is touched, so user-added skills are never affected.
+     *
+     * <p>Within a single app version the files are left alone, so edits made between launches
+     * survive until the next upgrade.
      */
     public synchronized void syncDefaultSkills() {
+        JSONObject state = loadSyncState();
+        int versionCode = BuildInfo.VERSION_CODE;
+        boolean stateChanged = false;
+
         for (String skillFile : BUILTIN_SKILLS) {
+            String assetContent = readBuiltinContent(skillFile);
+            if (assetContent.isEmpty()) continue;
+
             File target = new File(mSkillsDir, skillFile);
-            if (!target.exists() || target.length() == 0) {
-                String assetContent = readBuiltinContent(skillFile);
-                if (!assetContent.isEmpty()) {
-                    AcidIo.writeFileUtf8Safe(target, assetContent);
+            int recordedVersion = state.optJSONObject(skillFile) != null
+                ? state.optJSONObject(skillFile).optInt("versionCode", 0)
+                : 0;
+
+            boolean missing = !target.exists() || target.length() == 0;
+            // Upgrade only on a version bump; a same-version reinstall keeps local edits.
+            boolean versionBumped = versionCode > recordedVersion;
+
+            if (!missing && !versionBumped) continue;
+
+            if (missing || versionBumped) {
+                if (AcidIo.writeFileUtf8Safe(target, assetContent)) {
+                    recordSyncState(state, skillFile, versionCode);
+                    stateChanged = true;
+                    Log.i(TAG, "Synced official skill " + skillFile + " to v" + versionCode);
                 }
             }
+        }
+
+        if (stateChanged) saveSyncState(state);
+    }
+
+    private JSONObject loadSyncState() {
+        File f = new File(mWorkspaceDir, SYNC_STATE_FILE);
+        try {
+            if (f.exists() && f.length() > 0) {
+                String raw = AcidIo.readFileUtf8OrEmpty(f, 256 * 1024);
+                if (!raw.isEmpty()) return new JSONObject(raw);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not read skills sync state", e);
+        }
+        return new JSONObject();
+    }
+
+    private void saveSyncState(JSONObject state) {
+        try {
+            AcidIo.writeFileUtf8Safe(new File(mWorkspaceDir, SYNC_STATE_FILE), state.toString(2));
+        } catch (Exception e) {
+            Log.w(TAG, "Could not write skills sync state", e);
+        }
+    }
+
+    private void recordSyncState(JSONObject state, String skillFile, int versionCode) {
+        try {
+            JSONObject entry = new JSONObject();
+            entry.put("versionCode", versionCode);
+            state.put(skillFile, entry);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not record sync state for " + skillFile, e);
         }
     }
 

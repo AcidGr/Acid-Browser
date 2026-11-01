@@ -32,36 +32,92 @@ public class UserscriptHttpHandler {
 
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
+    /** In-flight requests by script-chosen id, so GM_xmlhttpRequest(...).abort() works. */
+    private final java.util.concurrent.ConcurrentHashMap<String, Inflight> mInflight =
+        new java.util.concurrent.ConcurrentHashMap<String, Inflight>();
+
+    private static final class Inflight {
+        volatile boolean aborted = false;
+        volatile JSONObject details;
+        volatile HttpURLConnection conn;
+        volatile AcidAsync.Handle handle;
+    }
+
     public void executeRequest(final WebView webView, final JSONObject details) {
         if (details == null) return;
 
-        AcidAsync.run(new AcidAsync.Task<JSONObject>() {
+        final String reqId = details.optString("id", "");
+        final Inflight flight = new Inflight();
+        flight.details = details;
+        if (!reqId.isEmpty()) mInflight.put(reqId, flight);
+
+        // Fire-and-forget lifecycle events the script may listen to.
+        dispatchCallback(webView, details, startedObject(), "onloadstart");
+
+        flight.handle = AcidAsync.run(new AcidAsync.Task<JSONObject>() {
             @Override
             public JSONObject execute() throws Exception {
-                return doHttpRequest(details);
+                return doHttpRequest(details, flight);
             }
         }, new AcidAsync.Callback<JSONObject>() {
             @Override
             public void onSuccess(JSONObject responseObj) {
-                dispatchCallback(webView, details, responseObj, false);
+                if (!reqId.isEmpty()) mInflight.remove(reqId);
+                if (flight.aborted) return;
+                dispatchCallback(webView, details, responseObj, "onreadystatechange");
+                dispatchCallback(webView, details, responseObj, "onload");
             }
 
             @Override
             public void onError(Exception error) {
-                Log.w(TAG, "GM_xmlhttpRequest failed", error);
+                if (!reqId.isEmpty()) mInflight.remove(reqId);
+                if (flight.aborted) return;
+                boolean timedOut = error instanceof java.net.SocketTimeoutException;
+                Log.w(TAG, "GM_xmlhttpRequest " + (timedOut ? "timed out" : "failed"), error);
                 JSONObject errObj = new JSONObject();
                 try {
                     errObj.put("error", error.getMessage() != null ? error.getMessage() : "Network error");
                     errObj.put("status", 0);
-                    errObj.put("statusText", "Error");
+                    errObj.put("statusText", timedOut ? "Timeout" : "Error");
                     errObj.put("readyState", 4);
+                    errObj.put("finalUrl", details.optString("url", ""));
                 } catch (Exception ignored) {}
-                dispatchCallback(webView, details, errObj, true);
+                dispatchCallback(webView, details, errObj, timedOut ? "ontimeout" : "onerror");
             }
         });
     }
 
-    private JSONObject doHttpRequest(JSONObject details) throws Exception {
+    /** Cancels a request started by {@link #executeRequest}; the script's onabort fires. */
+    public void abort(WebView webView, String reqId) {
+        if (reqId == null || reqId.isEmpty()) return;
+        Inflight flight = mInflight.remove(reqId);
+        if (flight == null) return;
+        flight.aborted = true;
+        try {
+            if (flight.handle != null) flight.handle.cancel();
+            if (flight.conn != null) flight.conn.disconnect();
+        } catch (Exception ignored) {}
+        JSONObject o = new JSONObject();
+        try {
+            o.put("readyState", 4);
+            o.put("status", 0);
+            o.put("statusText", "abort");
+            o.put("finalUrl", flight.details != null ? flight.details.optString("url", "") : "");
+        } catch (Exception ignored) {}
+        if (flight.details != null) dispatchCallback(webView, flight.details, o, "onabort");
+    }
+
+    private static JSONObject startedObject() {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("readyState", 1);
+            o.put("status", 0);
+            o.put("statusText", "");
+        } catch (Exception ignored) {}
+        return o;
+    }
+
+    private JSONObject doHttpRequest(JSONObject details, Inflight flight) throws Exception {
         String urlStr = details.optString("url", "").trim();
         if (urlStr.isEmpty()) {
             throw new IllegalArgumentException("Missing request url");
@@ -76,6 +132,7 @@ public class UserscriptHttpHandler {
 
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        flight.conn = conn;
         conn.setRequestMethod(method);
         conn.setConnectTimeout(timeout);
         conn.setReadTimeout(timeout);
@@ -194,32 +251,31 @@ public class UserscriptHttpHandler {
         return resp;
     }
 
+    /**
+     * Calls the page-side callback registered under {@code event} ({@code onload}, ...). The
+     * names are random per request and were published by the injected closure.
+     */
     private void dispatchCallback(
         final WebView webView,
         final JSONObject details,
         final JSONObject responseObj,
-        final boolean isError
+        final String event
     ) {
         if (webView == null || details == null || responseObj == null) return;
+        final String cbName = details.optString(event, "");
+        if (cbName.isEmpty()) return;
+
+        final boolean last = !"onloadstart".equals(event) && !"onreadystatechange".equals(event)
+            && !"onprogress".equals(event);
 
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
                 try {
-                    String cbName;
-                    if (isError) {
-                        cbName = details.optString("onerror", "");
-                    } else {
-                        cbName = details.optString("onload", "");
-                    }
-
-                    if (cbName.isEmpty()) return;
-
-                    String jsonPayload = responseObj.toString();
-                    // Via-style callback dispatch: unpack response on unsafeWindow and invoke callback
-                    String js = "javascript:(function(){\n" +
+                    String name = JSONObject.quote(cbName);
+                    String js = "(function(){\n" +
                         "try {\n" +
-                        "  var obj = " + jsonPayload + ";\n" +
+                        "  var obj = " + responseObj.toString() + ";\n" +
                         "  if (obj && obj.responseType) {\n" +
                         "    var type = obj.responseType;\n" +
                         "    if (type == 'json') {\n" +
@@ -247,16 +303,13 @@ public class UserscriptHttpHandler {
                         "      obj.response = obj.responseText;\n" +
                         "    }\n" +
                         "  }\n" +
-                        "  if (window['" + cbName + "']) {\n" +
-                        "    window['" + cbName + "'](obj);\n" +
-                        "    delete window['" + cbName + "'];\n" +
-                        "  } else if (window.unsafeWindow && window.unsafeWindow['" + cbName + "']) {\n" +
-                        "    window.unsafeWindow['" + cbName + "'](obj);\n" +
-                        "    delete window.unsafeWindow['" + cbName + "'];\n" +
+                        "  var n = " + name + ";\n" +
+                        "  var fn = window[n];\n" +
+                        "  if (typeof fn === 'function') {\n" +
+                        "    " + (last ? "delete window[n]; " : "") + "fn(obj);\n" +
                         "  }\n" +
                         "} catch(e) { console.error('[AcidUserscriptHttpCallbackError]', e); }\n" +
                         "})();";
-
                     webView.evaluateJavascript(js, null);
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to dispatch userscript HTTP callback", e);

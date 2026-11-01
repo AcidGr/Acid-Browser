@@ -391,6 +391,16 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 public void onScriptsChanged() {
                     updateMenuSheetCards();
                 }
+
+                @Override
+                public void onQueryCommands(UserscriptManager.MenuCommandsCallback cb) {
+                    if (mController != null) mController.queryUserscriptCommands(cb);
+                }
+
+                @Override
+                public void onRunCommand(UserscriptManager.MenuCommand cmd) {
+                    if (mController != null) mController.runUserscriptCommand(cmd);
+                }
             }
         );
         attachModalSheet(mUserscriptSheet);
