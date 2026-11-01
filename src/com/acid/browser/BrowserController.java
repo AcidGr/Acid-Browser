@@ -767,43 +767,64 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         wv.setDownloadListener(new DownloadListener() {
             @Override
             public void onDownloadStart(final String url, final String userAgent, final String contentDisposition, final String mimeType, final long contentLength) {
-                final String fileName = DownloadCoordinator.smartGuessFileName(url, contentDisposition, mimeType);
-                final String resolvedMime = DownloadCoordinator.resolveMimeType(fileName, mimeType);
-                emitLog("[DOWNLOAD] Triggered: " + fileName + " (" + contentLength + " B, " + resolvedMime + ")");
-
-                // Intercept userscript downloads directly into the script installer.
-                if (fileName.endsWith(".user.js") || (url != null && url.contains(".user.js"))) {
-                    mMainHandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (mListener != null) {
-                                mListener.onUserscriptInstallRequested(url, fileName);
-                            }
-                        }
-                    });
-                    return;
-                }
-
-                mTriggeredDownloads++;
-                mLastTriggeredDownloadInfo = fileName + " ("
-                    + com.acid.browser.download.DownloadItem.formatSize(contentLength)
-                    + ", " + resolvedMime + ")";
-
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (getControlMode() == AgentOverlayView.MODE_AGENT) {
-                            setControlMode(AgentOverlayView.MODE_HUMAN, "");
-                        }
-                        if (mListener != null) {
-                            mListener.onDownloadRequested(url, fileName, userAgent, contentDisposition, resolvedMime, contentLength);
-                        } else {
-                            mDownloadCoordinator.startDownload(url, fileName, userAgent, contentDisposition, resolvedMime, contentLength);
-                        }
-                    }
-                });
+                requestDownload(url, null, userAgent, contentDisposition, mimeType, contentLength);
             }
         });
+    }
+
+    /**
+     * Unified download entry point: guesses clean UTF-8 filename/size/MIME, records trigger receipt
+     * for Agent perception, releases anti-touch lock, and opens the DownloadConfirmSheet.
+     */
+    public String requestDownload(
+        final String url,
+        final String customFileName,
+        final String userAgent,
+        final String contentDisposition,
+        final String mimeType,
+        final long contentLength
+    ) {
+        final String fileName = (customFileName != null && !customFileName.trim().isEmpty())
+            ? com.acid.browser.download.HttpProbe.decodeAndSanitizeFileName(customFileName.trim())
+            : DownloadCoordinator.smartGuessFileName(url, contentDisposition, mimeType);
+        final String resolvedMime = DownloadCoordinator.resolveMimeType(fileName, mimeType);
+        final long resolvedLength = contentLength > 0
+            ? contentLength
+            : DownloadCoordinator.extractContentLengthFromUrlQuery(url);
+        emitLog("[DOWNLOAD] Triggered: " + fileName + " (" + resolvedLength + " B, " + resolvedMime + ")");
+
+        // Intercept userscript downloads directly into the script installer.
+        if (fileName.endsWith(".user.js") || (url != null && url.contains(".user.js"))) {
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (mListener != null) {
+                        mListener.onUserscriptInstallRequested(url, fileName);
+                    }
+                }
+            });
+            return fileName + " (userscript installer)";
+        }
+
+        mTriggeredDownloads++;
+        mLastTriggeredDownloadInfo = fileName + " ("
+            + com.acid.browser.download.DownloadItem.formatSize(resolvedLength)
+            + ", " + resolvedMime + ")";
+
+        mMainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (getControlMode() == AgentOverlayView.MODE_AGENT) {
+                    setControlMode(AgentOverlayView.MODE_HUMAN, "");
+                }
+                if (mListener != null) {
+                    mListener.onDownloadRequested(url, fileName, userAgent, contentDisposition, resolvedMime, resolvedLength);
+                } else {
+                    mDownloadCoordinator.startDownload(url, fileName, userAgent, contentDisposition, resolvedMime, resolvedLength);
+                }
+            }
+        });
+        return mLastTriggeredDownloadInfo;
     }
 
     private boolean handleUrlIntercept(String url) {
@@ -811,6 +832,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         String lower = url.toLowerCase();
         if (lower.startsWith("acid://") || lower.startsWith("via://")) {
             loadUrl(normalizeUrl(url));
+            return true;
+        }
+        // Intercept known cloud-drive direct CDN file streams before WebView sends Chrome UA (which gets HTTP 403)
+        if (DownloadCoordinator.isCloudDriveDirectStreamUrl(url)) {
+            requestDownload(url, null, null, null, null, -1);
             return true;
         }
         if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("file://") || lower.startsWith("about:") || lower.startsWith("javascript:")) {

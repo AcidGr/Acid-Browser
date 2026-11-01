@@ -209,6 +209,31 @@ public class DownloadCoordinator {
         return null;
     }
 
+    public static long extractContentLengthFromUrlQuery(String url) {
+        if (url == null || url.isEmpty()) return -1;
+        int qIdx = url.indexOf('?');
+        if (qIdx < 0 || qIdx >= url.length() - 1) return -1;
+        String query = url.substring(qIdx + 1);
+        int hashIdx = query.indexOf('#');
+        if (hashIdx >= 0) query = query.substring(0, hashIdx);
+
+        String[] pairs = query.split("&");
+        for (int i = 0; i < pairs.length; i++) {
+            String p = pairs[i];
+            int eq = p.indexOf('=');
+            if (eq <= 0 || eq >= p.length() - 1) continue;
+            String key = p.substring(0, eq).trim().toLowerCase();
+            String val = p.substring(eq + 1).trim();
+            if ("size".equals(key) || "sta_dx".equals(key) || "filesize".equals(key)) {
+                try {
+                    long parsed = Long.parseLong(val);
+                    if (parsed > 0) return parsed;
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return -1;
+    }
+
     private static String extractFileNameFromUrlPath(String url) {
         if (url == null || url.isEmpty()) return null;
         try {
@@ -306,12 +331,16 @@ public class DownloadCoordinator {
         }
     }
 
-    private static final String UA_QUARK_CLIENT =
+    public static final String UA_BAIDU_NETDISK =
+        "netdisk;12.24.6;piano;android-android;16;JSbridge4.4.0;jointBridge;1.1.0";
+    public static final String UA_QUARK_CLIENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.12-a038f7b798 Safari/537.36 Channel/pckk_other_ch";
-    private static final String UA_115_CLIENT =
+    public static final String UA_UC_CLIENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) uc-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch";
+    public static final String UA_115_CLIENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 115Browser/27.0.5.7";
 
-    private static Map<String, String> buildCloudDriveAwareHeaders(String url, String userAgent) {
+    public static Map<String, String> buildCloudDriveAwareHeaders(String url, String userAgent) {
         Map<String, String> headers = new HashMap<String, String>();
         String lowerUrl = url != null ? url.toLowerCase() : "";
 
@@ -332,8 +361,13 @@ public class DownloadCoordinator {
             String mainCookie = safeGetCookie("https://drive.uc.cn");
             cookie = mergeCookies(cookie, mainCookie);
             headers.put("Referer", "https://drive.uc.cn/");
-        } else if (lowerUrl.contains("baidupcs.com") || lowerUrl.contains("pcs.baidu.com")) {
+        } else if (lowerUrl.contains("baidupcs.com") || lowerUrl.contains("pcs.baidu.com") || lowerUrl.contains("d2-ant.baidu.com")) {
+            String mainCookie = safeGetCookie("https://pan.baidu.com");
+            cookie = mergeCookies(cookie, mainCookie);
             headers.put("Referer", "https://pan.baidu.com/");
+            if (userAgent == null || !userAgent.contains("netdisk;")) {
+                userAgent = UA_BAIDU_NETDISK;
+            }
         } else if (lowerUrl.contains("115.com") || lowerUrl.contains("115cdn.com")) {
             String mainCookie = safeGetCookie("https://115.com");
             cookie = mergeCookies(cookie, mainCookie);
@@ -350,6 +384,23 @@ public class DownloadCoordinator {
             headers.put("User-Agent", userAgent);
         }
         return headers;
+    }
+
+    /**
+     * Returns true when a navigation URL is a known cloud-drive direct CDN file stream that
+     * would return HTTP 403 if loaded directly by WebView with a standard browser User-Agent.
+     */
+    public static boolean isCloudDriveDirectStreamUrl(String url) {
+        if (url == null || url.isEmpty()) return false;
+        String lower = url.toLowerCase();
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false;
+        if (lower.contains(".baidupcs.com/file/") || lower.contains("d.pcs.baidu.com/file/")) {
+            return true;
+        }
+        if (lower.contains("dl-pc-zb.drive.uc.cn/") || (lower.contains(".quark.cn/") && lower.contains("auth_key="))) {
+            return true;
+        }
+        return false;
     }
 
     private static String safeGetCookie(String domainUrl) {
