@@ -1181,6 +1181,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mTopBar.setVisibility(enabled ? View.GONE : View.VISIBLE);
         mTopBarDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
+        if (enabled && mProgressBar != null) {
+            mProgressBar.setVisibility(View.GONE);
+        }
         mBottomBar.setVisibility(enabled ? View.GONE : View.VISIBLE);
         mBottomDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
 
@@ -1194,7 +1197,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         setFullscreenMode(!mIsFullscreenMode);
         AcidFeedback.info(
             this,
-            mIsFullscreenMode ? "已开启全屏浏览模式 (按返回键或点右下角退出)" : "已退出全屏模式"
+            mIsFullscreenMode ? "已开启全屏模式 (按返回键或点右下角退出)" : "已退出全屏模式"
         );
     }
 
@@ -1202,8 +1205,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         Window window = getWindow();
         if (window == null) return;
         View decorView = window.getDecorView();
+
         if (Build.VERSION.SDK_INT >= 30) {
             try {
+                // Release decor insets pinning so webpage naturally occupies the true physical top edge
+                java.lang.reflect.Method setDecorFits = window.getClass().getMethod("setDecorFitsSystemWindows", boolean.class);
+                setDecorFits.invoke(window, !fullscreen);
+
                 java.lang.reflect.Method getInsetsController = window.getClass().getMethod("getInsetsController");
                 Object controller = getInsetsController.invoke(window);
                 if (controller != null) {
@@ -1217,7 +1225,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         java.lang.reflect.Method show = insetsClass.getMethod("show", int.class);
                         show.invoke(controller, 7);
                     }
-                    return;
                 }
             } catch (Exception ignored) {}
         }
