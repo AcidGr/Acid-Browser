@@ -116,6 +116,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private int mOriginalOrientation;
     private boolean mIsFullscreenMode = false;
     private FrameLayout mBtnExitFullscreen;
+    private boolean mSyncingHotReload = false;
 
     private BroadcastReceiver mDownloadReceiver;
 
@@ -1135,27 +1136,33 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     // =========================================================================
 
     private void syncFromHotReloadedSettings() {
-        if (mController != null) {
-            mController.applySettingsHotReload();
-        }
-        boolean storeDark = mDataStore.isDarkMode();
-        if (mIsDarkMode != storeDark) {
-            mIsDarkMode = storeDark;
-            applyTheme(mIsDarkMode);
-        }
-        if (mHttpServer != null) {
-            boolean wantMcp = mDataStore.isMcpServerEnabled();
-            if (wantMcp && !mHttpServer.isRunning()) {
-                mHttpServer.start();
-            } else if (!wantMcp && mHttpServer.isRunning()) {
-                mHttpServer.stop();
+        if (mSyncingHotReload) return;
+        mSyncingHotReload = true;
+        try {
+            if (mController != null) {
+                mController.applySettingsHotReload();
             }
-        }
-        updateShieldVisual();
-        updateMenuSheetCards();
-        if (mSettingsSheet != null) {
-            mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
-            mSettingsSheet.refresh();
+            boolean storeDark = mDataStore.isDarkMode();
+            if (mIsDarkMode != storeDark) {
+                mIsDarkMode = storeDark;
+                applyTheme(mIsDarkMode);
+            }
+            if (mHttpServer != null) {
+                boolean wantMcp = mDataStore.isMcpServerEnabled();
+                if (wantMcp && !mHttpServer.isRunning()) {
+                    mHttpServer.start();
+                } else if (!wantMcp && mHttpServer.isRunning()) {
+                    mHttpServer.stop();
+                }
+            }
+            updateShieldVisual();
+            updateMenuSheetCards();
+            if (mSettingsSheet != null) {
+                mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
+                mSettingsSheet.refresh();
+            }
+        } finally {
+            mSyncingHotReload = false;
         }
     }
 

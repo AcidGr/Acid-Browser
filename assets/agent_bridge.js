@@ -40,6 +40,17 @@
                     }
                     if (allInternal) continue;
                 }
+                if (m.removedNodes && m.removedNodes.length > 0) {
+                    let allRemovedInternal = true;
+                    for (let j = 0; j < m.removedNodes.length; j++) {
+                        const n = m.removedNodes[j];
+                        if (n.id !== SOM_OVERLAY_ID && (!n.getAttribute || n.getAttribute('data-acid-internal') !== 'true')) {
+                            allRemovedInternal = false;
+                            break;
+                        }
+                    }
+                    if (allRemovedInternal) continue;
+                }
                 hasExternalChange = true;
                 break;
             }
@@ -308,6 +319,7 @@
 
         const container = document.createElement('div');
         container.id = SOM_OVERLAY_ID;
+        container.setAttribute('data-acid-internal', 'true');
         container.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2147483647;overflow:hidden;';
 
         const palette = ['#00FF88', '#00E5FF', '#FFB300', '#FF4081', '#B388FF'];
@@ -486,7 +498,8 @@
                                     height: Math.round(rect.height)
                                 }
                             };
-                            refMetaMap[ref] = meta;
+                            refMetaMap[ref].inViewport = inVp;
+                            refMetaMap[ref].box = meta.box;
                             items.push(meta);
                         }
                     }
@@ -1186,6 +1199,7 @@
         selectOption: selectOption,
         scroll: scroll,
         setSomHighlight: setSomHighlight,
+        setSomEnabled: setSomHighlight,
         enforceDesktopViewport: enforceDesktopViewport,
         clearSomOverlay: clearSomOverlay,
         getState: getState,

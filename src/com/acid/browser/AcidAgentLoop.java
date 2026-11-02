@@ -229,7 +229,7 @@ public class AcidAgentLoop {
                     }
                 }
                 if (!runningItemsToNotify.isEmpty()) {
-                    mSessionStore.saveActiveSession();
+                    mSessionStore.saveSession(session);
                 }
             }
         } else {
@@ -394,7 +394,7 @@ public class AcidAgentLoop {
                 }
                 synchronized (mSessionStore) {
                     session.apiMessages.add(assistantEntry);
-                    mSessionStore.saveActiveSession();
+                    mSessionStore.saveSession(session);
                 }
                 notifyContextUsage(session);
 
@@ -475,7 +475,7 @@ public class AcidAgentLoop {
                         toolMsg.put("content", execRes.outputText);
                         synchronized (mSessionStore) {
                             session.apiMessages.add(toolMsg);
-                            mSessionStore.saveActiveSession();
+                            mSessionStore.saveSession(session);
                         }
                         executedToolCount = i + 1;
 
@@ -573,7 +573,7 @@ public class AcidAgentLoop {
         }
         if (sessionStore != null) {
             synchronized (sessionStore) {
-                sessionStore.saveActiveSession();
+                sessionStore.saveSession(session);
             }
         }
     }
@@ -679,12 +679,49 @@ public class AcidAgentLoop {
         return sb.toString().trim();
     }
 
-    private static class StreamingToolCall {
-        int index;
-        String id = "";
-        String type = "function";
-        String name = "";
-        final StringBuilder arguments = new StringBuilder();
+    public static class StreamingToolCall {
+        public int index;
+        public String id = "";
+        public String type = "function";
+        public String name = "";
+        public final StringBuilder arguments = new StringBuilder();
+    }
+
+    public static void accumulateToolCallsDelta(
+        Map<Integer, StreamingToolCall> toolCallsMap,
+        JSONArray toolCallsDelta
+    ) {
+        if (toolCallsMap == null || toolCallsDelta == null) return;
+        for (int i = 0; i < toolCallsDelta.length(); i++) {
+            JSONObject tc = toolCallsDelta.optJSONObject(i);
+            if (tc == null) continue;
+            int idx = (!tc.isNull("index") && tc.has("index")) ? tc.optInt("index", 0) : 0;
+            StreamingToolCall call = toolCallsMap.get(idx);
+            if (call == null) {
+                call = new StreamingToolCall();
+                call.index = idx;
+                toolCallsMap.put(idx, call);
+            }
+            if (tc.has("id") && !tc.isNull("id")) {
+                String tid = tc.optString("id", "");
+                if (!tid.isEmpty() && !"null".equals(tid)) call.id = tid;
+            }
+            if (tc.has("type") && !tc.isNull("type")) {
+                String tType = tc.optString("type", "");
+                if (!tType.isEmpty() && !"null".equals(tType)) call.type = tType;
+            }
+            JSONObject fn = tc.optJSONObject("function");
+            if (fn != null) {
+                if (fn.has("name") && !fn.isNull("name")) {
+                    String name = fn.optString("name", "");
+                    if (!name.isEmpty() && !"null".equals(name)) call.name += name;
+                }
+                if (fn.has("arguments") && !fn.isNull("arguments")) {
+                    String args = fn.optString("arguments", "");
+                    if (!args.isEmpty() && !"null".equals(args)) call.arguments.append(args);
+                }
+            }
+        }
     }
 
     private JSONObject callChatCompletionsStream(
@@ -932,36 +969,7 @@ public class AcidAgentLoop {
                 // 3. Process tool_calls delta chunks
                 JSONArray toolCallsDelta = delta.optJSONArray("tool_calls");
                 if (toolCallsDelta != null) {
-                    for (int i = 0; i < toolCallsDelta.length(); i++) {
-                        JSONObject tc = toolCallsDelta.optJSONObject(i);
-                        if (tc == null) continue;
-                        int idx = tc.optInt("index", toolCallsMap.size());
-                        StreamingToolCall call = toolCallsMap.get(idx);
-                        if (call == null) {
-                            call = new StreamingToolCall();
-                            call.index = idx;
-                            toolCallsMap.put(idx, call);
-                        }
-                        if (tc.has("id")) {
-                            String tid = tc.optString("id", "");
-                            if (!tid.isEmpty()) call.id = tid;
-                        }
-                        if (tc.has("type")) {
-                            String tType = tc.optString("type", "");
-                            if (!tType.isEmpty()) call.type = tType;
-                        }
-                        JSONObject fn = tc.optJSONObject("function");
-                        if (fn != null) {
-                            if (fn.has("name")) {
-                                String name = fn.optString("name", "");
-                                if (!name.isEmpty()) call.name += name;
-                            }
-                            if (fn.has("arguments")) {
-                                String args = fn.optString("arguments", "");
-                                if (!args.isEmpty()) call.arguments.append(args);
-                            }
-                        }
-                    }
+                    accumulateToolCallsDelta(toolCallsMap, toolCallsDelta);
                 }
             }
         } catch (Exception e) {

@@ -361,6 +361,9 @@ public class DownloadCoordinator {
             String mainCookie = safeGetCookie("https://drive.uc.cn");
             cookie = mergeCookies(cookie, mainCookie);
             headers.put("Referer", "https://drive.uc.cn/");
+            if (userAgent == null || !userAgent.contains("uc-cloud-drive")) {
+                userAgent = UA_UC_CLIENT;
+            }
         } else if (lowerUrl.contains("baidupcs.com") || lowerUrl.contains("pcs.baidu.com") || lowerUrl.contains("d2-ant.baidu.com")) {
             String mainCookie = safeGetCookie("https://pan.baidu.com");
             cookie = mergeCookies(cookie, mainCookie);

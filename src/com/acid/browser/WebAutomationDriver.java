@@ -39,6 +39,7 @@ public class WebAutomationDriver {
         void loadUrl(String url);
         void emitLog(String log);
         boolean isSomEnabled();
+        boolean isDesktopMode();
         int getBlockedDeepLinksCount();
         String getLastBlockedDeepLink();
         int getTriggeredDownloadsCount();
@@ -381,6 +382,12 @@ public class WebAutomationDriver {
                                 BrowserController.TabSession tab = mHost.getTargetTab();
                                 if (tab != null && tab.webView != null) {
                                     tab.webView.evaluateJavascript(bridgeJs, null);
+                                    if (mHost.isDesktopMode()) {
+                                        tab.webView.evaluateJavascript(
+                                            "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
+                                            null
+                                        );
+                                    }
                                 }
                                 latch.countDown();
                             }
@@ -388,6 +395,8 @@ public class WebAutomationDriver {
                         latch.await(1000, TimeUnit.MILLISECONDS);
                     }
                 }
+            } else if (mHost.isDesktopMode()) {
+                evaluateJsSync("if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}", 500);
             }
         } catch (Exception e) {
             Log.w(TAG, "Bridge re-injection failed; automation may degrade for this page", e);
@@ -938,6 +947,7 @@ public class WebAutomationDriver {
     }
 
     public JSONObject fillFormSync(JSONArray fields, boolean submitLast) {
+        ensureBridgeInjectedSync();
         try {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.fillForm(" +
                 fields.toString() + "," + submitLast + ")); })()";
@@ -955,6 +965,7 @@ public class WebAutomationDriver {
     }
 
     public JSONObject selectOptionSync(String ref, String valueOrLabel) {
+        ensureBridgeInjectedSync();
         try {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.selectOption(" +
                 JSONObject.quote(ref) + "," + JSONObject.quote(valueOrLabel) + ")); })()";
@@ -972,6 +983,7 @@ public class WebAutomationDriver {
     }
 
     public JSONObject scrollSync(String direction, double amount, String targetRef) {
+        ensureBridgeInjectedSync();
         try {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.scroll(" +
                 JSONObject.quote(direction) + "," + amount + "," +

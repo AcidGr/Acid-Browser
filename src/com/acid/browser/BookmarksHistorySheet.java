@@ -174,15 +174,18 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         final Context ctx = getContext();
         List<BrowserDataStore.EntryItem> rawList = isBookmarks ? mDataStore.loadBookmarks() : mDataStore.loadHistory();
 
-        // 1. Filter by Query (Title or URL keywords)
+        // 1. Filter by Query (Title or URL keywords), preserving original index in rawList
         String q = mSearchQuery.toLowerCase(Locale.ROOT).trim();
         List<BrowserDataStore.EntryItem> filteredList = new ArrayList<BrowserDataStore.EntryItem>();
-        for (BrowserDataStore.EntryItem item : rawList) {
+        List<Integer> originalIndices = new ArrayList<Integer>();
+        for (int rawIdx = 0; rawIdx < rawList.size(); rawIdx++) {
+            BrowserDataStore.EntryItem item = rawList.get(rawIdx);
             if (item == null) continue;
             if (q.isEmpty()
                 || item.title.toLowerCase(Locale.ROOT).contains(q)
                 || item.url.toLowerCase(Locale.ROOT).contains(q)) {
                 filteredList.add(item);
+                originalIndices.add(Integer.valueOf(rawIdx));
             }
         }
 
@@ -217,9 +220,9 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, headerText));
 
             for (int i = 0; i < filteredList.size(); i++) {
-                final int index = i;
+                final int realIndex = originalIndices.get(i).intValue();
                 final BrowserDataStore.EntryItem item = filteredList.get(i);
-                renderEntryRow(container, item, index, isBookmarks);
+                renderEntryRow(container, item, realIndex, isBookmarks);
             }
             return;
         }

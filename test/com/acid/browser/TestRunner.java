@@ -116,6 +116,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testStorageInvariantsAndEmptyBookmarks(); }
         });
 
+        run("Critical Runtime Guards: SSE tool_calls null safety, HttpProbe 206/* & bridge exports", new TestCase() {
+            @Override public void execute() throws Exception { testCriticalRuntimeGuards(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
             System.exit(1);
@@ -1747,5 +1751,72 @@ public final class TestRunner {
         List<BrowserDataStore.EntryItem> corruptRecovered = repo.loadBookmarks();
         assertTrue(corruptRecovered.isEmpty(), "corrupt blob safely returns empty list");
         assertEquals("{broken_json", prefs.getString(BookmarkRepository.PREF_BOOKMARKS, null), "corrupt blob preserved untouched");
+    }
+
+    private static void testCriticalRuntimeGuards() throws Exception {
+        // 1. SSE tool_calls delta accumulation guards against null / "null" poisoning
+        Map<Integer, AcidAgentLoop.StreamingToolCall> callMap = new java.util.TreeMap<Integer, AcidAgentLoop.StreamingToolCall>();
+        org.json.JSONArray delta1 = new org.json.JSONArray(
+            "[{\"index\":0,\"id\":\"call_abc\",\"type\":\"function\",\"function\":{\"name\":\"browser\",\"arguments\":\"\"}}]"
+        );
+        org.json.JSONArray delta2 = new org.json.JSONArray(
+            "[{\"index\":0,\"id\":null,\"type\":null,\"function\":{\"name\":null,\"arguments\":\"{\\\"action\\\":\\\"observe\\\"}\"}}]"
+        );
+        org.json.JSONArray delta3 = new org.json.JSONArray(
+            "[{\"index\":0,\"id\":\"null\",\"type\":\"null\",\"function\":{\"name\":\"null\",\"arguments\":\"null\"}}]"
+        );
+        AcidAgentLoop.accumulateToolCallsDelta(callMap, delta1);
+        AcidAgentLoop.accumulateToolCallsDelta(callMap, delta2);
+        AcidAgentLoop.accumulateToolCallsDelta(callMap, delta3);
+
+        AcidAgentLoop.StreamingToolCall assembled = callMap.get(0);
+        assertTrue(assembled != null, "tool call entry exists at index 0");
+        assertEquals("call_abc", assembled.id, "tool call id preserved across null deltas");
+        assertEquals("function", assembled.type, "tool call type preserved across null deltas");
+        assertEquals("browser", assembled.name, "tool call name not polluted with 'null'");
+        assertEquals("{\"action\":\"observe\"}", assembled.arguments.toString(), "arguments assembled cleanly");
+
+        // 2. HttpProbe 206 Partial Content with Content-Range: bytes 0-0/* must NOT mistake 1-byte probe body for total file length
+        final ServerSocket probeServer = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+        int port = probeServer.getLocalPort();
+        Thread serverThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Socket sock = probeServer.accept();
+                    BufferedReader br = new BufferedReader(new InputStreamReader(sock.getInputStream(), StandardCharsets.US_ASCII));
+                    String line;
+                    while ((line = br.readLine()) != null && !line.isEmpty()) {}
+                    OutputStream os = sock.getOutputStream();
+                    String resp = "HTTP/1.1 206 Partial Content\r\n" +
+                        "Content-Range: bytes 0-0/*\r\n" +
+                        "Content-Length: 1\r\n" +
+                        "Content-Type: application/octet-stream\r\n" +
+                        "Connection: close\r\n\r\nX";
+                    os.write(resp.getBytes(StandardCharsets.US_ASCII));
+                    os.flush();
+                    sock.close();
+                } catch (Exception ignored) {
+                } finally {
+                    try { probeServer.close(); } catch (Exception ignored) {}
+                }
+            }
+        });
+        serverThread.start();
+        HttpProbe.ProbeResult pr = HttpProbe.probe("http://127.0.0.1:" + port + "/stream.bin", null);
+        serverThread.join(2000);
+        assertTrue(pr.supportsRange, "206 probe marks supportsRange true");
+        assertEquals(Long.valueOf(-1L), Long.valueOf(pr.contentLength), "unknown total length (*) stays -1 instead of 1 byte");
+
+        // 3. agent_bridge.js exports setSomEnabled alias and preserves refMetaMap fingerprint fields
+        String bridgeSrc = AcidIo.readFileUtf8(new File("assets/agent_bridge.js"));
+        assertTrue(bridgeSrc.contains("setSomEnabled: setSomHighlight"), "agent_bridge exports setSomEnabled alias");
+        assertTrue(!bridgeSrc.contains("refMetaMap[ref] = meta;"), "agent_bridge does not overwrite refMetaMap fingerprint");
+
+        // 4. DownloadCoordinator injects UA_UC_CLIENT for .uc.cn URLs
+        Map<String, String> ucHeaders = com.acid.browser.download.DownloadCoordinator.buildCloudDriveAwareHeaders(
+            "https://dl-pc-zb.drive.uc.cn/file.zip", null
+        );
+        assertEquals(com.acid.browser.download.DownloadCoordinator.UA_UC_CLIENT, ucHeaders.get("User-Agent"), "UC cloud drive UA injected");
     }
 }

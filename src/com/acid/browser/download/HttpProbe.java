@@ -94,24 +94,22 @@ public final class HttpProbe {
                 if (cr != null) {
                     int slash = cr.lastIndexOf('/');
                     if (slash >= 0 && slash < cr.length() - 1) {
-                        try {
-                            totalLength = Long.parseLong(cr.substring(slash + 1).trim());
-                        } catch (NumberFormatException ignored) {}
+                        String totalPart = cr.substring(slash + 1).trim();
+                        if (!"*".equals(totalPart)) {
+                            try {
+                                totalLength = Long.parseLong(totalPart);
+                            } catch (NumberFormatException ignored) {}
+                        }
                     }
                 }
             } else if (code == 200) {
                 // Server ignored Range header and returned full stream
                 supportsRange = false;
                 totalLength = conn.getContentLengthLong();
-            }
-
-            if (totalLength <= 0) {
-                totalLength = conn.getContentLengthLong();
-            }
-
-            String acceptRanges = conn.getHeaderField("Accept-Ranges");
-            if ("bytes".equalsIgnoreCase(acceptRanges)) {
-                supportsRange = true;
+                String acceptRanges = conn.getHeaderField("Accept-Ranges");
+                if ("bytes".equalsIgnoreCase(acceptRanges)) {
+                    supportsRange = true;
+                }
             }
 
             String mimeType = conn.getContentType();
