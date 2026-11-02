@@ -30,8 +30,8 @@ public class BrowserDataStore {
     private static final String TAG = "AcidDataStore";
 
     public static final String PREF_NAME = "acid_browser_data";
-    public static final String PREF_BOOKMARKS = "bookmarks";
-    public static final String PREF_HISTORY = "history";
+    public static final String PREF_BOOKMARKS = BookmarkRepository.PREF_BOOKMARKS;
+    public static final String PREF_HISTORY = HistoryRepository.PREF_HISTORY;
     public static final String PREF_DOWNLOADS = "downloads";
     private static final String LEGACY_PREF_ACTIVITY = "acid_browser_prefs";
 
@@ -104,6 +104,8 @@ public class BrowserDataStore {
     private File mBookmarksJsonFile = null;
     private File mHistoryJsonFile = null;
     private File mWorkspaceDir = null;
+    private final BookmarkRepository mBookmarkRepo;
+    private final HistoryRepository mHistoryRepo;
     private OnSettingsChangedListener mSettingsChangedListener = null;
     private OnBookmarksChangedListener mBookmarksChangedListener = null;
     private Runnable mBookmarksMutatedListener = null;
@@ -111,13 +113,13 @@ public class BrowserDataStore {
     private CallbackDispatcher mDispatcher = null;
     private FileObserver mFileObserver = null;
     private volatile long mLastSelfSaveTime = 0;
-    private volatile long mLastBookmarksSelfSaveTime = 0;
-    private volatile long mLastHistorySelfSaveTime = 0;
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
         mPrimaryPrefsOverride = null;
         mLegacyPrefsOverride = null;
+        mBookmarkRepo = new BookmarkRepository(mContext, null, null);
+        mHistoryRepo = new HistoryRepository(mContext, null, null);
     }
 
     BrowserDataStore(SharedPreferences primary, SharedPreferences legacy, File settingsJsonFile) {
@@ -135,6 +137,8 @@ public class BrowserDataStore {
         mSettingsJsonFile = settingsJsonFile;
         mBookmarksJsonFile = bookmarksJsonFile;
         mHistoryJsonFile = historyJsonFile;
+        mBookmarkRepo = new BookmarkRepository(null, primary, bookmarksJsonFile);
+        mHistoryRepo = new HistoryRepository(null, primary, historyJsonFile);
     }
 
     SharedPreferences prefs() {
@@ -158,6 +162,8 @@ public class BrowserDataStore {
             mSettingsJsonFile = new File(workspaceDir, "settings.json");
             mBookmarksJsonFile = new File(workspaceDir, "bookmarks.json");
             mHistoryJsonFile = new File(workspaceDir, "history.json");
+            mBookmarkRepo.setJsonFile(mBookmarksJsonFile);
+            mHistoryRepo.setJsonFile(mHistoryJsonFile);
             syncSettingsJsonFile();
             syncBookmarksJsonFile();
             syncHistoryJsonFile();
@@ -211,16 +217,16 @@ public class BrowserDataStore {
                             mLastSelfSaveTime = System.currentTimeMillis();
                             reloadFromJsonFile();
                         } else if (path.endsWith("bookmarks.json")) {
-                            if (System.currentTimeMillis() - mLastBookmarksSelfSaveTime < 800) {
+                            if (System.currentTimeMillis() - mBookmarkRepo.getLastSelfSaveTime() < 800) {
                                 return; // Ignore own writes
                             }
-                            mLastBookmarksSelfSaveTime = System.currentTimeMillis();
+                            mBookmarkRepo.setLastSelfSaveTime(System.currentTimeMillis());
                             reloadBookmarksFromJsonFile();
                         } else if (path.endsWith("history.json")) {
-                            if (System.currentTimeMillis() - mLastHistorySelfSaveTime < 800) {
+                            if (System.currentTimeMillis() - mHistoryRepo.getLastSelfSaveTime() < 800) {
                                 return; // Ignore own writes
                             }
-                            mLastHistorySelfSaveTime = System.currentTimeMillis();
+                            mHistoryRepo.setLastSelfSaveTime(System.currentTimeMillis());
                             reloadHistoryFromJsonFile();
                         }
                     }
@@ -250,18 +256,23 @@ public class BrowserDataStore {
 
     public void setOnBookmarksChangedListener(OnBookmarksChangedListener l) {
         mBookmarksChangedListener = l;
+        mBookmarkRepo.setOnBookmarksChangedListener(l);
     }
 
     public void setOnBookmarksMutatedListener(Runnable l) {
         mBookmarksMutatedListener = l;
+        mBookmarkRepo.setOnBookmarksMutatedListener(l);
     }
 
     public void setOnHistoryChangedListener(OnHistoryChangedListener l) {
         mHistoryChangedListener = l;
+        mHistoryRepo.setOnHistoryChangedListener(l);
     }
 
     public void setCallbackDispatcher(CallbackDispatcher dispatcher) {
         mDispatcher = dispatcher;
+        mBookmarkRepo.setCallbackDispatcher(dispatcher);
+        mHistoryRepo.setCallbackDispatcher(dispatcher);
     }
 
     private void dispatchCallback(Runnable action) {
@@ -294,21 +305,11 @@ public class BrowserDataStore {
     }
 
     public void syncBookmarksJsonFile() {
-        if (mBookmarksJsonFile == null) return;
-        if (mBookmarksJsonFile.exists()) {
-            reloadBookmarksFromJsonFile();
-        } else {
-            saveBookmarksToJsonFile();
-        }
+        mBookmarkRepo.syncJsonFile();
     }
 
     public void syncHistoryJsonFile() {
-        if (mHistoryJsonFile == null) return;
-        if (mHistoryJsonFile.exists()) {
-            reloadHistoryFromJsonFile();
-        } else {
-            saveHistoryToJsonFile();
-        }
+        mHistoryRepo.syncJsonFile();
     }
 
     // =========================================================================
@@ -775,356 +776,82 @@ public class BrowserDataStore {
         return count;
     }
 
-    /**
-     * Decodes one bookmark/history element. Returns null (and logs) when the element is
-     * unusable, so the caller can skip it without aborting the whole batch.
-     */
-    private static EntryItem decodeEntry(JSONObject o, int index, String kind) {
-        if (o == null) {
-            Log.w(TAG, kind + "[" + index + "] is not a JSON object; skipped");
-            return null;
-        }
-        String url = o.optString("url", "");
-        if (TextUtils.isEmpty(url)) {
-            Log.w(TAG, kind + "[" + index + "] has no usable url; skipped");
-            return null;
-        }
-        long time = o.optLong("time", 0);
-        return new EntryItem(o.optString("title", url), url, time);
+    // =========================================================================
+    // Bookmarks Repository Facade
+    // =========================================================================
+
+    public BookmarkRepository getBookmarkRepository() {
+        return mBookmarkRepo;
     }
 
     public List<EntryItem> loadBookmarks() {
-        SharedPreferences prefs = prefs();
-        String raw = prefs.getString(PREF_BOOKMARKS, null);
-        List<EntryItem> list = new ArrayList<EntryItem>();
-        // "readable" means the stored blob was absent (first run) or decoded successfully.
-        // It is false only for a corrupt blob, which must never be overwritten.
-        boolean readable = (raw == null);
-        if (raw != null) {
-            try {
-                JSONArray arr = new JSONArray(raw);
-                readable = true;
-                for (int i = 0; i < arr.length(); i++) {
-                    EntryItem item = decodeEntry(arr.optJSONObject(i), i, "bookmark");
-                    if (item != null) list.add(item);
-                }
-            } catch (Exception e) {
-                // Do NOT fall through to the seeding branch: overwriting an unreadable blob
-                // would permanently destroy bookmarks that a later build could still recover.
-                Log.w(TAG, "Bookmark store is unreadable; leaving stored data untouched", e);
-                return list;
-            }
-        }
-
-        if (list.isEmpty() && readable) {
-            list.add(new EntryItem("Google", "https://www.google.com"));
-            list.add(new EntryItem("GitHub", "https://github.com"));
-            list.add(new EntryItem("Bilibili", "https://www.bilibili.com"));
-            list.add(new EntryItem("知乎", "https://www.zhihu.com"));
-            list.add(new EntryItem("Hacker News", "https://news.ycombinator.com"));
-            list.add(new EntryItem("百度", "https://www.baidu.com"));
-            saveBookmarks(list, false);
-            if (mBookmarksJsonFile != null) {
-                saveBookmarksToJsonFile();
-            }
-        }
-        return list;
+        return mBookmarkRepo.loadBookmarks();
     }
 
     public void saveBookmarks(List<EntryItem> list) {
-        saveBookmarks(list, true);
+        mBookmarkRepo.saveBookmarks(list);
     }
 
     public synchronized void saveBookmarks(List<EntryItem> list, boolean syncFile) {
-        JSONArray arr = new JSONArray();
-        if (list != null) {
-            for (EntryItem item : list) {
-                if (item == null) continue;
-                JSONObject o = new JSONObject();
-                try {
-                    o.put("title", item.title);
-                    o.put("url", item.url);
-                } catch (Exception e) {
-                    // org.json declares a checked exception on put(); it is not thrown in
-                    // practice, but log instead of swallowing so a real failure is visible.
-                    Log.w(TAG, "Failed to encode bookmark: " + item.url, e);
-                    continue;
-                }
-                arr.put(o);
-            }
-        }
-        prefs()
-            .edit()
-            .putString(PREF_BOOKMARKS, arr.toString())
-            .apply();
-
-        if (syncFile && mBookmarksJsonFile != null) {
-            saveBookmarksToJsonFile(arr);
-        }
-        if (mBookmarksMutatedListener != null) {
-            dispatchCallback(mBookmarksMutatedListener);
-        }
+        mBookmarkRepo.saveBookmarks(list, syncFile);
     }
 
     public synchronized boolean saveBookmarksToJsonFile() {
-        return saveBookmarksToJsonFile(null);
+        return mBookmarkRepo.saveBookmarksToJsonFile();
     }
 
     public synchronized boolean saveBookmarksToJsonFile(JSONArray cachedArr) {
-        if (mBookmarksJsonFile == null) return false;
-        try {
-            JSONArray arr = cachedArr;
-            if (arr == null) {
-                List<EntryItem> list = loadBookmarks();
-                arr = new JSONArray();
-                for (EntryItem item : list) {
-                    if (item == null) continue;
-                    JSONObject o = new JSONObject();
-                    o.put("title", item.title);
-                    o.put("url", item.url);
-                    arr.put(o);
-                }
-            }
-            mLastBookmarksSelfSaveTime = System.currentTimeMillis();
-            String formatted;
-            try {
-                formatted = arr.toString(2);
-            } catch (Exception e) {
-                formatted = arr.toString();
-            }
-            AcidIo.writeFileUtf8(mBookmarksJsonFile, formatted);
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to save bookmarks to " + mBookmarksJsonFile, e);
-            return false;
-        }
+        return mBookmarkRepo.saveBookmarksToJsonFile(cachedArr);
     }
 
     public synchronized boolean reloadBookmarksFromJsonFile() {
-        if (mBookmarksJsonFile == null || !mBookmarksJsonFile.exists()) return false;
-        try {
-            String jsonStr = AcidIo.readFileUtf8(mBookmarksJsonFile).trim();
-            if (jsonStr.isEmpty()) return false;
-
-            JSONArray arr = new JSONArray(jsonStr);
-            List<EntryItem> list = new ArrayList<EntryItem>();
-            for (int i = 0; i < arr.length(); i++) {
-                EntryItem item = decodeEntry(arr.optJSONObject(i), i, "bookmark");
-                if (item != null) list.add(item);
-            }
-
-            saveBookmarks(list, false);
-
-            dispatchCallback(new Runnable() {
-                @Override
-                public void run() {
-                    if (mBookmarksChangedListener != null) {
-                        mBookmarksChangedListener.onBookmarksChanged();
-                    }
-                }
-            });
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to reload bookmarks from " + mBookmarksJsonFile + ": " + e.getMessage(), e);
-            return false;
-        }
+        return mBookmarkRepo.reloadBookmarksFromJsonFile();
     }
 
-    public static final int MAX_HISTORY_RETENTION_ENTRIES = 2000;
+    public static final int MAX_HISTORY_RETENTION_ENTRIES = HistoryRepository.MAX_HISTORY_RETENTION_ENTRIES;
 
     public synchronized void addBookmark(String title, String url) {
-        if (TextUtils.isEmpty(url)) return;
-        List<EntryItem> list = loadBookmarks();
-        list.add(0, new EntryItem(TextUtils.isEmpty(title) ? url : title, url));
-        saveBookmarks(list);
+        mBookmarkRepo.addBookmark(title, url);
     }
 
     public synchronized void removeBookmark(int index) {
-        List<EntryItem> list = loadBookmarks();
-        if (index >= 0 && index < list.size()) {
-            list.remove(index);
-            saveBookmarks(list);
-        }
+        mBookmarkRepo.removeBookmark(index);
     }
 
-    /**
-     * Rewrites the bookmark at {@code index} with a new title/url pair.
-     * EntryItem's fields are final, so the element is replaced rather than mutated.
-     *
-     * @return true when the index was valid and the list was persisted
-     */
     public synchronized boolean updateBookmark(int index, String title, String url) {
-        if (TextUtils.isEmpty(url)) return false;
-        List<EntryItem> list = loadBookmarks();
-        if (index < 0 || index >= list.size()) return false;
-        String trimmedUrl = url.trim();
-        list.set(index, new EntryItem(TextUtils.isEmpty(title) ? trimmedUrl : title.trim(), trimmedUrl));
-        saveBookmarks(list);
-        return true;
+        return mBookmarkRepo.updateBookmark(index, title, url);
+    }
+
+    // =========================================================================
+    // History Repository Facade
+    // =========================================================================
+
+    public HistoryRepository getHistoryRepository() {
+        return mHistoryRepo;
     }
 
     public List<EntryItem> loadHistory() {
-        SharedPreferences prefs = prefs();
-        String raw = prefs.getString(PREF_HISTORY, null);
-        List<EntryItem> list = new ArrayList<EntryItem>();
-        if (raw == null) return list;
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
-                EntryItem item = decodeEntry(arr.optJSONObject(i), i, "history");
-                if (item != null) list.add(item);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "History store is unreadable; returning what could be recovered", e);
-        }
-        return list;
+        return mHistoryRepo.loadHistory();
     }
 
     public void clearHistory() {
-        prefs()
-            .edit()
-            .putString(PREF_HISTORY, "[]")
-            .apply();
-
-        if (mHistoryJsonFile != null) {
-            saveHistoryToJsonFile(new JSONArray());
-        }
-
-        dispatchCallback(new Runnable() {
-            @Override
-            public void run() {
-                if (mHistoryChangedListener != null) {
-                    mHistoryChangedListener.onHistoryChanged();
-                }
-            }
-        });
+        mHistoryRepo.clearHistory();
     }
 
     public synchronized boolean saveHistoryToJsonFile() {
-        return saveHistoryToJsonFile(null);
+        return mHistoryRepo.saveHistoryToJsonFile();
     }
 
     public synchronized boolean saveHistoryToJsonFile(JSONArray cachedArr) {
-        if (mHistoryJsonFile == null) return false;
-        try {
-            JSONArray arr = cachedArr;
-            if (arr == null) {
-                List<EntryItem> list = loadHistory();
-                arr = new JSONArray();
-                for (EntryItem item : list) {
-                    if (item == null) continue;
-                    JSONObject o = new JSONObject();
-                    o.put("title", item.title);
-                    o.put("url", item.url);
-                    o.put("time", item.time);
-                    arr.put(o);
-                }
-            }
-            mLastHistorySelfSaveTime = System.currentTimeMillis();
-            String formatted;
-            try {
-                formatted = arr.toString(2);
-            } catch (Exception e) {
-                formatted = arr.toString();
-            }
-            AcidIo.writeFileUtf8(mHistoryJsonFile, formatted);
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to save history to " + mHistoryJsonFile, e);
-            return false;
-        }
+        return mHistoryRepo.saveHistoryToJsonFile(cachedArr);
     }
 
     public synchronized boolean reloadHistoryFromJsonFile() {
-        if (mHistoryJsonFile == null || !mHistoryJsonFile.exists()) return false;
-        try {
-            String jsonStr = AcidIo.readFileUtf8(mHistoryJsonFile).trim();
-            if (jsonStr.isEmpty()) return false;
-
-            JSONArray arr = new JSONArray(jsonStr);
-            List<EntryItem> list = new ArrayList<EntryItem>();
-            for (int i = 0; i < arr.length(); i++) {
-                EntryItem item = decodeEntry(arr.optJSONObject(i), i, "history");
-                if (item != null) list.add(item);
-            }
-
-            JSONArray next = new JSONArray();
-            for (EntryItem item : list) {
-                JSONObject o = new JSONObject();
-                o.put("title", item.title);
-                o.put("url", item.url);
-                o.put("time", item.time);
-                next.put(o);
-            }
-            prefs().edit().putString(PREF_HISTORY, next.toString()).apply();
-
-            dispatchCallback(new Runnable() {
-                @Override
-                public void run() {
-                    if (mHistoryChangedListener != null) {
-                        mHistoryChangedListener.onHistoryChanged();
-                    }
-                }
-            });
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to reload history from " + mHistoryJsonFile + ": " + e.getMessage(), e);
-            return false;
-        }
+        return mHistoryRepo.reloadHistoryFromJsonFile();
     }
 
     public synchronized void recordHistory(String url, String title, boolean incognitoMode) {
-        if (incognitoMode) return;
-        if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)
-            || url.contains("/acid_workspace/homepage/index.html")
-            || "acid://home".equalsIgnoreCase(url) || "about:home".equalsIgnoreCase(url)) {
-            return;
-        }
-        SharedPreferences prefs = prefs();
-        String raw = prefs.getString(PREF_HISTORY, "[]");
-        JSONArray next = new JSONArray();
-        try {
-            JSONObject cur = new JSONObject();
-            cur.put("title", TextUtils.isEmpty(title) ? url : title);
-            cur.put("url", url);
-            cur.put("time", System.currentTimeMillis());
-            next.put(cur);
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to encode history entry: " + url, e);
-            return;
-        }
-
-        // Bounded retention policy up to MAX_HISTORY_RETENTION_ENTRIES, skipping corrupt items and deduplicating
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length() && next.length() < MAX_HISTORY_RETENTION_ENTRIES; i++) {
-                JSONObject o = arr.optJSONObject(i);
-                if (o == null) {
-                    Log.w(TAG, "history[" + i + "] is not a JSON object; dropped on rewrite");
-                    continue;
-                }
-                if (!url.equals(o.optString("url", ""))) {
-                    next.put(o);
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Previous history is unreadable; starting a fresh list", e);
-        }
-
-        prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
-
-        if (mHistoryJsonFile != null) {
-            saveHistoryToJsonFile(next);
-        }
-
-        dispatchCallback(new Runnable() {
-            @Override
-            public void run() {
-                if (mHistoryChangedListener != null) {
-                    mHistoryChangedListener.onHistoryChanged();
-                }
-            }
-        });
+        mHistoryRepo.recordHistory(url, title, incognitoMode);
     }
 
     public List<DownloadItem> loadDownloads() {
