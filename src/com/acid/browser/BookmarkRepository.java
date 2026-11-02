@@ -20,7 +20,7 @@ public class BookmarkRepository {
 
     private static final String TAG = "AcidBookmarkRepo";
     public static final String PREF_BOOKMARKS = "bookmarks";
-    private static final String PREF_NAME = "acid_browser_prefs";
+    public static final String PREF_NAME = BrowserDataStore.PREF_NAME;
 
     private final Context mContext;
     private final SharedPreferences mPrefsOverride;
@@ -96,22 +96,9 @@ public class BookmarkRepository {
         SharedPreferences prefs = prefs();
         String raw = prefs.getString(PREF_BOOKMARKS, null);
         List<BrowserDataStore.EntryItem> list = new ArrayList<BrowserDataStore.EntryItem>();
-        boolean readable = (raw == null);
-        if (raw != null) {
-            try {
-                JSONArray arr = new JSONArray(raw);
-                readable = true;
-                for (int i = 0; i < arr.length(); i++) {
-                    BrowserDataStore.EntryItem item = decodeBookmarkEntry(arr.optJSONObject(i), i);
-                    if (item != null) list.add(item);
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Bookmark store is unreadable; leaving stored data untouched", e);
-                return list;
-            }
-        }
 
-        if (list.isEmpty() && readable) {
+        // First run initialization: raw is null when no bookmarks entry has ever been saved
+        if (raw == null) {
             list.add(new BrowserDataStore.EntryItem("Google", "https://www.google.com"));
             list.add(new BrowserDataStore.EntryItem("GitHub", "https://github.com"));
             list.add(new BrowserDataStore.EntryItem("Bilibili", "https://www.bilibili.com"));
@@ -122,6 +109,18 @@ public class BookmarkRepository {
             if (mBookmarksJsonFile != null) {
                 saveBookmarksToJsonFile();
             }
+            return list;
+        }
+
+        try {
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                BrowserDataStore.EntryItem item = decodeBookmarkEntry(arr.optJSONObject(i), i);
+                if (item != null) list.add(item);
+            }
+        } catch (Exception e) {
+            // Corrupt JSON blob: preserve untouched to allow recovery, do not overwrite with defaults
+            Log.w(TAG, "Bookmark store is unreadable; leaving stored data untouched", e);
         }
         return list;
     }

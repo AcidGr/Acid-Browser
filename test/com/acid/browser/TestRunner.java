@@ -112,6 +112,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testConcurrencyAndStateMachine(); }
         });
 
+        run("Storage Invariants: unified PREF_NAME & empty bookmarks persistence", new TestCase() {
+            @Override public void execute() throws Exception { testStorageInvariantsAndEmptyBookmarks(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
             System.exit(1);
@@ -1274,6 +1278,72 @@ public final class TestRunner {
             } finally {
                 try { rangeServer.close(); } catch (Exception ignored) {}
             }
+
+            // 3d. Download failure fast-abort, file/checkpoint cleanup & clean retry from scratch
+            File failDir = new File(tempDir, "fail_test");
+            failDir.mkdirs();
+            DownloadTask failTask = new DownloadTask(2001L, "https://example.com/fail.zip", "fail.zip", "application/zip", failDir, headers);
+            failTask.contentLength = 20000L;
+            failTask.supportsRange = true;
+            DownloadChunk ch0 = new DownloadChunk(0, 0, 9999);
+            DownloadChunk ch1 = new DownloadChunk(1, 10000, 19999);
+            List<DownloadChunk> failChunks = new ArrayList<DownloadChunk>();
+            failChunks.add(ch0);
+            failChunks.add(ch1);
+            failTask.setChunks(failChunks);
+
+            // Pre-create destination file and checkpoint
+            AcidIo.writeBytes(failTask.destinationFile, new byte[5000]);
+            failTask.saveCheckpoint();
+            assertTrue(failTask.destinationFile.exists(), "Initial partial file exists");
+            assertTrue(failTask.checkpointFile.exists(), "Initial checkpoint exists");
+
+            // Simulate AcidDownloader workerListener handling chunk failure
+            final java.util.concurrent.atomic.AtomicInteger remChunks = new java.util.concurrent.atomic.AtomicInteger(2);
+            DownloadWorker.WorkerListener listener = new DownloadWorker.WorkerListener() {
+                @Override public void onChunkProgress(DownloadTask t, DownloadChunk c, int bytesRead) {}
+                @Override public void onChunkCompleted(DownloadTask t, DownloadChunk c) {
+                    if (t.isCanceled || t.isPaused || t.status == DownloadTask.STATUS_FAILED) return;
+                    t.saveCheckpoint();
+                    int rem = remChunks.decrementAndGet();
+                    if (rem <= 0 && !t.isPaused && !t.isCanceled && t.status != DownloadTask.STATUS_FAILED) {
+                        t.status = DownloadTask.STATUS_SUCCESSFUL;
+                    }
+                }
+                @Override public void onChunkFailed(DownloadTask t, DownloadChunk c, Exception error) {
+                    if (t.isPaused || t.isCanceled || t.status == DownloadTask.STATUS_FAILED) return;
+                    t.isCanceled = true;
+                    t.status = DownloadTask.STATUS_FAILED;
+                    t.errorMessage = error != null ? error.getMessage() : "Download error";
+                    t.cleanCheckpointFile();
+                    if (t.destinationFile != null && t.destinationFile.exists()) {
+                        t.destinationFile.delete();
+                    }
+                }
+            };
+
+            // Trigger failure on Chunk 0
+            listener.onChunkFailed(failTask, ch0, new java.io.IOException("Socket timeout"));
+            assertTrue(failTask.isCanceled, "isCanceled set to true to brake sibling workers");
+            assertEquals(DownloadTask.STATUS_FAILED, Integer.valueOf(failTask.status), "Status marked STATUS_FAILED");
+            assertTrue(!failTask.checkpointFile.exists(), "Checkpoint purged to prevent dirty resume");
+            assertTrue(!failTask.destinationFile.exists(), "Truncated partial file purged immediately");
+
+            // Sibling Chunk 1 attempts completion afterwards -> must be rejected
+            listener.onChunkCompleted(failTask, ch1);
+            assertEquals(DownloadTask.STATUS_FAILED, Integer.valueOf(failTask.status), "Status remains STATUS_FAILED, never hijacked to SUCCESSFUL");
+            assertTrue(!failTask.checkpointFile.exists(), "Checkpoint was not re-created by sibling worker");
+
+            // User-initiated pause retains checkpoint
+            DownloadTask pauseTask = new DownloadTask(2002L, "https://example.com/pause.zip", "pause.zip", "application/zip", failDir, headers);
+            pauseTask.contentLength = 20000L;
+            pauseTask.supportsRange = true;
+            pauseTask.setChunks(failChunks);
+            pauseTask.status = DownloadTask.STATUS_PAUSED;
+            pauseTask.isPaused = true;
+            pauseTask.saveCheckpoint();
+            assertTrue(pauseTask.checkpointFile.exists(), "User pause strictly preserves checkpoint for resumption");
+            pauseTask.cleanCheckpointFile();
         } finally {
             File[] files = tempDir.listFiles();
             if (files != null) {
@@ -1651,5 +1721,31 @@ public final class TestRunner {
         assertEquals("[任务已由用户手动停止]", runningTool.toolResult, "tool result displays stopped notice");
         assertTrue(!runningThink.isRunning, "running thinking item closed");
         assertEquals("[思考已停止]", runningThink.text, "thinking text displays stopped notice");
+    }
+
+    private static void testStorageInvariantsAndEmptyBookmarks() throws Exception {
+        // 1. Storage Invariant: Sub-repositories must strictly target the unified primary PREF_NAME
+        assertEquals(BrowserDataStore.PREF_NAME, BookmarkRepository.PREF_NAME, "BookmarkRepository PREF_NAME matches BrowserDataStore");
+        assertEquals(BrowserDataStore.PREF_NAME, HistoryRepository.PREF_NAME, "HistoryRepository PREF_NAME matches BrowserDataStore");
+
+        // 2. Initial run with raw == null seeds exactly 6 default bookmarks
+        InMemoryPrefs prefs = new InMemoryPrefs();
+        BookmarkRepository repo = new BookmarkRepository(null, prefs, null);
+        List<BrowserDataStore.EntryItem> initial = repo.loadBookmarks();
+        assertEquals(6, Integer.valueOf(initial.size()), "initial run seeds exactly 6 default bookmarks");
+        assertEquals("Google", initial.get(0).title, "seeded first bookmark is Google");
+
+        // 3. Explicitly emptying bookmarks persists "[]" and MUST NOT resuscitate default bookmarks
+        repo.saveBookmarks(new java.util.ArrayList<BrowserDataStore.EntryItem>());
+        assertEquals("[]", prefs.getString(BookmarkRepository.PREF_BOOKMARKS, null), "empty bookmarks persisted as valid json array []");
+
+        List<BrowserDataStore.EntryItem> reloadedEmpty = repo.loadBookmarks();
+        assertTrue(reloadedEmpty.isEmpty(), "reloading empty bookmarks preserves empty list without ghost defaults");
+
+        // 4. Corrupt blob safety preserved
+        prefs.edit().putString(BookmarkRepository.PREF_BOOKMARKS, "{broken_json").apply();
+        List<BrowserDataStore.EntryItem> corruptRecovered = repo.loadBookmarks();
+        assertTrue(corruptRecovered.isEmpty(), "corrupt blob safely returns empty list");
+        assertEquals("{broken_json", prefs.getString(BookmarkRepository.PREF_BOOKMARKS, null), "corrupt blob preserved untouched");
     }
 }
