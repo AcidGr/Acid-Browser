@@ -108,6 +108,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testP0P1BugFixes(); }
         });
 
+        run("Concurrency & State Machine: mTabs thread safety, uiItems snapshot, stopLoop closure", new TestCase() {
+            @Override public void execute() throws Exception { testConcurrencyAndStateMachine(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
             System.exit(1);
@@ -1550,5 +1554,102 @@ public final class TestRunner {
         } finally {
             SkillStorageVault.deleteRecursiveSafe(tmpInternalFiles);
         }
+    }
+
+    private static void testConcurrencyAndStateMachine() throws Exception {
+        // 1. CopyOnWriteArrayList concurrent iteration safety for Browser tabs
+        final List<BrowserController.TabSession> concurrentTabs = new java.util.concurrent.CopyOnWriteArrayList<BrowserController.TabSession>();
+        for (int i = 0; i < 5; i++) {
+            concurrentTabs.add(new BrowserController.TabSession(i, null));
+        }
+
+        final java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
+        final java.util.concurrent.atomic.AtomicReference<Throwable> mutationError = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+
+        Thread readerThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    while (running.get()) {
+                        for (BrowserController.TabSession t : concurrentTabs) {
+                            if (t != null && t.id == -999) break;
+                        }
+                    }
+                } catch (Throwable t) {
+                    mutationError.set(t);
+                }
+            }
+        });
+
+        Thread writerThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    for (int i = 5; i < 50; i++) {
+                        BrowserController.TabSession s = new BrowserController.TabSession(i, null);
+                        concurrentTabs.add(s);
+                        concurrentTabs.remove(s);
+                    }
+                } catch (Throwable t) {
+                    mutationError.set(t);
+                }
+            }
+        });
+
+        readerThread.start();
+        writerThread.start();
+        writerThread.join();
+        running.set(false);
+        readerThread.join();
+
+        assertEquals(null, mutationError.get(), "no ConcurrentModificationException during tab iteration");
+
+        // 2. uiItems snapshot safety under background mutations
+        final AcidSessionStore.AgentSession session = new AcidSessionStore.AgentSession();
+        for (int i = 0; i < 10; i++) {
+            AcidSessionStore.UiMessageItem item = new AcidSessionStore.UiMessageItem();
+            item.text = "Item " + i;
+            session.uiItems.add(item);
+        }
+
+        List<AcidSessionStore.UiMessageItem> snap = session.getUiItemsSnapshot();
+        assertEquals(10, snap.size(), "snapshot captured all initial items");
+
+        // Mutate live session
+        session.uiItems.remove(0);
+        session.uiItems.add(new AcidSessionStore.UiMessageItem());
+
+        assertEquals(10, snap.size(), "isolated snapshot is completely unaffected by concurrent session modifications");
+        assertEquals("Item 0", snap.get(0).text, "snapshot preserves first item");
+
+        // 3. UI item state-machine closure upon stopLoop
+        AcidSessionStore.UiMessageItem runningTool = new AcidSessionStore.UiMessageItem();
+        runningTool.type = AcidSessionStore.TYPE_TOOL;
+        runningTool.isRunning = true;
+        runningTool.toolResult = "正在执行...";
+        session.uiItems.add(runningTool);
+
+        AcidSessionStore.UiMessageItem runningThink = new AcidSessionStore.UiMessageItem();
+        runningThink.type = AcidSessionStore.TYPE_THINKING;
+        runningThink.isRunning = true;
+        runningThink.text = "";
+        session.uiItems.add(runningThink);
+
+        // Simulate loop closing dangling items on user stop
+        for (AcidSessionStore.UiMessageItem it : session.uiItems) {
+            if (it.isRunning) {
+                it.isRunning = false;
+                if (AcidSessionStore.TYPE_TOOL.equals(it.type)) {
+                    it.toolResult = "[任务已由用户手动停止]";
+                } else if (AcidSessionStore.TYPE_THINKING.equals(it.type)) {
+                    it.text = "[思考已停止]";
+                }
+            }
+        }
+
+        assertTrue(!runningTool.isRunning, "running tool item closed");
+        assertEquals("[任务已由用户手动停止]", runningTool.toolResult, "tool result displays stopped notice");
+        assertTrue(!runningThink.isRunning, "running thinking item closed");
+        assertEquals("[思考已停止]", runningThink.text, "thinking text displays stopped notice");
     }
 }

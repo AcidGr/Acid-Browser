@@ -15,6 +15,7 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Multi-Session Persistence Store for Acid Agent.
@@ -115,8 +116,19 @@ public class AcidSessionStore {
         public int lastCompletionTokens;
         public int lastTotalTokens;
         public int lastCachedTokens;
-        public final List<UiMessageItem> uiItems = new ArrayList<UiMessageItem>();
-        public final List<JSONObject> apiMessages = new ArrayList<JSONObject>();
+        public final List<UiMessageItem> uiItems = new CopyOnWriteArrayList<UiMessageItem>();
+        public final List<JSONObject> apiMessages = new CopyOnWriteArrayList<JSONObject>();
+
+        /**
+         * Returns an immutable point-in-time snapshot of UI items for thread-safe UI rendering.
+         */
+        public List<UiMessageItem> getUiItemsSnapshot() {
+            return new ArrayList<UiMessageItem>(uiItems);
+        }
+
+        public List<JSONObject> getApiMessagesSnapshot() {
+            return new ArrayList<JSONObject>(apiMessages);
+        }
     }
 
     private final Context mContext;
