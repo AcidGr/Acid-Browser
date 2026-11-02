@@ -21,7 +21,7 @@ public class HistoryRepository {
     private static final String TAG = "AcidHistoryRepo";
     public static final String PREF_HISTORY = "history";
     public static final int MAX_HISTORY_RETENTION_ENTRIES = 2000;
-    private static final String PREF_NAME = "acid_browser_prefs";
+    public static final String PREF_NAME = BrowserDataStore.PREF_NAME;
 
     private final Context mContext;
     private final SharedPreferences mPrefsOverride;

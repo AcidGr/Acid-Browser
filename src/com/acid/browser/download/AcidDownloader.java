@@ -206,9 +206,12 @@ public class AcidDownloader {
 
                 @Override
                 public void onChunkCompleted(DownloadTask t, DownloadChunk c) {
+                    if (t.isCanceled || t.isPaused || t.status == DownloadTask.STATUS_FAILED) {
+                        return;
+                    }
                     t.saveCheckpoint();
                     int rem = remainingChunks.decrementAndGet();
-                    if (rem <= 0 && !t.isPaused && !t.isCanceled) {
+                    if (rem <= 0 && !t.isPaused && !t.isCanceled && t.status != DownloadTask.STATUS_FAILED) {
                         t.status = DownloadTask.STATUS_SUCCESSFUL;
                         t.completedAt = System.currentTimeMillis();
                         t.cleanCheckpointFile();
@@ -218,10 +221,17 @@ public class AcidDownloader {
 
                 @Override
                 public void onChunkFailed(DownloadTask t, DownloadChunk c, Exception error) {
-                    if (t.isPaused || t.isCanceled) return;
+                    if (t.isPaused || t.isCanceled || t.status == DownloadTask.STATUS_FAILED) return;
+                    t.isCanceled = true; // Signal all active worker threads to halt immediately
                     t.status = DownloadTask.STATUS_FAILED;
                     t.errorMessage = (error != null) ? error.getMessage() : "Download error";
-                    t.saveCheckpoint();
+                    // Lightweight zero-garbage: purge incomplete partial physical file and checkpoint
+                    t.cleanCheckpointFile();
+                    if (t.destinationFile != null && t.destinationFile.exists()) {
+                        try {
+                            t.destinationFile.delete();
+                        } catch (Exception ignored) {}
+                    }
                     dispatchFailed(t, t.errorMessage);
                 }
             };
@@ -235,7 +245,7 @@ public class AcidDownloader {
                 }
             }
 
-            if (remainingChunks.get() <= 0 && !task.isPaused && !task.isCanceled) {
+            if (remainingChunks.get() <= 0 && !task.isPaused && !task.isCanceled && task.status != DownloadTask.STATUS_FAILED) {
                 task.status = DownloadTask.STATUS_SUCCESSFUL;
                 task.completedAt = System.currentTimeMillis();
                 task.cleanCheckpointFile();
@@ -243,10 +253,16 @@ public class AcidDownloader {
             }
 
         } catch (Exception e) {
-            if (!task.isPaused && !task.isCanceled) {
+            if (!task.isPaused && !task.isCanceled && task.status != DownloadTask.STATUS_FAILED) {
+                task.isCanceled = true;
                 task.status = DownloadTask.STATUS_FAILED;
                 task.errorMessage = e.getMessage() != null ? e.getMessage() : e.toString();
-                task.saveCheckpoint();
+                task.cleanCheckpointFile();
+                if (task.destinationFile != null && task.destinationFile.exists()) {
+                    try {
+                        task.destinationFile.delete();
+                    } catch (Exception ignored) {}
+                }
                 dispatchFailed(task, task.errorMessage);
             }
         }

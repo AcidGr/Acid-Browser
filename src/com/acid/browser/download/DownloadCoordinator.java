@@ -646,6 +646,16 @@ public class DownloadCoordinator {
     public boolean resumeDownload(long downloadId) {
         DownloadTask task = mDownloader.getTask(downloadId);
         if (task != null) {
+            if (task.status == DownloadTask.STATUS_FAILED) {
+                // Failed download: clean up stale task and restart fresh from scratch
+                String retryUrl = task.url;
+                String retryFileName = task.fileName;
+                String retryMime = task.mimeType;
+                long retryContentLength = task.contentLength;
+                mDownloader.cancel(downloadId, true);
+                startDownload(retryUrl, retryFileName, null, null, retryMime, retryContentLength);
+                return true;
+            }
             return mDownloader.resume(downloadId);
         }
         synchronized (mDownloads) {
