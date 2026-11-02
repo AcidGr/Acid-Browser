@@ -100,7 +100,15 @@ public class DownloadWorker implements Runnable {
                     continue;
                 }
 
-                if (code != 200 && code != 206) {
+                // Strict RFC 7233 Range guard: If we requested a sub-range (seekOffset > 0),
+                // but the server returned HTTP 200 OK (full file body starting from byte 0),
+                // writing it at seekOffset would cause silent data corruption!
+                if (code == HttpURLConnection.HTTP_OK && seekOffset > 0) {
+                    mTask.supportsRange = false;
+                    throw new IOException("Server does not support byte-range resume (HTTP 200 OK returned for Range offset " + seekOffset + ")");
+                }
+
+                if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
                     throw new IOException("Server returned HTTP " + code);
                 }
 

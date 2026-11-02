@@ -90,6 +90,59 @@ public final class AcidIo {
         }
     }
 
+    public static void writeBytes(File file, byte[] bytes) throws IOException {
+        if (file == null) throw new IOException("Target file is null");
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Cannot create parent directory: " + parent.getAbsolutePath());
+        }
+        FileOutputStream fos = new FileOutputStream(file);
+        try {
+            if (bytes != null && bytes.length > 0) {
+                fos.write(bytes);
+            }
+            fos.flush();
+        } finally {
+            try {
+                fos.close();
+            } catch (IOException ignored) {}
+        }
+    }
+
+    public static boolean writeBytesSafe(File file, byte[] bytes) {
+        try {
+            writeBytes(file, bytes);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to write bytes: " + (file != null ? file.getAbsolutePath() : "null"), e);
+            return false;
+        }
+    }
+
+    public static void copyFile(File src, File dst) throws IOException {
+        if (src == null || dst == null) throw new IOException("Source or destination file is null");
+        File parent = dst.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Cannot create parent directory: " + parent.getAbsolutePath());
+        }
+        FileInputStream fis = new FileInputStream(src);
+        try {
+            FileOutputStream fos = new FileOutputStream(dst);
+            try {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = fis.read(buf)) != -1) {
+                    fos.write(buf, 0, n);
+                }
+                fos.flush();
+            } finally {
+                try { fos.close(); } catch (IOException ignored) {}
+            }
+        } finally {
+            try { fis.close(); } catch (IOException ignored) {}
+        }
+    }
+
     public static String readAssetUtf8OrEmpty(Context context, String assetPath) {
         if (context == null || assetPath == null) return "";
         try {

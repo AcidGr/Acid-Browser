@@ -930,14 +930,16 @@ public class BrowserDataStore {
         }
     }
 
-    public void addBookmark(String title, String url) {
+    public static final int MAX_HISTORY_RETENTION_ENTRIES = 2000;
+
+    public synchronized void addBookmark(String title, String url) {
         if (TextUtils.isEmpty(url)) return;
         List<EntryItem> list = loadBookmarks();
         list.add(0, new EntryItem(TextUtils.isEmpty(title) ? url : title, url));
         saveBookmarks(list);
     }
 
-    public void removeBookmark(int index) {
+    public synchronized void removeBookmark(int index) {
         List<EntryItem> list = loadBookmarks();
         if (index >= 0 && index < list.size()) {
             list.remove(index);
@@ -951,7 +953,7 @@ public class BrowserDataStore {
      *
      * @return true when the index was valid and the list was persisted
      */
-    public boolean updateBookmark(int index, String title, String url) {
+    public synchronized boolean updateBookmark(int index, String title, String url) {
         if (TextUtils.isEmpty(url)) return false;
         List<EntryItem> list = loadBookmarks();
         if (index < 0 || index >= list.size()) return false;
@@ -1071,7 +1073,7 @@ public class BrowserDataStore {
         }
     }
 
-    public void recordHistory(String url, String title, boolean incognitoMode) {
+    public synchronized void recordHistory(String url, String title, boolean incognitoMode) {
         if (incognitoMode) return;
         if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)
             || url.contains("/acid_workspace/homepage/index.html")
@@ -1092,10 +1094,10 @@ public class BrowserDataStore {
             return;
         }
 
-        // Full unconstrained history retention, skipping corrupt items
+        // Bounded retention policy up to MAX_HISTORY_RETENTION_ENTRIES, skipping corrupt items and deduplicating
         try {
             JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
+            for (int i = 0; i < arr.length() && next.length() < MAX_HISTORY_RETENTION_ENTRIES; i++) {
                 JSONObject o = arr.optJSONObject(i);
                 if (o == null) {
                     Log.w(TAG, "history[" + i + "] is not a JSON object; dropped on rewrite");

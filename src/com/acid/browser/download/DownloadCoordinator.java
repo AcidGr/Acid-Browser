@@ -815,6 +815,12 @@ public class DownloadCoordinator {
                 File fallbackFile = new File(fallbackDir, it.fileName);
                 if (fallbackFile.exists()) {
                     file = fallbackFile;
+                } else if (mContext.getFilesDir() != null) {
+                    File internalDir = new File(mContext.getFilesDir(), "Download");
+                    File internalFile = new File(internalDir, it.fileName);
+                    if (internalFile.exists()) {
+                        file = internalFile;
+                    }
                 }
             }
 
