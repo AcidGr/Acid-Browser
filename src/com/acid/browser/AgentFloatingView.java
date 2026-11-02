@@ -486,23 +486,24 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             updateContextUsage(tt, session.lastPromptTokens, session.lastCachedTokens);
         }
 
-        if (session == null || session.uiItems.isEmpty()) {
+        List<AcidSessionStore.UiMessageItem> snapshot = session != null ? session.getUiItemsSnapshot() : null;
+        if (snapshot == null || snapshot.isEmpty()) {
             mRenderedStartIndex = 0;
             addEmptyChatWelcomeCard();
             return;
         }
 
-        int total = session.uiItems.size();
+        int total = snapshot.size();
         if (total <= INITIAL_RECENT_ITEMS_COUNT) {
             mRenderedStartIndex = 0;
             for (int i = 0; i < total; i++) {
-                mChatStreamContainer.addView(createUiMessageItemView(session.uiItems.get(i)));
+                mChatStreamContainer.addView(createUiMessageItemView(snapshot.get(i)));
             }
         } else {
             mRenderedStartIndex = total - INITIAL_RECENT_ITEMS_COUNT;
             mChatStreamContainer.addView(buildLoadEarlierCard(mRenderedStartIndex));
             for (int i = mRenderedStartIndex; i < total; i++) {
-                mChatStreamContainer.addView(createUiMessageItemView(session.uiItems.get(i)));
+                mChatStreamContainer.addView(createUiMessageItemView(snapshot.get(i)));
             }
         }
         scrollChatToBottom();
@@ -577,8 +578,11 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         if (loadCount <= 0) return;
 
         List<View> viewsToInsert = new ArrayList<View>();
-        for (int i = nextStart; i < mRenderedStartIndex; i++) {
-            AcidSessionStore.UiMessageItem item = mCurrentRenderedSession.uiItems.get(i);
+        List<AcidSessionStore.UiMessageItem> snapshot = mCurrentRenderedSession.getUiItemsSnapshot();
+        int safeLimit = Math.min(mRenderedStartIndex, snapshot.size());
+        int safeStart = Math.min(nextStart, safeLimit);
+        for (int i = safeStart; i < safeLimit; i++) {
+            AcidSessionStore.UiMessageItem item = snapshot.get(i);
             viewsToInsert.add(createUiMessageItemView(item));
         }
 

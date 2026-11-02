@@ -32,6 +32,7 @@ import com.acid.browser.download.DownloadCoordinator;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Core controller managing Tab sessions, WebView lifecycle, Mobile/Desktop identity,
@@ -88,7 +89,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private final WebAutomationDriver mAutomationDriver;
     private final DownloadCoordinator mDownloadCoordinator;
 
-    private final List<TabSession> mTabs = new ArrayList<TabSession>();
+    private final List<TabSession> mTabs = new CopyOnWriteArrayList<TabSession>();
     private int mNextTabId = 1;
     private TabSession mActiveTab = null;
     private int mAgentBoundTabId = -1;

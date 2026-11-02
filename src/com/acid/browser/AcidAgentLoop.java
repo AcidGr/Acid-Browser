@@ -180,6 +180,12 @@ public class AcidAgentLoop {
                 Log.w(TAG, "Failed to interrupt the agent worker thread", e);
             }
         }
+
+        AcidSessionStore.AgentSession active = mSessionStore != null ? mSessionStore.getActiveSession() : null;
+        if (active != null) {
+            closePendingRunningUiItems(active, "[任务已由用户手动停止]");
+        }
+
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
@@ -192,6 +198,51 @@ public class AcidAgentLoop {
                 }
             }
         });
+    }
+
+    /**
+     * Resolves and transitions any dangling transient UI bubbles (e.g. isRunning == true) into a
+     * definitive closed state upon user stoppage, takeover, or unexpected abort.
+     */
+    public void closePendingRunningUiItems(AcidSessionStore.AgentSession session, String stopNotice) {
+        if (session == null) return;
+        List<AcidSessionStore.UiMessageItem> runningItemsToNotify = new ArrayList<AcidSessionStore.UiMessageItem>();
+        if (mSessionStore != null) {
+            synchronized (mSessionStore) {
+                for (AcidSessionStore.UiMessageItem item : session.uiItems) {
+                    if (item != null && item.isRunning) {
+                        item.isRunning = false;
+                        if (AcidSessionStore.TYPE_TOOL.equals(item.type)) {
+                            if (item.toolResult == null || item.toolResult.contains("正在执行")) {
+                                item.toolResult = stopNotice != null ? stopNotice : "[执行结束]";
+                            }
+                        } else if (AcidSessionStore.TYPE_THINKING.equals(item.type)) {
+                            if (item.text == null || item.text.trim().isEmpty()) {
+                                item.text = stopNotice != null ? stopNotice : "[思考结束]";
+                            }
+                        } else if (AcidSessionStore.TYPE_ASSISTANT.equals(item.type)) {
+                            if (item.text == null || item.text.trim().isEmpty()) {
+                                item.text = stopNotice != null ? stopNotice : "[回答结束]";
+                            }
+                        }
+                        runningItemsToNotify.add(item);
+                    }
+                }
+                if (!runningItemsToNotify.isEmpty()) {
+                    mSessionStore.saveActiveSession();
+                }
+            }
+        } else {
+            for (AcidSessionStore.UiMessageItem item : session.uiItems) {
+                if (item != null && item.isRunning) {
+                    item.isRunning = false;
+                    runningItemsToNotify.add(item);
+                }
+            }
+        }
+        for (AcidSessionStore.UiMessageItem item : runningItemsToNotify) {
+            notifyItemUpdated(item);
+        }
     }
 
     /**
@@ -453,6 +504,7 @@ public class AcidAgentLoop {
             }
         } finally {
             mRunning = false;
+            closePendingRunningUiItems(session, mStopRequested ? "[任务已由用户手动停止]" : null);
             final boolean paused = mPausedForTakeover;
             mMainHandler.post(new Runnable() {
                 @Override
