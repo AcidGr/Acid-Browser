@@ -174,34 +174,39 @@ public class SkillPackageImporter {
 
     public SkillManager.ImportResult importFromGitHubDirectory(GitHubSkillCoordinates gh) {
         if (mSkillsDir == null || mVault == null) return SkillManager.ImportResult.error("技能目录未就绪");
-        try {
-            String rawSlug = gh.path.isEmpty()
-                ? gh.repo
-                : gh.path.substring(gh.path.lastIndexOf('/') + 1);
-            SkillSlug slug = SkillSlug.from(rawSlug, "imported_skill");
-            String dirSlug = slug.value();
+        String rawSlug = gh.path.isEmpty()
+            ? gh.repo
+            : gh.path.substring(gh.path.lastIndexOf('/') + 1);
+        SkillSlug slug = SkillSlug.from(rawSlug, "imported_skill");
+        String dirSlug = slug.value();
 
-            File targetDir = mVault.resolveSkillDir(slug);
+        File stagingDir = mVault.createStagingDir();
+        try {
             int[] fileCounter = new int[] { 0 };
             long[] byteCounter = new long[] { 0L };
 
-            fetchGitHubDirectoryRecursive(gh.owner, gh.repo, gh.branch, gh.path, targetDir, fileCounter, byteCounter);
+            fetchGitHubDirectoryRecursive(gh.owner, gh.repo, gh.branch, gh.path, stagingDir, fileCounter, byteCounter);
 
             if (fileCounter[0] == 0) {
                 return SkillManager.ImportResult.error("未在该 GitHub 目录下找到可下载的技能文件");
             }
-            File entry = SkillManager.findDirectorySkillEntry(targetDir);
+            File entry = SkillManager.findDirectorySkillEntry(stagingDir);
             if (entry == null) {
-                mVault.deleteSkillDir(slug);
                 return SkillManager.ImportResult.error("该目录下未包含 SKILL.md 或任何 .md 技能主文档");
             }
 
+            File finalDir = mVault.promoteStagingDir(stagingDir, slug);
             if (mManager != null) mManager.notifyExternalMutation();
-            SkillManager.SkillMeta meta = mManager != null ? mManager.findSkillMetaForFile(entry) : null;
-            String relEntry = dirSlug + "/" + entry.getName();
+            File finalEntry = SkillManager.findDirectorySkillEntry(finalDir);
+            SkillManager.SkillMeta meta = (finalEntry != null && mManager != null)
+                ? mManager.findSkillMetaForFile(finalEntry)
+                : null;
+            String relEntry = dirSlug + "/" + (finalEntry != null ? finalEntry.getName() : "SKILL.md");
             return SkillManager.ImportResult.ok(relEntry, meta != null ? meta.title : dirSlug, fileCounter[0]);
         } catch (Exception e) {
             return SkillManager.ImportResult.error("GitHub 目录拉取失败: " + e.getMessage());
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(stagingDir);
         }
     }
 
@@ -243,7 +248,7 @@ public class SkillPackageImporter {
                     byte[] content = downloadBytes(dlUrl, MAX_IMPORT_TOTAL_BYTES - byteCounter[0]);
                     byteCounter[0] += content.length;
                     File outFile = new File(destDir, name);
-                    writeBytesSafe(outFile, content);
+                    AcidIo.writeBytesSafe(outFile, content);
                     fileCounter[0]++;
                 }
             }
@@ -266,7 +271,7 @@ public class SkillPackageImporter {
                         byte[] content = downloadBytes(dlUrl, MAX_IMPORT_TOTAL_BYTES - byteCounter[0]);
                         byteCounter[0] += content.length;
                         File outFile = new File(destDir, name);
-                        writeBytesSafe(outFile, content);
+                        AcidIo.writeBytesSafe(outFile, content);
                         fileCounter[0]++;
                     }
                 } else if ("dir".equals(type)) {
@@ -327,7 +332,7 @@ public class SkillPackageImporter {
                         if (totalBytes > MAX_IMPORT_TOTAL_BYTES) break;
                         bos.write(buf, 0, n);
                     }
-                    writeBytesSafe(out, bos.toByteArray());
+                    AcidIo.writeBytesSafe(out, bos.toByteArray());
                     fileCount++;
                 }
                 zis.closeEntry();
@@ -369,36 +374,6 @@ public class SkillPackageImporter {
         } catch (Exception e) {
             SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
             return SkillManager.ImportResult.error("解压技能包失败: " + e.getMessage());
-        }
-    }
-
-    private static void moveDirectoryRecursive(File src, File dst) throws Exception {
-        if (src.isDirectory()) {
-            if (!dst.exists()) dst.mkdirs();
-            File[] children = src.listFiles();
-            if (children != null) {
-                for (File c : children) {
-                    moveDirectoryRecursive(c, new File(dst, c.getName()));
-                }
-            }
-        } else {
-            if (dst.getParentFile() != null && !dst.getParentFile().exists()) {
-                dst.getParentFile().mkdirs();
-            }
-            if (!src.renameTo(dst)) {
-                java.io.FileInputStream fis = new java.io.FileInputStream(src);
-                try {
-                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                    byte[] buf = new byte[8192];
-                    int n;
-                    while ((n = fis.read(buf)) != -1) {
-                        bos.write(buf, 0, n);
-                    }
-                    writeBytesSafe(dst, bos.toByteArray());
-                } finally {
-                    fis.close();
-                }
-            }
         }
     }
 
@@ -453,21 +428,6 @@ public class SkillPackageImporter {
             }
         }
         throw new Exception("重定向次数过多");
-    }
-
-    private static boolean writeBytesSafe(File target, byte[] data) {
-        try {
-            if (target.getParentFile() != null && !target.getParentFile().exists()) {
-                target.getParentFile().mkdirs();
-            }
-            FileOutputStream fos = new FileOutputStream(target);
-            fos.write(data != null ? data : new byte[0]);
-            fos.flush();
-            fos.close();
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     public static String inferSkillSlugFromUrl(String urlStr) {

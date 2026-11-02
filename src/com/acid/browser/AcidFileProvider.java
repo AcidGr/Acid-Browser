@@ -49,20 +49,37 @@ public class AcidFileProvider extends ContentProvider {
     private File resolveSafeFile(Uri uri) throws FileNotFoundException {
         if (uri == null) throw new FileNotFoundException("Null URI");
         String fileName = uri.getLastPathSegment();
+        return resolveSafeFile(getContext(), fileName);
+    }
+
+    /**
+     * Resolves a filename to an authorized File across public, external-private, and internal-private
+     * Download directories with strict boundary confinement.
+     */
+    public static File resolveSafeFile(Context ctx, String fileName) throws FileNotFoundException {
         if (fileName == null || fileName.trim().isEmpty() || ".".equals(fileName) || "..".equals(fileName)) {
-            throw new FileNotFoundException("Invalid filename in URI: " + uri);
+            throw new FileNotFoundException("Invalid filename: " + fileName);
         }
 
+        // 1. Primary: Public Download directory
         File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         File targetFile = resolveAndVerifyBoundary(downloadDir, fileName);
 
+        // 2. Secondary fallback: External private files/Download directory
         if (targetFile == null || !targetFile.exists()) {
-            Context ctx = getContext();
             if (ctx != null) {
                 File alt = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
                 if (alt != null) {
                     targetFile = resolveAndVerifyBoundary(alt, fileName);
                 }
+            }
+        }
+
+        // 3. Tertiary fallback: Internal private files/Download directory (for restricted sandboxes / Scoped Storage fallback)
+        if (targetFile == null || !targetFile.exists()) {
+            if (ctx != null && ctx.getFilesDir() != null) {
+                File internalDownloadDir = new File(ctx.getFilesDir(), Environment.DIRECTORY_DOWNLOADS);
+                targetFile = resolveAndVerifyBoundary(internalDownloadDir, fileName);
             }
         }
 
@@ -72,7 +89,7 @@ public class AcidFileProvider extends ContentProvider {
         return targetFile;
     }
 
-    private static File resolveAndVerifyBoundary(File baseDir, String relativeName) {
+    public static File resolveAndVerifyBoundary(File baseDir, String relativeName) {
         if (baseDir == null) return null;
         try {
             File baseCanon = baseDir.getCanonicalFile();

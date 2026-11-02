@@ -117,7 +117,7 @@ public class SkillStorageVault {
         return file.delete();
     }
 
-    private static void moveDirectoryRecursive(File src, File dst) throws Exception {
+    public static void moveDirectoryRecursive(File src, File dst) throws Exception {
         if (src.isDirectory()) {
             if (!dst.exists()) dst.mkdirs();
             File[] files = src.listFiles();
@@ -131,18 +131,8 @@ public class SkillStorageVault {
                 dst.getParentFile().mkdirs();
             }
             if (!src.renameTo(dst)) {
-                java.io.FileInputStream fis = new java.io.FileInputStream(src);
-                try {
-                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                    byte[] buf = new byte[8192];
-                    int n;
-                    while ((n = fis.read(buf)) != -1) {
-                        bos.write(buf, 0, n);
-                    }
-                    AcidIo.writeFileUtf8Safe(dst, new String(bos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
-                } finally {
-                    fis.close();
-                }
+                AcidIo.copyFile(src, dst);
+                src.delete();
             }
         }
     }

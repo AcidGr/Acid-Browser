@@ -42,6 +42,8 @@ public class AcidAgentLoop {
         void onContextUsageUpdated(int totalTokens, int promptTokens, int cachedTokens);
     }
 
+    public static final int DEFAULT_MAX_LOOP_STEPS = 50;
+
     private final Context mContext;
     private final BrowserController mController;
     private final AcidSandboxTools mSandboxTools;
@@ -54,6 +56,7 @@ public class AcidAgentLoop {
     private volatile boolean mRunning = false;
     private volatile boolean mStopRequested = false;
     private volatile boolean mPausedForTakeover = false;
+    private volatile int mMaxLoopSteps = DEFAULT_MAX_LOOP_STEPS;
     private Thread mWorkerThread = null;
 
     public AcidAgentLoop(Context context, BrowserController controller, AgentLoopListener listener) {
@@ -111,6 +114,14 @@ public class AcidAgentLoop {
 
     public boolean isStopRequested() {
         return mStopRequested;
+    }
+
+    public int getMaxLoopSteps() {
+        return mMaxLoopSteps;
+    }
+
+    public void setMaxLoopSteps(int maxSteps) {
+        mMaxLoopSteps = Math.max(1, maxSteps);
     }
 
     // =========================================================================
@@ -298,9 +309,13 @@ public class AcidAgentLoop {
             }
             notifyContextUsage(session);
 
-            // Unlimited ReAct autonomous loop: continues until task completed, stopped by user, or takeover requested
+            // Guarded ReAct autonomous loop: continues until task completed, stopped by user, takeover requested, or max steps reached
             for (int step = 1; ; step++) {
                 if (mStopRequested) break;
+                if (step > mMaxLoopSteps) {
+                    addErrorItem("已达到单次任务最大自主执行步数上限 (" + mMaxLoopSteps + " 步)，智能体已暂停以防止死循环。如需继续，请发送新指令。");
+                    break;
+                }
                 notifyState(true, false, step);
 
                 JSONArray payloadMessages = buildPrunedMessagesForRequest(session);
@@ -358,62 +373,73 @@ public class AcidAgentLoop {
                 }
 
                 boolean takeoverTriggered = false;
-                for (int i = 0; i < toolCalls.length(); i++) {
-                    if (mStopRequested) break;
-                    JSONObject tc = toolCalls.getJSONObject(i);
-                    String callId = tc.optString("id", "call_" + step + "_" + i);
-                    JSONObject fn = tc.optJSONObject("function");
-                    String toolName = fn != null ? fn.optString("name", "") : "";
-                    String rawArgs = fn != null ? fn.optString("arguments", "{}") : "{}";
+                int executedToolCount = 0;
+                try {
+                    for (int i = 0; i < toolCalls.length(); i++) {
+                        if (mStopRequested) break;
+                        JSONObject tc = toolCalls.getJSONObject(i);
+                        String callId = tc.optString("id", "call_" + step + "_" + i);
+                        JSONObject fn = tc.optJSONObject("function");
+                        String toolName = fn != null ? fn.optString("name", "") : "";
+                        String rawArgs = fn != null ? fn.optString("arguments", "{}") : "{}";
 
-                    JSONObject parsedArgs;
-                    String prettyArgs;
-                    try {
-                        parsedArgs = new JSONObject(rawArgs);
-                        prettyArgs = parsedArgs.toString(2);
-                    } catch (Exception e) {
-                        parsedArgs = new JSONObject();
-                        prettyArgs = rawArgs;
+                        JSONObject parsedArgs;
+                        String prettyArgs;
+                        try {
+                            parsedArgs = new JSONObject(rawArgs);
+                            prettyArgs = parsedArgs.toString(2);
+                        } catch (Exception e) {
+                            parsedArgs = new JSONObject();
+                            prettyArgs = rawArgs;
+                        }
+
+                        // Create Tool Call UI bubble in running state
+                        AcidSessionStore.UiMessageItem toolUiItem = new AcidSessionStore.UiMessageItem();
+                        toolUiItem.type = AcidSessionStore.TYPE_TOOL;
+                        toolUiItem.toolCallId = callId;
+                        toolUiItem.toolName = toolName;
+                        toolUiItem.toolSummary = summarizeToolArgs(toolName, parsedArgs);
+                        toolUiItem.toolArgsJson = prettyArgs;
+                        toolUiItem.toolResult = "正在执行...";
+                        toolUiItem.isRunning = true;
+                        toolUiItem.timestamp = System.currentTimeMillis();
+                        synchronized (mSessionStore) {
+                            session.uiItems.add(toolUiItem);
+                        }
+                        notifyItemAdded(toolUiItem);
+
+                        // Execute tool
+                        AcidSandboxTools.ToolExecResult execRes = mSandboxTools.executeTool(toolName, parsedArgs);
+
+                        // Update Tool Call UI bubble with complete result
+                        toolUiItem.isRunning = false;
+                        toolUiItem.toolResult = execRes.outputText;
+                        toolUiItem.isError = execRes.outputText != null && execRes.outputText.startsWith("Error:");
+                        notifyItemUpdated(toolUiItem);
+
+                        JSONObject toolMsg = new JSONObject();
+                        toolMsg.put("role", "tool");
+                        toolMsg.put("tool_call_id", callId);
+                        toolMsg.put("name", toolName);
+                        toolMsg.put("content", execRes.outputText);
+                        synchronized (mSessionStore) {
+                            session.apiMessages.add(toolMsg);
+                            mSessionStore.saveActiveSession();
+                        }
+                        executedToolCount = i + 1;
+
+                        if (execRes.requestedTakeover) {
+                            takeoverTriggered = true;
+                            mPausedForTakeover = true;
+                            break;
+                        }
                     }
-
-                    // Create Tool Call UI bubble in running state
-                    AcidSessionStore.UiMessageItem toolUiItem = new AcidSessionStore.UiMessageItem();
-                    toolUiItem.type = AcidSessionStore.TYPE_TOOL;
-                    toolUiItem.toolCallId = callId;
-                    toolUiItem.toolName = toolName;
-                    toolUiItem.toolSummary = summarizeToolArgs(toolName, parsedArgs);
-                    toolUiItem.toolArgsJson = prettyArgs;
-                    toolUiItem.toolResult = "正在执行...";
-                    toolUiItem.isRunning = true;
-                    toolUiItem.timestamp = System.currentTimeMillis();
-                    synchronized (mSessionStore) {
-                        session.uiItems.add(toolUiItem);
-                    }
-                    notifyItemAdded(toolUiItem);
-
-                    // Execute tool
-                    AcidSandboxTools.ToolExecResult execRes = mSandboxTools.executeTool(toolName, parsedArgs);
-
-                    // Update Tool Call UI bubble with complete result
-                    toolUiItem.isRunning = false;
-                    toolUiItem.toolResult = execRes.outputText;
-                    toolUiItem.isError = execRes.outputText != null && execRes.outputText.startsWith("Error:");
-                    notifyItemUpdated(toolUiItem);
-
-                    JSONObject toolMsg = new JSONObject();
-                    toolMsg.put("role", "tool");
-                    toolMsg.put("tool_call_id", callId);
-                    toolMsg.put("name", toolName);
-                    toolMsg.put("content", execRes.outputText);
-                    synchronized (mSessionStore) {
-                        session.apiMessages.add(toolMsg);
-                        mSessionStore.saveActiveSession();
-                    }
-
-                    if (execRes.requestedTakeover) {
-                        takeoverTriggered = true;
-                        mPausedForTakeover = true;
-                        break;
+                } finally {
+                    if (executedToolCount < toolCalls.length()) {
+                        String skipReason = takeoverTriggered
+                            ? "[Execution paused: previous tool requested user takeover]"
+                            : (mStopRequested ? "[Execution stopped: task stopped by user]" : "[Execution skipped]");
+                        ensureToolCallsAlignment(session, toolCalls, executedToolCount, skipReason, mSessionStore);
                     }
                 }
 
@@ -457,6 +483,47 @@ public class AcidAgentLoop {
             mSessionStore.saveActiveSession();
         }
         notifyItemAdded(errItem);
+    }
+
+    /**
+     * Enforces strict OpenAI/ReAct protocol alignment: every tool call declared in an assistant message
+     * MUST be paired with a corresponding role="tool" response before the next turn, even when execution
+     * is prematurely paused by user takeover, stopped by user, or aborted due to an error.
+     */
+    public static void ensureToolCallsAlignment(
+        AcidSessionStore.AgentSession session,
+        JSONArray toolCalls,
+        int executedCount,
+        String skipReason,
+        AcidSessionStore sessionStore
+    ) {
+        if (session == null || toolCalls == null || executedCount >= toolCalls.length()) return;
+        for (int j = executedCount; j < toolCalls.length(); j++) {
+            JSONObject tc = toolCalls.optJSONObject(j);
+            if (tc == null) continue;
+            String remCallId = tc.optString("id", "call_" + j);
+            JSONObject remFn = tc.optJSONObject("function");
+            String remName = remFn != null ? remFn.optString("name", "") : "tool";
+            JSONObject placeholderMsg = new JSONObject();
+            try {
+                placeholderMsg.put("role", "tool");
+                placeholderMsg.put("tool_call_id", remCallId);
+                placeholderMsg.put("name", remName);
+                placeholderMsg.put("content", skipReason != null ? skipReason : "[Tool execution skipped]");
+            } catch (Exception ignored) {}
+            if (sessionStore != null) {
+                synchronized (sessionStore) {
+                    session.apiMessages.add(placeholderMsg);
+                }
+            } else {
+                session.apiMessages.add(placeholderMsg);
+            }
+        }
+        if (sessionStore != null) {
+            synchronized (sessionStore) {
+                sessionStore.saveActiveSession();
+            }
+        }
     }
 
     private JSONArray buildPrunedMessagesForRequest(AcidSessionStore.AgentSession session) throws Exception {

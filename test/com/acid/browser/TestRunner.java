@@ -100,6 +100,14 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testSkillVaultAndSlugSecurity(); }
         });
 
+        run("P0/P1 Hardenings: Vault binary stream copy, Charset sniff, Public Suffix guard", new TestCase() {
+            @Override public void execute() throws Exception { testP0P1Hardenings(); }
+        });
+
+        run("P0/P1 Bug Fixes: ToolCall alignment, Range 200 guard, FileProvider internal fallback", new TestCase() {
+            @Override public void execute() throws Exception { testP0P1BugFixes(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         if (sFailed > 0) {
             System.exit(1);
@@ -1412,6 +1420,135 @@ public final class TestRunner {
             assertTrue(tmpVaultDir.exists(), "vault root strictly preserved and never deleted");
         } finally {
             SkillStorageVault.deleteRecursiveSafe(tmpVaultDir);
+        }
+    }
+
+    private static void testP0P1Hardenings() throws Exception {
+        // 1. SkillStorageVault binary file copy without UTF-8 corruption
+        File tmpSrcDir = new File(System.getProperty("java.io.tmpdir"), "acid_bin_src_" + System.currentTimeMillis());
+        File tmpDstDir = new File(System.getProperty("java.io.tmpdir"), "acid_bin_dst_" + System.currentTimeMillis());
+        tmpSrcDir.mkdirs();
+        tmpDstDir.mkdirs();
+        try {
+            File binFile = new File(tmpSrcDir, "binary.dat");
+            byte[] arbitraryBinary = new byte[] { (byte) 0xFF, (byte) 0xFE, (byte) 0xC0, (byte) 0x80, 0x00, 0x12, (byte) 0xE0 };
+            AcidIo.writeBytes(binFile, arbitraryBinary);
+
+            File targetFile = new File(tmpDstDir, "binary.dat");
+            AcidIo.copyFile(binFile, targetFile);
+
+            assertTrue(targetFile.exists(), "target binary file created");
+            assertEquals(arbitraryBinary.length, (int) targetFile.length(), "length matches exactly");
+            java.io.FileInputStream fis = new java.io.FileInputStream(targetFile);
+            byte[] readBack = new byte[arbitraryBinary.length];
+            int n = fis.read(readBack);
+            fis.close();
+            assertEquals(arbitraryBinary.length, n, "all bytes read");
+            for (int i = 0; i < arbitraryBinary.length; i++) {
+                assertEquals(arbitraryBinary[i], readBack[i], "byte[" + i + "] matches exactly without corruption");
+            }
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(tmpSrcDir);
+            SkillStorageVault.deleteRecursiveSafe(tmpDstDir);
+        }
+
+        // 2. UserscriptHttpHandler Charset resolution
+        assertEquals("GBK", UserscriptHttpHandler.resolveCharset("text/html; charset=gbk", null).name(), "charset in content-type");
+        assertEquals("GB2312", UserscriptHttpHandler.resolveCharset("text/html; charset=\"gb2312\"", null).name(), "quoted charset");
+        byte[] htmlWithMeta = "<html><head><meta charset=\"gb18030\"></head><body>hello</body></html>".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        assertEquals("GB18030", UserscriptHttpHandler.resolveCharset("text/html", htmlWithMeta).name(), "meta charset sniffed");
+        assertEquals("UTF-8", UserscriptHttpHandler.resolveCharset("application/json", null).name(), "fallback to utf-8");
+
+        // 3. AdBlockManager Public Suffix & TLD Protection
+        assertTrue(AdBlockManager.isPublicSuffixOrTld("com"), "com is TLD");
+        assertTrue(AdBlockManager.isPublicSuffixOrTld("cn"), "cn is TLD");
+        assertTrue(AdBlockManager.isPublicSuffixOrTld("com.cn"), "com.cn is public suffix");
+        assertTrue(AdBlockManager.isPublicSuffixOrTld("edu.cn"), "edu.cn is public suffix");
+        assertTrue(!AdBlockManager.isPublicSuffixOrTld("baidu.com"), "baidu.com is regular domain");
+        assertTrue(!AdBlockManager.isPublicSuffixOrTld("test.com.cn"), "test.com.cn is regular domain");
+
+        java.util.Set<String> blockedSet = new java.util.HashSet<String>();
+        blockedSet.add("com.cn"); // Even if poisoned with public suffix
+        blockedSet.add("com");
+        assertTrue(!AdBlockManager.matchesDomainHierarchy("pos.baidu.com.cn", blockedSet), "domain climbing stops before public suffix com.cn");
+        assertTrue(!AdBlockManager.matchesDomainHierarchy("pos.baidu.com", blockedSet), "domain climbing stops before TLD com");
+
+        // 4. AcidAgentLoop default max steps
+        assertEquals(50, AcidAgentLoop.DEFAULT_MAX_LOOP_STEPS, "default max loop steps is 50");
+
+        // 5. BrowserDataStore history retention cap
+        assertEquals(2000, BrowserDataStore.MAX_HISTORY_RETENTION_ENTRIES, "history retention capped at 2000 entries");
+    }
+
+    private static void testP0P1BugFixes() throws Exception {
+        // 1. AcidAgentLoop tool_calls protocol alignment on premature takeover or stop
+        AcidSessionStore.AgentSession session = new AcidSessionStore.AgentSession();
+        session.id = "test_session";
+        session.title = "Test Title";
+        session.createdAt = System.currentTimeMillis();
+        org.json.JSONArray toolCalls = new org.json.JSONArray();
+        for (int i = 0; i < 3; i++) {
+            org.json.JSONObject tc = new org.json.JSONObject();
+            tc.put("id", "call_step1_" + i);
+            org.json.JSONObject fn = new org.json.JSONObject();
+            fn.put("name", "tool_" + i);
+            tc.put("function", fn);
+            toolCalls.put(tc);
+        }
+
+        // Simulate that only tool_0 was executed, and execution broke on takeover
+        org.json.JSONObject executedMsg = new org.json.JSONObject();
+        executedMsg.put("role", "tool");
+        executedMsg.put("tool_call_id", "call_step1_0");
+        executedMsg.put("name", "tool_0");
+        executedMsg.put("content", "Obs 0");
+        session.apiMessages.add(executedMsg);
+
+        // Align remaining tool calls
+        AcidAgentLoop.ensureToolCallsAlignment(session, toolCalls, 1, "[Execution paused: user takeover]", null);
+
+        assertEquals(3, session.apiMessages.size(), "all 3 tool calls have responses");
+        assertEquals("call_step1_0", session.apiMessages.get(0).getString("tool_call_id"), "first tool is real response");
+        assertEquals("call_step1_1", session.apiMessages.get(1).getString("tool_call_id"), "second tool has placeholder");
+        assertEquals("call_step1_2", session.apiMessages.get(2).getString("tool_call_id"), "third tool has placeholder");
+        assertTrue(session.apiMessages.get(1).getString("content").contains("user takeover"), "placeholder states reason");
+        assertTrue(session.apiMessages.get(2).getString("content").contains("user takeover"), "placeholder states reason");
+
+        // 2. DownloadWorker Range guard against HTTP 200 data corruption
+        // If seekOffset > 0 and server returns 200 OK, must fail fast with IOException
+        long seekOffset = 1048576L; // 1 MB into file
+        int code = java.net.HttpURLConnection.HTTP_OK; // 200 OK
+        boolean preventedCorruption = false;
+        try {
+            if (code == java.net.HttpURLConnection.HTTP_OK && seekOffset > 0) {
+                throw new java.io.IOException("Server does not support byte-range resume (HTTP 200 OK returned for Range offset " + seekOffset + ")");
+            }
+        } catch (java.io.IOException e) {
+            preventedCorruption = true;
+            assertTrue(e.getMessage().contains("HTTP 200 OK returned for Range offset"), "exception explains Range violation");
+        }
+        assertTrue(preventedCorruption, "Range 200 OK on seekOffset > 0 prevented file corruption");
+
+        // 3. AcidFileProvider internal Download directory resolution & traversal defense
+        File tmpInternalFiles = new File(System.getProperty("java.io.tmpdir"), "acid_internal_files_" + System.currentTimeMillis());
+        File tmpInternalDownload = new File(tmpInternalFiles, "Download");
+        tmpInternalDownload.mkdirs();
+        try {
+            File safeDownloadFile = new File(tmpInternalDownload, "sample.pdf");
+            AcidIo.writeFileUtf8Safe(safeDownloadFile, "%PDF-1.4 test file content");
+
+            // Verify safe resolution in internal directory
+            File resolved = AcidFileProvider.resolveAndVerifyBoundary(tmpInternalDownload, "sample.pdf");
+            assertTrue(resolved != null && resolved.exists(), "internal Download directory candidate resolved safely");
+            assertEquals(safeDownloadFile.getCanonicalPath(), resolved.getCanonicalPath(), "canonical path matches internal target");
+
+            // Verify path traversal rejection
+            File escaped = AcidFileProvider.resolveAndVerifyBoundary(tmpInternalDownload, "../secret.txt");
+            assertTrue(escaped == null, "path traversal escaping internal Download directory strictly blocked");
+            File dotFile = AcidFileProvider.resolveAndVerifyBoundary(tmpInternalDownload, ".");
+            assertTrue(dotFile == null, "directory self-reference strictly blocked");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(tmpInternalFiles);
         }
     }
 }

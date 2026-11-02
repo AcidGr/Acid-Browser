@@ -14,6 +14,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.List;
@@ -314,10 +315,67 @@ public class UserscriptHttpHandler {
             resp.put("responseDataUrl", "data:" + contentType + ";base64," + base64);
             resp.put("responseText", "");
         } else {
-            resp.put("responseText", new String(bodyBytes, StandardCharsets.UTF_8));
+            resp.put("responseText", decodeTextBody(bodyBytes, contentType));
         }
 
         return resp;
+    }
+
+    /**
+     * Accurately resolves response text charset following HTTP header specifications
+     * and HTML in-band meta charset declarations before falling back to UTF-8.
+     */
+    public static String decodeTextBody(byte[] bodyBytes, String contentType) {
+        if (bodyBytes == null || bodyBytes.length == 0) return "";
+        Charset cs = resolveCharset(contentType, bodyBytes);
+        return new String(bodyBytes, cs);
+    }
+
+    public static Charset resolveCharset(String contentType, byte[] bodyBytes) {
+        if (contentType != null) {
+            String lower = contentType.toLowerCase(java.util.Locale.ROOT);
+            int idx = lower.indexOf("charset=");
+            if (idx >= 0) {
+                String csStr = lower.substring(idx + 8).trim();
+                int semi = csStr.indexOf(';');
+                if (semi >= 0) csStr = csStr.substring(0, semi).trim();
+                csStr = csStr.replace("\"", "").replace("'", "").trim();
+                if (!csStr.isEmpty()) {
+                    try {
+                        if (Charset.isSupported(csStr)) {
+                            return Charset.forName(csStr);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
+        }
+
+        // Sniff HTML meta charset in the first 1024 bytes if Content-Type is text/html or unspecified
+        if (bodyBytes != null && bodyBytes.length > 0) {
+            int inspectLen = Math.min(bodyBytes.length, 1024);
+            String snippet = new String(bodyBytes, 0, inspectLen, StandardCharsets.US_ASCII).toLowerCase(java.util.Locale.ROOT);
+            if (snippet.contains("<html") || snippet.contains("<!doctype")) {
+                int metaCharsetIdx = snippet.indexOf("charset=");
+                if (metaCharsetIdx >= 0) {
+                    String after = snippet.substring(metaCharsetIdx + 8).trim();
+                    after = after.replace("\"", "").replace("'", "").replace("/>", "").replace(">", "");
+                    int end = 0;
+                    while (end < after.length() && (Character.isLetterOrDigit(after.charAt(end)) || after.charAt(end) == '-' || after.charAt(end) == '_')) {
+                        end++;
+                    }
+                    if (end > 0) {
+                        String csStr = after.substring(0, end).trim();
+                        try {
+                            if (Charset.isSupported(csStr)) {
+                                return Charset.forName(csStr);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }
+        }
+
+        return StandardCharsets.UTF_8;
     }
 
     /**

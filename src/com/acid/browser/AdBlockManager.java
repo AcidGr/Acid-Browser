@@ -20,10 +20,12 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -317,6 +319,19 @@ public class AdBlockManager {
               ", Unique domains: " + mBlockedDomains.size() + ")");
     }
 
+    private static final Set<String> COMMON_PUBLIC_SUFFIXES = new HashSet<String>(Arrays.asList(
+        "com", "cn", "net", "org", "edu", "gov", "io", "cc", "me", "info", "top", "xyz", "biz", "app", "dev", "ai",
+        "com.cn", "net.cn", "org.cn", "edu.cn", "gov.cn", "co.uk", "org.uk", "co.jp", "ne.jp", "com.hk", "org.hk",
+        "com.tw", "com.sg", "com.au", "co.kr", "github.io", "gitlab.io"
+    ));
+
+    public static boolean isPublicSuffixOrTld(String domain) {
+        if (domain == null || domain.trim().isEmpty()) return true;
+        String d = domain.trim().toLowerCase(Locale.ROOT);
+        if (!d.contains(".")) return true; // Single label like "com", "cn", "localhost" is a TLD
+        return COMMON_PUBLIC_SUFFIXES.contains(d);
+    }
+
     static boolean parseRuleLine(String rawLine,
                                  Set<String> blocked,
                                  Set<String> whiteList,
@@ -337,8 +352,8 @@ public class AdBlockManager {
             int end = sub.length();
             if (caret > 0 && caret < end) end = caret;
             if (slash > 0 && slash < end) end = slash;
-            String domain = sub.substring(0, end).trim().toLowerCase();
-            if (!domain.isEmpty()) {
+            String domain = sub.substring(0, end).trim().toLowerCase(Locale.ROOT);
+            if (!domain.isEmpty() && !isPublicSuffixOrTld(domain)) {
                 whiteList.add(domain);
                 return true;
             }
@@ -356,7 +371,7 @@ public class AdBlockManager {
                 } else {
                     String[] doms = domainPart.split(",");
                     for (int i = 0; i < doms.length; i++) {
-                        String d = doms[i].trim().toLowerCase();
+                        String d = doms[i].trim().toLowerCase(Locale.ROOT);
                         if (!d.isEmpty()) {
                             List<String> list = domainHiding.get(d);
                             if (list == null) {
@@ -382,8 +397,8 @@ public class AdBlockManager {
             if (caret > 0 && caret < end) end = caret;
             if (slash > 0 && slash < end) end = slash;
             if (colon > 0 && colon < end) end = colon;
-            String domain = sub.substring(0, end).trim().toLowerCase();
-            if (!domain.isEmpty()) {
+            String domain = sub.substring(0, end).trim().toLowerCase(Locale.ROOT);
+            if (!domain.isEmpty() && !isPublicSuffixOrTld(domain)) {
                 blocked.add(domain);
                 return true;
             }
@@ -392,14 +407,17 @@ public class AdBlockManager {
 
         // 4. Path pattern /pattern/
         if (line.startsWith("/") && line.endsWith("/") && line.length() > 2) {
-            paths.add(line.substring(1, line.length() - 1).toLowerCase());
+            paths.add(line.substring(1, line.length() - 1).toLowerCase(Locale.ROOT));
             return true;
         }
 
         // 5. Bare domain without slash or wildcard
         if (!line.contains("/") && !line.contains("*") && line.contains(".")) {
-            blocked.add(line.toLowerCase());
-            return true;
+            String domain = line.trim().toLowerCase(Locale.ROOT);
+            if (!isPublicSuffixOrTld(domain)) {
+                blocked.add(domain);
+                return true;
+            }
         }
 
         return false;
@@ -407,8 +425,11 @@ public class AdBlockManager {
 
     static boolean matchesDomainHierarchy(String host, Set<String> domainSet) {
         if (host == null || domainSet == null || domainSet.isEmpty()) return false;
-        String cur = host.toLowerCase();
+        String cur = host.toLowerCase(Locale.ROOT);
         while (cur != null && !cur.isEmpty()) {
+            if (isPublicSuffixOrTld(cur)) {
+                break; // Guard against collateral blocking when climbing up to TLD or public suffixes
+            }
             if (domainSet.contains(cur)) return true;
             int dot = cur.indexOf('.');
             if (dot < 0 || dot == cur.length() - 1) break;
