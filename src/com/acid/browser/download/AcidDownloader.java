@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -43,8 +44,24 @@ public class AcidDownloader {
     private final ConcurrentHashMap<Long, DownloadTask> mTasks = new ConcurrentHashMap<Long, DownloadTask>();
     private final List<DownloaderListener> mListeners = new CopyOnWriteArrayList<DownloaderListener>();
 
-    private final ExecutorService mDispatcherPool = Executors.newCachedThreadPool();
-    private final ExecutorService mWorkerPool = Executors.newFixedThreadPool(16);
+    private final ExecutorService mDispatcherPool = Executors.newCachedThreadPool(new ThreadFactory() {
+        private final AtomicInteger mCount = new AtomicInteger(1);
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "AcidDownloadDispatcher-" + mCount.getAndIncrement());
+            t.setDaemon(true);
+            return t;
+        }
+    });
+    private final ExecutorService mWorkerPool = Executors.newFixedThreadPool(16, new ThreadFactory() {
+        private final AtomicInteger mCount = new AtomicInteger(1);
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "AcidDownloadWorker-" + mCount.getAndIncrement());
+            t.setDaemon(true);
+            return t;
+        }
+    });
     private Handler mMainHandler;
 
     public AcidDownloader() {
@@ -95,110 +112,161 @@ public class AcidDownloader {
      * Starts or resumes a task in the background dispatcher pool.
      */
     public void startTaskAsync(final DownloadTask task) {
-        task.isPaused = false;
-        task.isCanceled = false;
-        task.status = DownloadTask.STATUS_PENDING;
+        if (task == null) return;
+        final int runGen;
+        synchronized (task) {
+            task.isPaused = false;
+            task.isCanceled = false;
+            task.status = DownloadTask.STATUS_PENDING;
+            runGen = task.nextGeneration();
+        }
 
         mDispatcherPool.execute(new Runnable() {
             @Override
             public void run() {
-                executeTask(task);
+                executeTask(task, runGen);
             }
         });
     }
 
-    public boolean pause(long taskId) {
+    public synchronized boolean pause(long taskId) {
         DownloadTask task = mTasks.get(taskId);
-        if (task == null || task.status != DownloadTask.STATUS_RUNNING) {
+        if (task == null) {
             return false;
         }
-        task.isPaused = true;
-        task.status = DownloadTask.STATUS_PAUSED;
-        task.saveCheckpoint();
+        synchronized (task) {
+            if (task.status != DownloadTask.STATUS_RUNNING && task.status != DownloadTask.STATUS_PENDING) {
+                return false;
+            }
+            task.isPaused = true;
+            task.status = DownloadTask.STATUS_PAUSED;
+            task.nextGeneration();
+            task.abortActiveConnections();
+            task.saveCheckpoint();
+        }
         dispatchPaused(task);
         return true;
     }
 
-    public boolean resume(long taskId) {
+    public synchronized boolean resume(long taskId) {
         DownloadTask task = mTasks.get(taskId);
-        if (task == null || task.status != DownloadTask.STATUS_PAUSED) {
+        if (task == null) {
             return false;
+        }
+        synchronized (task) {
+            if (task.status != DownloadTask.STATUS_PAUSED && task.status != DownloadTask.STATUS_FAILED) {
+                return false;
+            }
         }
         startTaskAsync(task);
         return true;
     }
 
-    public boolean cancel(long taskId, boolean deleteFile) {
+    public synchronized boolean cancel(long taskId, boolean deleteFile) {
         DownloadTask task = mTasks.get(taskId);
         if (task == null) return false;
 
-        task.isCanceled = true;
-        task.isPaused = true;
-        task.cleanCheckpointFile();
-        mTasks.remove(taskId);
+        synchronized (task) {
+            task.isCanceled = true;
+            task.isPaused = true;
+            task.nextGeneration();
+            task.abortActiveConnections();
+            task.cleanCheckpointFile();
+            mTasks.remove(taskId);
 
-        if (deleteFile && task.destinationFile.exists()) {
-            try {
-                task.destinationFile.delete();
-            } catch (Exception ignored) {}
+            if (deleteFile && task.destinationFile.exists()) {
+                try {
+                    task.destinationFile.delete();
+                } catch (Exception ignored) {}
+            }
         }
         return true;
     }
 
-    private void executeTask(final DownloadTask task) {
-        task.status = DownloadTask.STATUS_RUNNING;
+    private void executeTask(final DownloadTask task, final int runGen) {
+        synchronized (task) {
+            if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
+                return;
+            }
+            task.status = DownloadTask.STATUS_RUNNING;
+        }
         dispatchStarted(task);
 
         try {
-            boolean resumed = task.loadCheckpoint();
+            boolean resumed = false;
+            synchronized (task) {
+                if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
+                    return;
+                }
+                resumed = task.loadCheckpoint();
+                if (resumed && (task.destinationFile == null || !task.destinationFile.exists())) {
+                    resumed = false;
+                    task.cleanCheckpointFile();
+                }
+            }
+
             if (!resumed) {
                 // Pre-flight probe to discover range support & total size
                 HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders);
-                task.finalUrl = probe.finalUrl;
-                task.contentLength = probe.contentLength;
-                task.supportsRange = probe.supportsRange;
 
-                if (task.mimeType == null || task.mimeType.isEmpty() || "*/*".equals(task.mimeType)) {
-                    task.mimeType = probe.mimeType;
-                }
+                synchronized (task) {
+                    if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
+                        return;
+                    }
+                    task.finalUrl = probe.finalUrl;
+                    task.contentLength = probe.contentLength;
+                    task.supportsRange = probe.supportsRange;
 
-                // If destination dir doesn't exist, create it
-                File parent = task.destinationFile.getParentFile();
-                if (parent != null && !parent.exists()) {
-                    parent.mkdirs();
-                }
+                    if (task.mimeType == null || task.mimeType.isEmpty() || "*/*".equals(task.mimeType)) {
+                        task.mimeType = probe.mimeType;
+                    }
 
-                // Pre-allocate destination file space if length is known to avoid fragmentation
-                if (task.contentLength > 0) {
-                    RandomAccessFile raf = null;
-                    try {
-                        raf = new RandomAccessFile(task.destinationFile, "rw");
-                        raf.setLength(task.contentLength);
-                    } catch (Exception ignored) {
-                    } finally {
-                        if (raf != null) {
-                            try { raf.close(); } catch (Exception ignored) {}
+                    // If destination dir doesn't exist, create it
+                    File parent = task.destinationFile.getParentFile();
+                    if (parent != null && !parent.exists()) {
+                        parent.mkdirs();
+                    }
+
+                    // Pre-allocate destination file space if length is known to avoid fragmentation
+                    if (task.contentLength > 0) {
+                        RandomAccessFile raf = null;
+                        try {
+                            raf = new RandomAccessFile(task.destinationFile, "rw");
+                            raf.setLength(task.contentLength);
+                        } catch (Exception ignored) {
+                        } finally {
+                            if (raf != null) {
+                                try { raf.close(); } catch (Exception ignored) {}
+                            }
                         }
                     }
-                }
 
-                // Compute chunks
-                int chunkCount = ChunkDivider.determineChunkCount(
-                    task.contentLength,
-                    task.supportsRange,
-                    ChunkDivider.DEFAULT_MAX_CHUNKS
-                );
-                List<DownloadChunk> chunks = ChunkDivider.divide(task.contentLength, chunkCount);
-                task.setChunks(chunks);
-                task.saveCheckpoint();
+                    // Compute chunks
+                    int chunkCount = ChunkDivider.determineChunkCount(
+                        task.contentLength,
+                        task.supportsRange,
+                        ChunkDivider.DEFAULT_MAX_CHUNKS
+                    );
+                    List<DownloadChunk> chunks = ChunkDivider.divide(task.contentLength, chunkCount);
+                    task.setChunks(chunks);
+                    task.saveCheckpoint();
+                }
             }
 
-            final List<DownloadChunk> activeChunks = task.getChunksSnapshot();
-            final AtomicInteger remainingChunks = new AtomicInteger(activeChunks.size());
+            final List<DownloadChunk> activeChunks;
+            final AtomicInteger remainingChunks;
+            synchronized (task) {
+                if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
+                    return;
+                }
+                activeChunks = task.getChunksSnapshot();
+                remainingChunks = new AtomicInteger(activeChunks.size());
+            }
 
             DownloadWorker.WorkerListener workerListener = new DownloadWorker.WorkerListener() {
                 @Override
                 public void onChunkProgress(DownloadTask t, DownloadChunk c, int bytesRead) {
+                    if (t.getGeneration() != runGen || t.isPaused || t.isCanceled) return;
                     if (t.shouldDispatchProgress(System.currentTimeMillis())) {
                         dispatchProgress(t);
                     }
@@ -206,65 +274,90 @@ public class AcidDownloader {
 
                 @Override
                 public void onChunkCompleted(DownloadTask t, DownloadChunk c) {
-                    if (t.isCanceled || t.isPaused || t.status == DownloadTask.STATUS_FAILED) {
-                        return;
-                    }
-                    t.saveCheckpoint();
-                    int rem = remainingChunks.decrementAndGet();
-                    if (rem <= 0 && !t.isPaused && !t.isCanceled && t.status != DownloadTask.STATUS_FAILED) {
-                        t.status = DownloadTask.STATUS_SUCCESSFUL;
-                        t.completedAt = System.currentTimeMillis();
-                        t.cleanCheckpointFile();
-                        dispatchCompleted(t);
+                    synchronized (t) {
+                        if (t.getGeneration() != runGen || t.isCanceled || t.isPaused || t.status == DownloadTask.STATUS_FAILED) {
+                            return;
+                        }
+                        t.saveCheckpoint();
+                        int rem = remainingChunks.decrementAndGet();
+                        if (rem <= 0 && !t.isPaused && !t.isCanceled && t.status != DownloadTask.STATUS_FAILED) {
+                            t.status = DownloadTask.STATUS_SUCCESSFUL;
+                            t.completedAt = System.currentTimeMillis();
+                            t.cleanCheckpointFile();
+                            dispatchCompleted(t);
+                        }
                     }
                 }
 
                 @Override
                 public void onChunkFailed(DownloadTask t, DownloadChunk c, Exception error) {
-                    if (t.isPaused || t.isCanceled || t.status == DownloadTask.STATUS_FAILED) return;
-                    t.isCanceled = true; // Signal all active worker threads to halt immediately
-                    t.status = DownloadTask.STATUS_FAILED;
-                    t.errorMessage = (error != null) ? error.getMessage() : "Download error";
-                    // Lightweight zero-garbage: purge incomplete partial physical file and checkpoint
-                    t.cleanCheckpointFile();
-                    if (t.destinationFile != null && t.destinationFile.exists()) {
-                        try {
-                            t.destinationFile.delete();
-                        } catch (Exception ignored) {}
+                    synchronized (t) {
+                        if (t.getGeneration() != runGen || t.isPaused || t.isCanceled || t.status == DownloadTask.STATUS_FAILED) return;
+                        t.isCanceled = true; // Signal all active worker threads to halt immediately
+                        t.status = DownloadTask.STATUS_FAILED;
+                        t.errorMessage = (error != null) ? error.getMessage() : "Download error";
+                        t.nextGeneration();
+                        t.abortActiveConnections();
+                        if (t.supportsRange) {
+                            // Preserves checkpoint so subsequent retry can resume where it left off
+                            t.saveCheckpoint();
+                        } else {
+                            // Non-range downloads cannot resume; purge dirty partial file and checkpoint
+                            t.cleanCheckpointFile();
+                            if (t.destinationFile != null && t.destinationFile.exists()) {
+                                try {
+                                    t.destinationFile.delete();
+                                } catch (Exception ignored) {}
+                            }
+                        }
                     }
                     dispatchFailed(t, t.errorMessage);
                 }
             };
 
             for (DownloadChunk chunk : activeChunks) {
-                if (task.isPaused || task.isCanceled) break;
+                synchronized (task) {
+                    if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) break;
+                }
                 if (!chunk.completed) {
-                    mWorkerPool.execute(new DownloadWorker(task, chunk, workerListener));
+                    mWorkerPool.execute(new DownloadWorker(task, chunk, workerListener, runGen));
                 } else {
                     remainingChunks.decrementAndGet();
                 }
             }
 
-            if (remainingChunks.get() <= 0 && !task.isPaused && !task.isCanceled && task.status != DownloadTask.STATUS_FAILED) {
-                task.status = DownloadTask.STATUS_SUCCESSFUL;
-                task.completedAt = System.currentTimeMillis();
-                task.cleanCheckpointFile();
-                dispatchCompleted(task);
+            synchronized (task) {
+                if (task.getGeneration() == runGen && remainingChunks.get() <= 0
+                    && !task.isPaused && !task.isCanceled && task.status != DownloadTask.STATUS_FAILED) {
+                    task.status = DownloadTask.STATUS_SUCCESSFUL;
+                    task.completedAt = System.currentTimeMillis();
+                    task.cleanCheckpointFile();
+                    dispatchCompleted(task);
+                }
             }
 
         } catch (Exception e) {
-            if (!task.isPaused && !task.isCanceled && task.status != DownloadTask.STATUS_FAILED) {
+            synchronized (task) {
+                if (task.getGeneration() != runGen || task.isPaused || task.isCanceled || task.status == DownloadTask.STATUS_FAILED) {
+                    return;
+                }
                 task.isCanceled = true;
                 task.status = DownloadTask.STATUS_FAILED;
                 task.errorMessage = e.getMessage() != null ? e.getMessage() : e.toString();
-                task.cleanCheckpointFile();
-                if (task.destinationFile != null && task.destinationFile.exists()) {
-                    try {
-                        task.destinationFile.delete();
-                    } catch (Exception ignored) {}
+                task.nextGeneration();
+                task.abortActiveConnections();
+                if (task.supportsRange) {
+                    task.saveCheckpoint();
+                } else {
+                    task.cleanCheckpointFile();
+                    if (task.destinationFile != null && task.destinationFile.exists()) {
+                        try {
+                            task.destinationFile.delete();
+                        } catch (Exception ignored) {}
+                    }
                 }
-                dispatchFailed(task, task.errorMessage);
             }
+            dispatchFailed(task, task.errorMessage);
         }
     }
 

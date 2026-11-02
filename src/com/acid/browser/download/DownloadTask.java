@@ -8,6 +8,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -15,6 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Encapsulates the full state and checkpointing lifecycle of a single download task.
@@ -51,6 +53,46 @@ public class DownloadTask {
     // Cancellation & pause control flags
     public volatile boolean isPaused = false;
     public volatile boolean isCanceled = false;
+
+    // Run generation token: incremented on start, pause, resume, cancel, or failure.
+    // Guarantees obsolete or lingering worker threads immediately brake and cannot mutate state.
+    private final AtomicInteger mGeneration = new AtomicInteger(0);
+    private final List<HttpURLConnection> mActiveConnections = new ArrayList<HttpURLConnection>();
+
+    public int getGeneration() {
+        return mGeneration.get();
+    }
+
+    public int nextGeneration() {
+        return mGeneration.incrementAndGet();
+    }
+
+    public void registerConnection(HttpURLConnection conn) {
+        if (conn == null) return;
+        synchronized (mActiveConnections) {
+            mActiveConnections.add(conn);
+        }
+    }
+
+    public void unregisterConnection(HttpURLConnection conn) {
+        if (conn == null) return;
+        synchronized (mActiveConnections) {
+            mActiveConnections.remove(conn);
+        }
+    }
+
+    public void abortActiveConnections() {
+        List<HttpURLConnection> toAbort;
+        synchronized (mActiveConnections) {
+            toAbort = new ArrayList<HttpURLConnection>(mActiveConnections);
+            mActiveConnections.clear();
+        }
+        for (HttpURLConnection c : toAbort) {
+            try {
+                c.disconnect();
+            } catch (Throwable ignored) {}
+        }
+    }
 
     // Rolling speed tracking & progress dispatch throttling
     public static final long PROGRESS_THROTTLE_MS = 200L;

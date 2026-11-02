@@ -2,6 +2,7 @@ package com.acid.browser;
 
 import org.json.JSONObject;
 
+import com.acid.browser.download.AcidDownloader;
 import com.acid.browser.download.ChunkDivider;
 import com.acid.browser.download.DownloadChunk;
 import com.acid.browser.download.DownloadItem;
@@ -20,6 +21,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -121,9 +123,7 @@ public final class TestRunner {
         });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
-        if (sFailed > 0) {
-            System.exit(1);
-        }
+        System.exit(sFailed > 0 ? 1 : 0);
     }
 
     interface TestCase {
@@ -1307,36 +1307,56 @@ public final class TestRunner {
             DownloadWorker.WorkerListener listener = new DownloadWorker.WorkerListener() {
                 @Override public void onChunkProgress(DownloadTask t, DownloadChunk c, int bytesRead) {}
                 @Override public void onChunkCompleted(DownloadTask t, DownloadChunk c) {
-                    if (t.isCanceled || t.isPaused || t.status == DownloadTask.STATUS_FAILED) return;
-                    t.saveCheckpoint();
-                    int rem = remChunks.decrementAndGet();
-                    if (rem <= 0 && !t.isPaused && !t.isCanceled && t.status != DownloadTask.STATUS_FAILED) {
-                        t.status = DownloadTask.STATUS_SUCCESSFUL;
+                    synchronized (t) {
+                        if (t.isCanceled || t.isPaused || t.status == DownloadTask.STATUS_FAILED) return;
+                        t.saveCheckpoint();
+                        int rem = remChunks.decrementAndGet();
+                        if (rem <= 0 && !t.isPaused && !t.isCanceled && t.status != DownloadTask.STATUS_FAILED) {
+                            t.status = DownloadTask.STATUS_SUCCESSFUL;
+                        }
                     }
                 }
                 @Override public void onChunkFailed(DownloadTask t, DownloadChunk c, Exception error) {
-                    if (t.isPaused || t.isCanceled || t.status == DownloadTask.STATUS_FAILED) return;
-                    t.isCanceled = true;
-                    t.status = DownloadTask.STATUS_FAILED;
-                    t.errorMessage = error != null ? error.getMessage() : "Download error";
-                    t.cleanCheckpointFile();
-                    if (t.destinationFile != null && t.destinationFile.exists()) {
-                        t.destinationFile.delete();
+                    synchronized (t) {
+                        if (t.isPaused || t.isCanceled || t.status == DownloadTask.STATUS_FAILED) return;
+                        t.isCanceled = true;
+                        t.status = DownloadTask.STATUS_FAILED;
+                        t.errorMessage = error != null ? error.getMessage() : "Download error";
+                        t.nextGeneration();
+                        t.abortActiveConnections();
+                        if (t.supportsRange) {
+                            t.saveCheckpoint();
+                        } else {
+                            t.cleanCheckpointFile();
+                            if (t.destinationFile != null && t.destinationFile.exists()) {
+                                try {
+                                    t.destinationFile.delete();
+                                } catch (Exception ignored) {}
+                            }
+                        }
                     }
                 }
             };
 
-            // Trigger failure on Chunk 0
+            // Trigger failure on Chunk 0 for Range-supported task
             listener.onChunkFailed(failTask, ch0, new java.io.IOException("Socket timeout"));
             assertTrue(failTask.isCanceled, "isCanceled set to true to brake sibling workers");
             assertEquals(DownloadTask.STATUS_FAILED, Integer.valueOf(failTask.status), "Status marked STATUS_FAILED");
-            assertTrue(!failTask.checkpointFile.exists(), "Checkpoint purged to prevent dirty resume");
-            assertTrue(!failTask.destinationFile.exists(), "Truncated partial file purged immediately");
+            assertTrue(failTask.checkpointFile.exists(), "Checkpoint strictly preserved on resumable range failure");
+            assertTrue(failTask.destinationFile.exists(), "Partial file preserved for breakpoint resume");
 
             // Sibling Chunk 1 attempts completion afterwards -> must be rejected
             listener.onChunkCompleted(failTask, ch1);
             assertEquals(DownloadTask.STATUS_FAILED, Integer.valueOf(failTask.status), "Status remains STATUS_FAILED, never hijacked to SUCCESSFUL");
-            assertTrue(!failTask.checkpointFile.exists(), "Checkpoint was not re-created by sibling worker");
+
+            // Non-range failure purges dirty partial file & checkpoint
+            DownloadTask nonRangeFailTask = new DownloadTask(2003L, "https://example.com/stream.bin", "stream.bin", "application/octet-stream", failDir, headers);
+            nonRangeFailTask.supportsRange = false;
+            AcidIo.writeBytes(nonRangeFailTask.destinationFile, new byte[2000]);
+            nonRangeFailTask.saveCheckpoint();
+            listener.onChunkFailed(nonRangeFailTask, ch0, new java.io.IOException("Connection reset"));
+            assertTrue(!nonRangeFailTask.checkpointFile.exists(), "Non-range checkpoint purged");
+            assertTrue(!nonRangeFailTask.destinationFile.exists(), "Non-range partial file purged");
 
             // User-initiated pause retains checkpoint
             DownloadTask pauseTask = new DownloadTask(2002L, "https://example.com/pause.zip", "pause.zip", "application/zip", failDir, headers);
@@ -1818,5 +1838,74 @@ public final class TestRunner {
             "https://dl-pc-zb.drive.uc.cn/file.zip", null
         );
         assertEquals(com.acid.browser.download.DownloadCoordinator.UA_UC_CLIENT, ucHeaders.get("User-Agent"), "UC cloud drive UA injected");
+
+        // 5. DownloadTask generation tokens brake obsolete workers immediately
+        File guardDir = new File(System.getProperty("java.io.tmpdir"), "gen_guard_" + System.currentTimeMillis());
+        guardDir.mkdirs();
+        try {
+            DownloadTask genTask = new DownloadTask(3001L, "http://127.0.0.1:9999/unreachable.bin", "unreach.bin", "application/octet-stream", guardDir, null);
+            DownloadChunk ch = new DownloadChunk(0, 0, 1000);
+            genTask.setChunks(Collections.singletonList(ch));
+            int initialGen = genTask.getGeneration();
+            assertEquals(0, Integer.valueOf(initialGen), "Initial generation is 0");
+
+            final boolean[] workerRan = new boolean[]{false};
+            DownloadWorker staleWorker = new DownloadWorker(genTask, ch, new DownloadWorker.WorkerListener() {
+                @Override public void onChunkProgress(DownloadTask t, DownloadChunk c, int b) { workerRan[0] = true; }
+                @Override public void onChunkCompleted(DownloadTask t, DownloadChunk c) { workerRan[0] = true; }
+                @Override public void onChunkFailed(DownloadTask t, DownloadChunk c, Exception e) { workerRan[0] = true; }
+            }, initialGen);
+
+            // Advance task generation (simulating pause or resume)
+            int nextGen = genTask.nextGeneration();
+            assertEquals(1, Integer.valueOf(nextGen), "Generation incremented to 1");
+
+            // Stale worker run() must immediately return without touching network or listeners
+            staleWorker.run();
+            assertTrue(!workerRan[0], "Stale worker with outdated generation aborted immediately");
+
+            // 6. Rapid pause() / resume() generation token progression
+            AcidDownloader downloader = AcidDownloader.getInstance();
+            DownloadTask rapidTask = downloader.enqueue("https://example.com/rapid.zip", "rapid.zip", "application/zip", guardDir, null);
+            int genAfterStart = rapidTask.getGeneration();
+            assertTrue(genAfterStart > 0, "startTaskAsync increments generation");
+
+            boolean paused = downloader.pause(rapidTask.id);
+            assertTrue(paused, "pause() succeeds on running/pending task");
+            int genAfterPause = rapidTask.getGeneration();
+            assertTrue(genAfterPause > genAfterStart, "pause() increments generation");
+            assertEquals(DownloadTask.STATUS_PAUSED, Integer.valueOf(rapidTask.status), "Status is STATUS_PAUSED");
+
+            boolean resumed = downloader.resume(rapidTask.id);
+            assertTrue(resumed, "resume() succeeds on paused task");
+            int genAfterResume = rapidTask.getGeneration();
+            assertTrue(genAfterResume > genAfterPause, "resume() increments generation again");
+
+            // Cancel cleanly
+            downloader.cancel(rapidTask.id, true);
+            assertTrue(rapidTask.isCanceled, "cancel sets isCanceled");
+
+            // 7. Failed task with Range support is resumable by AcidDownloader.resume
+            DownloadTask failedRangeTask = downloader.enqueue("https://example.com/resumable.zip", "resumable.zip", "application/zip", guardDir, null);
+            downloader.pause(failedRangeTask.id);
+            failedRangeTask.status = DownloadTask.STATUS_FAILED;
+            failedRangeTask.supportsRange = true;
+            failedRangeTask.saveCheckpoint();
+            assertTrue(failedRangeTask.checkpointFile.exists(), "Checkpoint exists for failed task");
+
+            // AcidDownloader.resume accepts STATUS_FAILED
+            boolean resumedFailed = downloader.resume(failedRangeTask.id);
+            assertTrue(resumedFailed, "AcidDownloader.resume() succeeds for STATUS_FAILED task");
+            assertTrue(failedRangeTask.status == DownloadTask.STATUS_PENDING || failedRangeTask.status == DownloadTask.STATUS_RUNNING,
+                "Resumed failed task transitions to PENDING or RUNNING");
+
+            downloader.cancel(failedRangeTask.id, true);
+        } finally {
+            File[] files = guardDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            guardDir.delete();
+        }
     }
 }
