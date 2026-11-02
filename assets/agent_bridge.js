@@ -77,29 +77,51 @@
                 viewportObserver.disconnect();
                 viewportObserver = null;
             }
+            const desktopMetas = document.querySelectorAll('meta[data-acid-viewport="desktop"]');
+            desktopMetas.forEach((m) => m.remove());
+            if (!document.querySelector('meta[name="viewport"]')) {
+                const head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+                if (head) {
+                    const meta = document.createElement('meta');
+                    meta.name = 'viewport';
+                    meta.content = 'width=device-width, initial-scale=1.0, user-scalable=yes';
+                    head.appendChild(meta);
+                }
+            }
             return { ok: true, mode: 'mobile' };
         }
 
         function lockViewportMeta() {
-            if (!document.head) return;
+            const head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+            if (!head) return;
             const targetContent = 'width=1280, initial-scale=0.32, minimum-scale=0.1, maximum-scale=5.0, user-scalable=yes';
-            let meta = document.head.querySelector('meta[name="viewport"]');
-            if (!meta) {
-                meta = document.createElement('meta');
+            const metas = document.querySelectorAll('meta[name="viewport"]');
+            let alreadyLocked = false;
+            metas.forEach((m) => {
+                if (m.getAttribute('data-acid-viewport') === 'desktop' && m.content === targetContent) {
+                    alreadyLocked = true;
+                } else {
+                    m.remove();
+                }
+            });
+            if (!alreadyLocked) {
+                const meta = document.createElement('meta');
                 meta.name = 'viewport';
                 meta.content = targetContent;
-                document.head.insertBefore(meta, document.head.firstChild);
-            } else if (meta.content !== targetContent) {
-                meta.content = targetContent;
+                meta.setAttribute('data-acid-viewport', 'desktop');
+                head.insertBefore(meta, head.firstChild);
             }
         }
 
         lockViewportMeta();
-        if (!viewportObserver && document.head) {
-            viewportObserver = new MutationObserver(() => {
-                if (desktopSpoofEnabled) lockViewportMeta();
-            });
-            viewportObserver.observe(document.head, { childList: true, subtree: false });
+        if (!viewportObserver) {
+            const head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+            if (head) {
+                viewportObserver = new MutationObserver(() => {
+                    if (desktopSpoofEnabled) lockViewportMeta();
+                });
+                viewportObserver.observe(head, { childList: true, subtree: false });
+            }
         }
         return { ok: true, mode: 'desktop' };
     }

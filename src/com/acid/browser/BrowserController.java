@@ -642,6 +642,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (mDataStore != null && mDataStore.isDoNotTrackEnabled()) {
                     view.evaluateJavascript("try{Object.defineProperty(navigator,'doNotTrack',{get:function(){return'1';},configurable:true,enumerable:true});}catch(e){}", null);
                 }
+                if (mIsDesktopMode && DesktopViewportManager.isEligibleUrl(url)) {
+                    DesktopViewportManager.applyDesktopViewport(view, true);
+                }
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(url, tab.title);
                     mListener.onProgressChanged(0, true);
@@ -656,6 +659,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 // only a safety net for pages whose bootstrap never fired (e.g. JS disabled).
                 mUserscriptManager.injectBootstrap(view, url);
                 AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
+                if (mIsDesktopMode && DesktopViewportManager.isEligibleUrl(url)) {
+                    DesktopViewportManager.applyDesktopViewport(view, true);
+                }
 
                 if (Build.VERSION.SDK_INT >= 21) {
                     CookieManager.getInstance().flush();
@@ -689,6 +695,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onProgressChanged(WebView view, int newProgress) {
                 tab.progress = newProgress;
                 tab.isLoading = (newProgress < 100);
+                if (mIsDesktopMode && newProgress >= 15 && DesktopViewportManager.isEligibleUrl(view.getUrl())) {
+                    DesktopViewportManager.applyDesktopViewport(view, true);
+                }
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onProgressChanged(newProgress, tab.isLoading);
                 }
@@ -1354,6 +1363,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         for (TabSession t : mTabs) {
             applyIdentityToSettings(t.webView, desktop);
             if (t.webView != null) {
+                if (DesktopViewportManager.isEligibleUrl(t.url)) {
+                    DesktopViewportManager.applyDesktopViewport(t.webView, desktop);
+                }
                 try {
                     t.webView.evaluateJavascript(
                         "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(" + desktop + ");}",
