@@ -650,7 +650,11 @@ public class DownloadCoordinator {
         DownloadTask task = mDownloader.getTask(downloadId);
         if (task != null) {
             if (task.status == DownloadTask.STATUS_FAILED) {
-                // Failed download: clean up stale task and restart fresh from scratch
+                // If range is supported and checkpoint exists, resume without redownloading from 0%
+                if (task.supportsRange && task.checkpointFile != null && task.checkpointFile.exists()) {
+                    return mDownloader.resume(downloadId);
+                }
+                // Non-range download or missing checkpoint: clean up stale task and restart fresh from scratch
                 String retryUrl = task.url;
                 String retryFileName = task.fileName;
                 String retryMime = task.mimeType;

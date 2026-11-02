@@ -28,16 +28,27 @@ public class DownloadWorker implements Runnable {
     private final DownloadTask mTask;
     private final DownloadChunk mChunk;
     private final WorkerListener mListener;
+    private final int mGeneration;
 
     public DownloadWorker(DownloadTask task, DownloadChunk chunk, WorkerListener listener) {
+        this(task, chunk, listener, task != null ? task.getGeneration() : 0);
+    }
+
+    public DownloadWorker(DownloadTask task, DownloadChunk chunk, WorkerListener listener, int generation) {
         this.mTask = task;
         this.mChunk = chunk;
         this.mListener = listener;
+        this.mGeneration = generation;
+    }
+
+    private boolean isAborted() {
+        if (mTask == null) return true;
+        return mTask.isPaused || mTask.isCanceled || mTask.getGeneration() != mGeneration;
     }
 
     @Override
     public void run() {
-        if (mTask.isPaused || mTask.isCanceled || mChunk.completed) {
+        if (isAborted() || mChunk.completed) {
             return;
         }
 
@@ -47,7 +58,7 @@ public class DownloadWorker implements Runnable {
         // Check if chunk is already fully downloaded
         if (endByte >= 0 && seekOffset > endByte) {
             mChunk.completed = true;
-            if (mListener != null) mListener.onChunkCompleted(mTask, mChunk);
+            if (mListener != null && !isAborted()) mListener.onChunkCompleted(mTask, mChunk);
             return;
         }
 
@@ -60,10 +71,13 @@ public class DownloadWorker implements Runnable {
             int redirects = 0;
 
             while (redirects < MAX_REDIRECTS) {
-                if (mTask.isPaused || mTask.isCanceled) return;
+                if (isAborted()) return;
 
                 URL u = new URL(currentUrl);
                 conn = (HttpURLConnection) u.openConnection();
+                if (mTask != null) {
+                    mTask.registerConnection(conn);
+                }
                 conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
                 conn.setReadTimeout(READ_TIMEOUT_MS);
                 conn.setInstanceFollowRedirects(false);
@@ -89,7 +103,11 @@ public class DownloadWorker implements Runnable {
                     || code == HttpURLConnection.HTTP_SEE_OTHER
                     || code == 307 || code == 308) {
                     String loc = conn.getHeaderField("Location");
+                    if (mTask != null) {
+                        mTask.unregisterConnection(conn);
+                    }
                     conn.disconnect();
+                    conn = null;
                     if (loc == null || loc.trim().isEmpty()) {
                         throw new IOException("Redirect without Location header (HTTP " + code + ")");
                     }
@@ -119,6 +137,8 @@ public class DownloadWorker implements Runnable {
                 throw new IOException("Too many redirects");
             }
 
+            if (isAborted()) return;
+
             File dest = mTask.destinationFile;
             File parentDir = dest.getParentFile();
             if (parentDir != null && !parentDir.exists()) {
@@ -133,7 +153,7 @@ public class DownloadWorker implements Runnable {
             int n;
 
             while ((n = is.read(buffer)) != -1) {
-                if (mTask.isPaused || mTask.isCanceled) {
+                if (isAborted()) {
                     return;
                 }
 
@@ -150,7 +170,7 @@ public class DownloadWorker implements Runnable {
                 mChunk.downloadedBytes += n;
                 mTask.addDownloadedBytes(n);
 
-                if (mListener != null) {
+                if (mListener != null && !isAborted()) {
                     mListener.onChunkProgress(mTask, mChunk, n);
                 }
 
@@ -159,6 +179,8 @@ public class DownloadWorker implements Runnable {
                 }
             }
 
+            if (isAborted()) return;
+
             if (endByte < 0 || mChunk.getCurrentSeekOffset() > endByte) {
                 mChunk.completed = true;
             } else {
@@ -166,12 +188,12 @@ public class DownloadWorker implements Runnable {
                     + " at offset " + mChunk.getCurrentSeekOffset() + " (expected endByte " + endByte + ")");
             }
 
-            if (mListener != null) {
+            if (mListener != null && !isAborted()) {
                 mListener.onChunkCompleted(mTask, mChunk);
             }
 
         } catch (Exception e) {
-            if (!mTask.isPaused && !mTask.isCanceled) {
+            if (!isAborted()) {
                 if (mListener != null) {
                     mListener.onChunkFailed(mTask, mChunk, e);
                 }
@@ -184,6 +206,9 @@ public class DownloadWorker implements Runnable {
                 try { raf.close(); } catch (Exception ignored) {}
             }
             if (conn != null) {
+                if (mTask != null) {
+                    mTask.unregisterConnection(conn);
+                }
                 try { conn.disconnect(); } catch (Exception ignored) {}
             }
         }

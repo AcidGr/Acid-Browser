@@ -367,6 +367,18 @@ public class DownloadsSheet extends AcidBottomSheetView {
                     }
                 }
             }));
+        } else if (it.status == DownloadManager.STATUS_FAILED) {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RELOAD, "继续/重试下载", new Runnable() {
+                @Override
+                public void run() {
+                    if (mDownloads != null) {
+                        mDownloads.resumeDownload(it.downloadId);
+                        AcidFeedback.info(ctx, "正在重试下载: " + it.fileName);
+                        updateDownloadListRows();
+                        startProgressPolling();
+                    }
+                }
+            }));
         }
         actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_FILE, "打开文件", new Runnable() {
             @Override
