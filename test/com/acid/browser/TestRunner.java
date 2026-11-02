@@ -1900,6 +1900,28 @@ public final class TestRunner {
                 "Resumed failed task transitions to PENDING or RUNNING");
 
             downloader.cancel(failedRangeTask.id, true);
+
+            // 8. DesktopViewportManager URL eligibility, script generation & agent_bridge alignment
+            assertTrue(DesktopViewportManager.isEligibleUrl("https://github.com"), "HTTPS URL is eligible for desktop viewport");
+            assertTrue(DesktopViewportManager.isEligibleUrl("http://example.com/repo"), "HTTP URL is eligible for desktop viewport");
+            assertTrue(!DesktopViewportManager.isEligibleUrl("acid://home"), "acid://home is not eligible for desktop viewport");
+            assertTrue(!DesktopViewportManager.isEligibleUrl("file:///android_asset/homepage/index.html"), "Local asset homepage is not eligible");
+            assertTrue(!DesktopViewportManager.isEligibleUrl("about:blank"), "about:blank is not eligible");
+            assertTrue(!DesktopViewportManager.isEligibleUrl(""), "Empty URL is not eligible");
+            assertTrue(!DesktopViewportManager.isEligibleUrl(null), "Null URL is not eligible");
+
+            String desktopScript = DesktopViewportManager.buildViewportScript(true);
+            assertTrue(desktopScript.contains("1280"), "Desktop script locks width to 1280");
+            assertTrue(desktopScript.contains(DesktopViewportManager.VIEWPORT_TAG_ATTR), "Desktop script tags custom meta element");
+            assertTrue(desktopScript.contains("MutationObserver"), "Desktop script watches for SPA route mutations");
+            assertTrue(desktopScript.contains("remove()"), "Desktop script purges conflicting mobile viewport tags");
+
+            String mobileScript = DesktopViewportManager.buildViewportScript(false);
+            assertTrue(mobileScript.contains("disconnect"), "Mobile script disconnects desktop observer");
+            assertTrue(mobileScript.contains("width=device-width"), "Mobile script restores device-width viewport");
+
+            assertTrue(bridgeSrc.contains("data-acid-viewport"), "agent_bridge aligns with data-acid-viewport attribute");
+            assertTrue(bridgeSrc.contains("width=1280"), "agent_bridge enforces 1280px desktop width");
         } finally {
             File[] files = guardDir.listFiles();
             if (files != null) {
