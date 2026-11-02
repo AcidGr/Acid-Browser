@@ -48,7 +48,7 @@ import java.util.concurrent.Executors;
 public final class FaviconManager {
 
     private static final String TAG = "AcidFaviconManager";
-    private static final int MEM_CACHE_ENTRIES = 128;
+    private static final int MEM_CACHE_MAX_KB = 4 * 1024; // 4 MB in-memory bitmap cache (sizeOf returns KB)
     private static final long NEGATIVE_CACHE_TTL_MS = 15 * 60 * 1000L; // 15 mins
     private static final int MAX_FAVICON_BYTES = 512 * 1024; // 512 KB
 
@@ -76,8 +76,8 @@ public final class FaviconManager {
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService mExecutor = Executors.newFixedThreadPool(4);
 
-    // Fast in-memory Bitmap cache (indexed by lowercase host)
-    private final LruCache<String, Bitmap> mMemCache = new LruCache<String, Bitmap>(MEM_CACHE_ENTRIES) {
+    // Fast in-memory Bitmap cache (indexed by lowercase host, sized in KB)
+    private final LruCache<String, Bitmap> mMemCache = new LruCache<String, Bitmap>(MEM_CACHE_MAX_KB) {
         @Override
         protected int sizeOf(String key, Bitmap bitmap) {
             if (bitmap == null) return 1;
@@ -300,8 +300,11 @@ public final class FaviconManager {
                         synchronized (mMemCache) {
                             mMemCache.put(host, resultBmp);
                         }
+                        mNegativeCache.remove(host);
+                    } else {
+                        // Valid icon bytes (e.g. SVG for WebView data URI) that cannot be decoded into Android Bitmap
+                        mNegativeCache.put(host, Long.valueOf(System.currentTimeMillis()));
                     }
-                    mNegativeCache.remove(host);
                 } else {
                     mNegativeCache.put(host, Long.valueOf(System.currentTimeMillis()));
                 }

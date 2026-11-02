@@ -109,6 +109,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private View mCustomView = null;
     private WebChromeClient.CustomViewCallback mCustomViewCallback = null;
     private BrowserDataStore mDataStore = null;
+    private boolean mApplyingHotReload = false;
 
     public void setDataStore(BrowserDataStore dataStore) {
         mDataStore = dataStore;
@@ -1306,14 +1307,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void setBlockImages(boolean block) {
+        boolean changed = false;
         for (TabSession t : mTabs) {
             if (t.webView != null) {
                 WebSettings s = t.webView.getSettings();
+                if (s.getBlockNetworkImage() != block) {
+                    changed = true;
+                }
                 s.setLoadsImagesAutomatically(!block);
                 s.setBlockNetworkImage(block);
             }
         }
-        if (mActiveTab != null && mActiveTab.webView != null) {
+        if (changed && mActiveTab != null && mActiveTab.webView != null) {
             mActiveTab.webView.reload();
         }
     }
@@ -1327,15 +1332,20 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void applySettingsHotReload() {
-        if (mDataStore == null) return;
-        setWebDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
-        setBlockImages(mDataStore.isBlockImagesEnabled());
-        AdBlockManager.getInstance(mContext).syncFromDataStore();
-        if (mDarkMode != mDataStore.isDarkMode()) {
-            setDarkMode(mDataStore.isDarkMode());
-        }
-        if (mListener != null) {
-            mListener.onSettingsReloaded();
+        if (mDataStore == null || mApplyingHotReload) return;
+        mApplyingHotReload = true;
+        try {
+            setWebDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
+            setBlockImages(mDataStore.isBlockImagesEnabled());
+            AdBlockManager.getInstance(mContext).syncFromDataStore();
+            if (mDarkMode != mDataStore.isDarkMode()) {
+                setDarkMode(mDataStore.isDarkMode());
+            }
+            if (mListener != null) {
+                mListener.onSettingsReloaded();
+            }
+        } finally {
+            mApplyingHotReload = false;
         }
     }
 
@@ -1343,6 +1353,14 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mIsDesktopMode = desktop;
         for (TabSession t : mTabs) {
             applyIdentityToSettings(t.webView, desktop);
+            if (t.webView != null) {
+                try {
+                    t.webView.evaluateJavascript(
+                        "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(" + desktop + ");}",
+                        null
+                    );
+                } catch (Exception ignored) {}
+            }
         }
         if (reloadCurrent && mActiveTab != null) {
             mActiveTab.webView.reload();
@@ -1352,6 +1370,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
+    @Override
     public boolean isDesktopMode() {
         return mIsDesktopMode;
     }

@@ -136,7 +136,7 @@ public class AcidFileProvider extends ContentProvider {
             if (OpenableColumns.DISPLAY_NAME.equals(col)) {
                 row.add(fileName);
             } else if (OpenableColumns.SIZE.equals(col)) {
-                row.add(targetFile.exists() ? targetFile.length() : 0L);
+                row.add(targetFile != null && targetFile.exists() ? targetFile.length() : 0L);
             } else {
                 row.add(null);
             }

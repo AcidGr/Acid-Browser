@@ -254,11 +254,15 @@ public class AcidSessionStore {
         return list;
     }
 
-    public synchronized void saveActiveSession() {
-        if (mActiveSession != null) {
-            mActiveSession.updatedAt = System.currentTimeMillis();
-            saveSessionToDisk(mActiveSession);
+    public synchronized void saveSession(AgentSession s) {
+        if (s != null) {
+            s.updatedAt = System.currentTimeMillis();
+            saveSessionToDisk(s);
         }
+    }
+
+    public synchronized void saveActiveSession() {
+        saveSession(mActiveSession);
     }
 
     public synchronized void updateTitleIfDefault(String firstUserPrompt) {
