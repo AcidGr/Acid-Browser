@@ -63,21 +63,8 @@ public final class AcidIo {
     }
 
     public static void writeFileUtf8(File file, String content) throws IOException {
-        if (file == null) throw new IOException("Target file is null");
-        File parent = file.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            throw new IOException("Cannot create parent directory: " + parent.getAbsolutePath());
-        }
-        FileOutputStream fos = new FileOutputStream(file);
-        try {
-            byte[] bytes = (content != null ? content : "").getBytes(StandardCharsets.UTF_8);
-            fos.write(bytes);
-            fos.flush();
-        } finally {
-            try {
-                fos.close();
-            } catch (IOException ignored) {}
-        }
+        byte[] bytes = (content != null ? content : "").getBytes(StandardCharsets.UTF_8);
+        writeBytes(file, bytes);
     }
 
     public static boolean writeFileUtf8Safe(File file, String content) {
@@ -96,16 +83,37 @@ public final class AcidIo {
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             throw new IOException("Cannot create parent directory: " + parent.getAbsolutePath());
         }
-        FileOutputStream fos = new FileOutputStream(file);
+        File destDir = parent != null ? parent : new File(".");
+        File tmpFile = new File(destDir, file.getName() + ".tmp_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 10000));
+        FileOutputStream fos = new FileOutputStream(tmpFile);
+        boolean success = false;
         try {
             if (bytes != null && bytes.length > 0) {
                 fos.write(bytes);
             }
             fos.flush();
+            try {
+                fos.getFD().sync();
+            } catch (Throwable ignored) {}
+            success = true;
         } finally {
             try {
                 fos.close();
             } catch (IOException ignored) {}
+            if (!success) {
+                try { tmpFile.delete(); } catch (Throwable ignored) {}
+            }
+        }
+
+        // Atomic POSIX rename replaces destination file safely without truncating original
+        if (!tmpFile.renameTo(file)) {
+            if (file.exists() && !file.delete()) {
+                // If destination cannot be deleted, attempt copy fallback
+            }
+            if (!tmpFile.renameTo(file)) {
+                copyFile(tmpFile, file);
+                try { tmpFile.delete(); } catch (Throwable ignored) {}
+            }
         }
     }
 

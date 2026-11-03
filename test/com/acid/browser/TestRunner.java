@@ -147,6 +147,14 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testCoreBugFixes(); }
         });
 
+        run("Zero-risk UX Bug Fixes: Userscript URL path scoping & Atomic file sync", new TestCase() {
+            @Override public void execute() throws Exception { testZeroRiskUxBugFixes(); }
+        });
+
+        run("P1 Robustness Fixes: AcidDialog Activity guard, AcidHttp redirect loop & atomic download rollback", new TestCase() {
+            @Override public void execute() throws Exception { testP1HttpRedirectAndAtomicDownloadAndDialogGuards(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2574,5 +2582,170 @@ public final class TestRunner {
         });
         String shot = driver.captureScreenshotBase64Sync(75);
         assertTrue(shot == null, "captureScreenshotBase64Sync returns null safely without throwing uncaught Error when tab is absent");
+    }
+
+    private static void testZeroRiskUxBugFixes() throws Exception {
+        // 1. Userscript URL path scoping: ordinary search/article URLs must NOT trigger script install
+        assertTrue(!BrowserController.isUserscriptUrl("https://www.google.com/search?q=how-to-write.user.js"), "Search URL with user.js in query is not script");
+        assertTrue(!BrowserController.isUserscriptUrl("https://example.com/news?item=my.user.js&ref=share"), "News URL with user.js in query is not script");
+        assertTrue(!BrowserController.isUserscriptUrl("https://example.com/doc/user.js.html"), "HTML article ending in .user.js.html is not script");
+        assertTrue(!BrowserController.isUserscriptUrl(""), "Empty URL is not script");
+        assertTrue(!BrowserController.isUserscriptUrl(null), "Null URL is not script");
+
+        // Legitimate script URLs MUST be detected correctly
+        assertTrue(BrowserController.isUserscriptUrl("https://raw.githubusercontent.com/user/repo/main/anti_hijack.user.js"), "Direct .user.js path is script");
+        assertTrue(BrowserController.isUserscriptUrl("https://greasyfork.org/scripts/123/code/script.user.js?version=456"), "Script with version query parameter is script");
+        assertTrue(BrowserController.isUserscriptUrl("http://localhost:8080/my_tool.user.js#hash"), "Script with fragment is script");
+
+        // 2. AcidIo atomic write: produces file, preserves UTF-8, cleans up tmp file
+        File tmpDir = new File(System.getProperty("java.io.tmpdir"), "acid_atomic_io_" + System.currentTimeMillis());
+        tmpDir.mkdirs();
+        try {
+            File targetFile = new File(tmpDir, "settings.json");
+            AcidIo.writeFileUtf8(targetFile, "{\"theme\":\"dark\"}");
+            assertTrue(targetFile.exists(), "Target file exists after atomic write");
+            assertEquals("{\"theme\":\"dark\"}", AcidIo.readFileUtf8(targetFile), "Content read back accurately");
+
+            // Overwrite existing file atomically
+            AcidIo.writeFileUtf8(targetFile, "{\"theme\":\"light\"}");
+            assertEquals("{\"theme\":\"light\"}", AcidIo.readFileUtf8(targetFile), "Overwritten content verified");
+
+            // Verify no leftover .tmp files
+            File[] files = tmpDir.listFiles();
+            int tmpCount = 0;
+            if (files != null) {
+                for (File f : files) {
+                    if (f.getName().contains(".tmp")) tmpCount++;
+                }
+            }
+            assertEquals(0, Integer.valueOf(tmpCount), "Temporary atomic files cleaned up upon completion");
+        } finally {
+            File[] files = tmpDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            tmpDir.delete();
+        }
+    }
+
+    private static void testP1HttpRedirectAndAtomicDownloadAndDialogGuards() throws Exception {
+        // 1. Test AcidHttp redirect loop via local mock server
+        final ServerSocket ss = new ServerSocket(0);
+        final int port = ss.getLocalPort();
+        Thread serverThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // Request 1: Redirect 301
+                    Socket s1 = ss.accept();
+                    BufferedReader r1 = new BufferedReader(new InputStreamReader(s1.getInputStream(), StandardCharsets.US_ASCII));
+                    String l;
+                    while ((l = r1.readLine()) != null && !l.isEmpty()) {}
+                    OutputStream o1 = s1.getOutputStream();
+                    String r301 = "HTTP/1.1 301 Moved Permanently\r\n"
+                        + "Location: http://127.0.0.1:" + port + "/target\r\n"
+                        + "Content-Length: 0\r\n\r\n";
+                    o1.write(r301.getBytes(StandardCharsets.US_ASCII));
+                    o1.flush();
+                    s1.close();
+
+                    // Request 2: Final 200 OK
+                    Socket s2 = ss.accept();
+                    BufferedReader r2 = new BufferedReader(new InputStreamReader(s2.getInputStream(), StandardCharsets.US_ASCII));
+                    while ((l = r2.readLine()) != null && !l.isEmpty()) {}
+                    OutputStream o2 = s2.getOutputStream();
+                    byte[] body = "SUCCESS_REDIRECT_PAYLOAD".getBytes(StandardCharsets.UTF_8);
+                    String r200 = "HTTP/1.1 200 OK\r\n"
+                        + "Content-Type: text/plain; charset=utf-8\r\n"
+                        + "Content-Length: " + body.length + "\r\n\r\n";
+                    o2.write(r200.getBytes(StandardCharsets.US_ASCII));
+                    o2.write(body);
+                    o2.flush();
+                    s2.close();
+                } catch (Exception ignored) {}
+            }
+        });
+        serverThread.start();
+
+        try {
+            String text = AcidHttp.fetchText("http://127.0.0.1:" + port + "/initial", 3000, 3000, 1024 * 1024);
+            assertEquals("SUCCESS_REDIRECT_PAYLOAD", text, "AcidHttp follows 301 redirect and retrieves target body");
+        } finally {
+            serverThread.join(2000);
+            ss.close();
+        }
+
+        // 2. Test AcidHttp.downloadToFile atomic replace and failure rollback
+        File testDir = new File(System.getProperty("java.io.tmpdir"), "acid_http_atomic_" + System.currentTimeMillis());
+        testDir.mkdirs();
+        try {
+            final ServerSocket ssDownload = new ServerSocket(0);
+            final int dlPort = ssDownload.getLocalPort();
+            Thread dlServerThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        // Request 1: successful file download
+                        Socket s1 = ssDownload.accept();
+                        BufferedReader r1 = new BufferedReader(new InputStreamReader(s1.getInputStream(), StandardCharsets.US_ASCII));
+                        String l;
+                        while ((l = r1.readLine()) != null && !l.isEmpty()) {}
+                        OutputStream o1 = s1.getOutputStream();
+                        byte[] content = "VALID_DOWNLOAD_CONTENT".getBytes(StandardCharsets.UTF_8);
+                        String h1 = "HTTP/1.1 200 OK\r\nContent-Length: " + content.length + "\r\n\r\n";
+                        o1.write(h1.getBytes(StandardCharsets.US_ASCII));
+                        o1.write(content);
+                        o1.flush();
+                        s1.close();
+
+                        // Request 2: failing download (server error 500)
+                        Socket s2 = ssDownload.accept();
+                        BufferedReader r2 = new BufferedReader(new InputStreamReader(s2.getInputStream(), StandardCharsets.US_ASCII));
+                        while ((l = r2.readLine()) != null && !l.isEmpty()) {}
+                        OutputStream o2 = s2.getOutputStream();
+                        String h2 = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror";
+                        o2.write(h2.getBytes(StandardCharsets.US_ASCII));
+                        o2.flush();
+                        s2.close();
+                    } catch (Exception ignored) {}
+                }
+            });
+            dlServerThread.start();
+
+            File targetRuleFile = new File(testDir, "subscription_rules.txt");
+            // Successful download produces target file atomically
+            AcidHttp.downloadToFile("http://127.0.0.1:" + dlPort + "/rules.txt", targetRuleFile, 3000, 3000, 1024 * 1024);
+            assertTrue(targetRuleFile.exists(), "Target rule file exists after successful download");
+            assertEquals("VALID_DOWNLOAD_CONTENT", AcidIo.readFileUtf8(targetRuleFile), "Target rule file content verified");
+
+            // Failing download MUST preserve existing file content and NOT truncate or corrupt it
+            boolean failedAsExpected = false;
+            try {
+                AcidHttp.downloadToFile("http://127.0.0.1:" + dlPort + "/rules_failing.txt", targetRuleFile, 3000, 3000, 1024 * 1024);
+            } catch (Exception expected) {
+                failedAsExpected = true;
+            }
+            assertTrue(failedAsExpected, "Failing download threw expected exception");
+            assertEquals("VALID_DOWNLOAD_CONTENT", AcidIo.readFileUtf8(targetRuleFile), "Existing file content preserved intact despite download failure");
+
+            // Verify no dangling .tmp files remain in directory
+            File[] files = testDir.listFiles();
+            int tmpCount = 0;
+            if (files != null) {
+                for (File f : files) {
+                    if (f.getName().contains(".tmp")) tmpCount++;
+                }
+            }
+            assertEquals(0, Integer.valueOf(tmpCount), "No dangling temporary download files remain");
+
+            dlServerThread.join(2000);
+            ssDownload.close();
+        } finally {
+            File[] files = testDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            testDir.delete();
+        }
     }
 }

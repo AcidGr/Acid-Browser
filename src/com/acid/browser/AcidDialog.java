@@ -1,13 +1,16 @@
 package com.acid.browser;
 
+import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.os.Build;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -335,8 +338,27 @@ public final class AcidDialog {
             wlp.gravity = Gravity.CENTER;
             win.setAttributes(wlp);
         }
-        dialog.show();
+
+        if (isHostActivityInactive(mContext)) {
+            Log.w("AcidDialog", "Host activity is finishing or destroyed; skipping dialog.show()");
+            return dialog;
+        }
+
+        try {
+            dialog.show();
+        } catch (WindowManager.BadTokenException | IllegalStateException e) {
+            Log.w("AcidDialog", "Failed to show dialog: host window token is invalid or activity detached", e);
+        }
         return dialog;
+    }
+
+    private static boolean isHostActivityInactive(Context ctx) {
+        if (ctx instanceof Activity) {
+            Activity act = (Activity) ctx;
+            if (act.isFinishing()) return true;
+            if (Build.VERSION.SDK_INT >= 17 && act.isDestroyed()) return true;
+        }
+        return false;
     }
 
     private View buildSingleChoiceList(final Dialog dialog) {
