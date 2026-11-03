@@ -49,6 +49,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public static final String UA_DESKTOP =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+    /**
+     * Ceiling on how many tabs a web page may open through {@code window.open()} /
+     * {@code target="_blank"}.
+     *
+     * <p>{@code setJavaScriptCanOpenWindowsAutomatically(true)} lets a script call
+     * {@code window.open()} without a user gesture, and every tab is a full WebView with its own
+     * Chromium render context. A page running {@code while(1) window.open()} therefore exhausts
+     * the heap within seconds. Capping the total keeps the browser usable while leaving normal
+     * OAuth popups and {@code target="_blank"} links untouched.
+     */
+    public static final int MAX_TABS = 24;
+
     public interface BrowserStateListener {
         void onUrlChanged(String url, String title);
         void onProgressChanged(int progress, boolean isLoading);
@@ -834,6 +846,12 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
                 if (resultMsg == null) return false;
+                // Checked before allocating anything: refusing after createNewTabBlank() would
+                // already have built the WebView we are trying to avoid.
+                if (!canOpenScriptedTab(mTabs.size())) {
+                    Log.w(TAG, "Refused window.open(): tab limit " + MAX_TABS + " reached");
+                    return false;
+                }
                 try {
                     TabSession newTab = createNewTabBlank(true);
                     WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
@@ -953,6 +971,23 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             return AcidSettings.APP_LAUNCH_BLOCK;
         }
         return configuredPolicy;
+    }
+
+    /**
+     * Decides whether a page-initiated {@code window.open()} may create a tab.
+     *
+     * <p>Only the total is capped — user-gesture and script-initiated popups are treated alike,
+     * because {@code isUserGesture} is unreliable on WebView (form-submit-driven popups report
+     * false) and rejecting on it would swallow legitimate OAuth windows. Under the cap a page can
+     * still open as many tabs as it wants; past it, every further request is refused.
+     *
+     * <p>Extracted as a pure function so the boundary can be unit-tested without a WebView.
+     *
+     * @param currentTabCount number of tabs currently open
+     * @return true when one more tab may be created
+     */
+    public static boolean canOpenScriptedTab(int currentTabCount) {
+        return currentTabCount < MAX_TABS;
     }
 
     public int getEffectiveAppLaunchPolicy() {

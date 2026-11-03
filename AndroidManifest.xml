@@ -20,6 +20,7 @@
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
+        android:allowBackup="false"
         android:hasCode="true">
 
         <provider

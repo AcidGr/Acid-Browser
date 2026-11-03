@@ -167,6 +167,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testDownloadFilenameHardening(); }
         });
 
+        run("Tab limit: window.open ceiling & manifest backup opt-out", new TestCase() {
+            @Override public void execute() throws Exception { testTabLimitAndBackupOptOut(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2983,5 +2987,41 @@ public final class TestRunner {
         assertEquals("a.txt",
             HttpProbe.parseFileNameFromDisposition("attachment; x=\"İ\"; filename*=UTF-8''a.txt"),
             "filename* survives a U+0130 prefix");
+    }
+
+    /** Covers the window.open ceiling and the manifest backup opt-out. */
+    private static void testTabLimitAndBackupOptOut() throws Exception {
+        // 1. The cap itself is a sane, non-zero ceiling.
+        assertTrue(BrowserController.MAX_TABS > 0, "MAX_TABS must be positive");
+        assertTrue(BrowserController.MAX_TABS <= 64,
+            "MAX_TABS must stay small enough to fit the heap: " + BrowserController.MAX_TABS);
+
+        // 2. Boundary behaviour: below the cap tabs may open, at/above it they may not.
+        assertTrue(BrowserController.canOpenScriptedTab(0), "an empty browser accepts a new tab");
+        assertTrue(BrowserController.canOpenScriptedTab(BrowserController.MAX_TABS - 1),
+            "the last slot below the cap still opens");
+        assertTrue(!BrowserController.canOpenScriptedTab(BrowserController.MAX_TABS),
+            "reaching the cap refuses further page-opened tabs");
+        assertTrue(!BrowserController.canOpenScriptedTab(BrowserController.MAX_TABS + 1),
+            "already over the cap keeps refusing");
+
+        // 3. A runaway loop must terminate at the cap rather than growing without bound.
+        int simulated = 0;
+        for (int i = 0; i < 5000; i++) {
+            if (!BrowserController.canOpenScriptedTab(simulated)) break;
+            simulated++;
+        }
+        assertEquals(Integer.valueOf(BrowserController.MAX_TABS), Integer.valueOf(simulated),
+            "a while(1) window.open() loop stops exactly at MAX_TABS, not 5000");
+
+        // 4. Manifest must opt out of cloud backup so API keys and the MCP token
+        //    (stored in SharedPreferences) are not uploaded.
+        File manifest = new File("AndroidManifest.xml");
+        if (manifest.isFile()) {
+            String xml = new String(java.nio.file.Files.readAllBytes(manifest.toPath()),
+                StandardCharsets.UTF_8);
+            assertTrue(xml.contains("android:allowBackup=\"false\""),
+                "manifest disables allowBackup so secrets are not backed up");
+        }
     }
 }
