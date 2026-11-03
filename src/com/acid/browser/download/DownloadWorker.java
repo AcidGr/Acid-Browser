@@ -93,6 +93,15 @@ public class DownloadWorker implements Runnable {
                 } else if (seekOffset > 0) {
                     conn.setRequestProperty("Range", "bytes=" + seekOffset + "-");
                 }
+                // Only send If-Range when resuming an interrupted chunk AND validator is a strong ETag
+                // (RFC 7232/7233 explicitly forbids weak validators W/ in If-Range)
+                boolean isResumingChunk = mChunk.downloadedBytes > 0 && seekOffset > mChunk.startByte;
+                if (isResumingChunk && mTask.eTag != null && !mTask.eTag.trim().isEmpty()) {
+                    String tag = mTask.eTag.trim();
+                    if (!tag.startsWith("W/") && !tag.startsWith("w/")) {
+                        conn.setRequestProperty("If-Range", tag);
+                    }
+                }
 
                 conn.connect();
                 int code = conn.getResponseCode();

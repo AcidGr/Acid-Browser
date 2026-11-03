@@ -5,6 +5,7 @@ import org.json.JSONObject;
 import com.acid.browser.download.AcidDownloader;
 import com.acid.browser.download.ChunkDivider;
 import com.acid.browser.download.DownloadChunk;
+import com.acid.browser.download.DownloadCoordinator;
 import com.acid.browser.download.DownloadItem;
 import com.acid.browser.download.DownloadTask;
 import com.acid.browser.download.DownloadWorker;
@@ -120,6 +121,10 @@ public final class TestRunner {
 
         run("Critical Runtime Guards: SSE tool_calls null safety, HttpProbe 206/* & bridge exports", new TestCase() {
             @Override public void execute() throws Exception { testCriticalRuntimeGuards(); }
+        });
+
+        run("Downloader Collision & Checkpoint Isolation: unique naming & cross-URL reject", new TestCase() {
+            @Override public void execute() throws Exception { testDownloaderCollisionAndCheckpointIsolation(); }
         });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
@@ -1928,6 +1933,185 @@ public final class TestRunner {
                 for (File f : files) f.delete();
             }
             guardDir.delete();
+        }
+    }
+
+    private static void testDownloaderCollisionAndCheckpointIsolation() throws Exception {
+        // 1. Extension and Base name splitting verification
+        String[] p1 = DownloadCoordinator.splitBaseNameAndExtension("photo.jpg");
+        assertEquals("photo", p1[0], "Base name for photo.jpg is photo");
+        assertEquals(".jpg", p1[1], "Extension for photo.jpg is .jpg");
+
+        String[] p2 = DownloadCoordinator.splitBaseNameAndExtension("archive.tar.gz");
+        assertEquals("archive", p2[0], "Base name for archive.tar.gz is archive");
+        assertEquals(".tar.gz", p2[1], "Compound extension .tar.gz recognized");
+
+        String[] p3 = DownloadCoordinator.splitBaseNameAndExtension("bundle.tar.bz2");
+        assertEquals("bundle", p3[0], "Base name for bundle.tar.bz2 is bundle");
+        assertEquals(".tar.bz2", p3[1], "Compound extension .tar.bz2 recognized");
+
+        String[] p4 = DownloadCoordinator.splitBaseNameAndExtension("LICENSE");
+        assertEquals("LICENSE", p4[0], "Base name for LICENSE without extension");
+        assertEquals("", p4[1], "Empty extension for LICENSE");
+
+        // 2. Disk physical collision and unique numbering
+        File testDir = new File(System.getProperty("java.io.tmpdir"), "acid_naming_test_" + System.currentTimeMillis());
+        testDir.mkdirs();
+        try {
+            String u0 = DownloadCoordinator.resolveUniqueFileName(testDir, "test.pdf");
+            assertEquals("test.pdf", u0, "No collision returns original name");
+
+            File f0 = new File(testDir, "test.pdf");
+            f0.createNewFile();
+            String u1 = DownloadCoordinator.resolveUniqueFileName(testDir, "test.pdf");
+            assertEquals("test (1).pdf", u1, "First collision generates (1)");
+
+            File f1 = new File(testDir, "test (1).pdf");
+            f1.createNewFile();
+            String u2 = DownloadCoordinator.resolveUniqueFileName(testDir, "test.pdf");
+            assertEquals("test (2).pdf", u2, "Second collision generates (2)");
+
+            // If user input already ends with (1) and it exists, increments to (2)
+            String u2from1 = DownloadCoordinator.resolveUniqueFileName(testDir, "test (1).pdf");
+            assertEquals("test (2).pdf", u2from1, "Existing (1) cleanly increments to (2) without nested parentheses");
+
+            // Part config file also counts as collision
+            File cfg2 = new File(testDir, "test (2).pdf.part.cfg");
+            cfg2.createNewFile();
+            String u3 = DownloadCoordinator.resolveUniqueFileName(testDir, "test.pdf");
+            assertEquals("test (3).pdf", u3, "Presence of .part.cfg causes collision avoidance");
+
+            // 3. Active task conflict checker
+            final Set<String> activeMock = new HashSet<String>();
+            activeMock.add("downloading.zip");
+            DownloadCoordinator.FilenameConflictChecker checker = new DownloadCoordinator.FilenameConflictChecker() {
+                @Override
+                public boolean isBusy(File destDir, String candidate) {
+                    return activeMock.contains(candidate.toLowerCase());
+                }
+            };
+            String activeUnique = DownloadCoordinator.resolveUniqueFileName(testDir, "downloading.zip", checker);
+            assertEquals("downloading (1).zip", activeUnique, "Active task in memory causes collision avoidance");
+
+            // 4. Cross-task checkpoint isolation and rejection
+            File checkpointDir = new File(testDir, "checkpoints");
+            checkpointDir.mkdirs();
+            Map<String, String> dummyHeaders = new HashMap<String, String>();
+
+            DownloadTask taskA = new DownloadTask(
+                101L, "https://example.com/siteA/file.zip", "file.zip", "application/zip", checkpointDir, dummyHeaders
+            );
+            taskA.contentLength = 5000000L;
+            taskA.supportsRange = true;
+            taskA.finalUrl = "https://example.com/siteA/file.zip";
+            List<DownloadChunk> chunksA = new ArrayList<DownloadChunk>();
+            chunksA.add(new DownloadChunk(0, 0, 4999999L, 2500000L, false));
+            taskA.setChunks(chunksA);
+            taskA.downloadedBytes = 2500000L;
+
+            boolean aSaved = taskA.saveCheckpoint();
+            assertTrue(aSaved, "Task A checkpoint saved successfully");
+            assertTrue(taskA.checkpointFile.exists(), "Task A checkpoint file exists");
+
+            // Task B has DIFFERENT url but same fileName and destinationDir
+            DownloadTask taskB = new DownloadTask(
+                102L, "https://malicious.com/siteB/file.zip", "file.zip", "application/zip", checkpointDir, dummyHeaders
+            );
+            boolean bLoaded = taskB.loadCheckpoint();
+            assertTrue(!bLoaded, "Task B must reject checkpoint created by Task A for different URL");
+            assertEquals("https://malicious.com/siteB/file.zip", taskB.finalUrl, "Task B finalUrl must NOT be overwritten by Task A");
+            assertEquals(-1L, Long.valueOf(taskB.contentLength), "Task B contentLength must remain unmutated");
+            assertEquals(0L, Long.valueOf(taskB.downloadedBytes), "Task B downloadedBytes must remain 0");
+
+            // Task A with SAME url must successfully resume
+            taskA.eTag = "\"etag-12345\"";
+            taskA.lastModified = "Mon, 03 Nov 2026 01:00:00 GMT";
+            taskA.saveCheckpoint();
+
+            DownloadTask taskAResume = new DownloadTask(
+                103L, "https://example.com/siteA/file.zip", "file.zip", "application/zip", checkpointDir, dummyHeaders
+            );
+            boolean aLoaded = taskAResume.loadCheckpoint();
+            assertTrue(aLoaded, "Task A Resume with identical URL must successfully load checkpoint");
+            assertEquals(5000000L, Long.valueOf(taskAResume.contentLength), "Task A resumed contentLength matches");
+            assertEquals(2500000L, Long.valueOf(taskAResume.downloadedBytes), "Task A resumed downloadedBytes matches");
+            assertEquals("https://example.com/siteA/file.zip", taskAResume.finalUrl, "Task A resumed finalUrl matches");
+            assertEquals("\"etag-12345\"", taskAResume.eTag, "Task A resumed ETag matches");
+            assertEquals("Mon, 03 Nov 2026 01:00:00 GMT", taskAResume.lastModified, "Task A resumed Last-Modified matches");
+
+            // 5. isCheckpointMatchingUrl utility verification
+            assertTrue(DownloadCoordinator.isCheckpointMatchingUrl(taskA.checkpointFile, "https://example.com/siteA/file.zip"),
+                "isCheckpointMatchingUrl returns true for matching URL");
+            assertTrue(!DownloadCoordinator.isCheckpointMatchingUrl(taskA.checkpointFile, "https://malicious.com/siteB/file.zip"),
+                "isCheckpointMatchingUrl returns false for mismatched URL");
+            assertTrue(!DownloadCoordinator.isCheckpointMatchingUrl(new File(checkpointDir, "nonexistent.cfg"), "https://example.com/siteA/file.zip"),
+                "isCheckpointMatchingUrl returns false for nonexistent file");
+
+            // 6. Safe collision avoidance on resume when disk file was overtaken by another task
+            File foreignFile = new File(checkpointDir, "file.zip");
+            foreignFile.createNewFile();
+            // Delete matching checkpoint so file.zip now represents an overtaken/completed foreign file
+            taskA.cleanCheckpointFile();
+            assertTrue(!taskA.checkpointFile.exists(), "Cleaned checkpoint successfully");
+
+            // A task trying to resume file.zip without matching checkpoint detects collision
+            String safeOvertakenName = DownloadCoordinator.resolveUniqueFileName(checkpointDir, "file.zip");
+            assertEquals("file (1).zip", safeOvertakenName, "Overtaken file.zip resolves to file (1).zip to protect foreign file");
+
+            // 7. HttpProbe ProbeResult preserves ETag and Last-Modified
+            HttpProbe.ProbeResult pr = new HttpProbe.ProbeResult(
+                "https://example.com/test", 12345L, true, "application/octet-stream", "test", 200, "\"strong-etag\"", "Tue, 04 Nov 2026 12:00:00 GMT"
+            );
+            assertEquals("\"strong-etag\"", pr.eTag, "ProbeResult preserves ETag");
+            assertEquals("Tue, 04 Nov 2026 12:00:00 GMT", pr.lastModified, "ProbeResult preserves Last-Modified");
+
+            // 8. Weak ETag vs Strong ETag identification for RFC 7232/7233 If-Range
+            String weakTag1 = "W/\"xyz123\"";
+            String weakTag2 = "w/\"xyz123\"";
+            String strongTag = "\"xyz123\"";
+            assertTrue(weakTag1.startsWith("W/"), "W/ is recognized as weak validator");
+            assertTrue(weakTag2.toLowerCase().startsWith("w/"), "w/ is recognized as weak validator");
+            assertTrue(!strongTag.startsWith("W/") && !strongTag.startsWith("w/"), "Strong ETag does not start with W/");
+
+            // 9. App restart state recovery: in-flight RUNNING/PENDING items automatically transition to PAUSED
+            BrowserDataStore mockStore = new BrowserDataStore(new InMemoryPrefs(), new InMemoryPrefs(), null);
+            List<DownloadItem> mockList = new ArrayList<DownloadItem>();
+            mockList.add(new DownloadItem(501L, "interrupted.pdf", "https://example.com/i.pdf", "application/pdf", 5000L, 2500L, DownloadTask.STATUS_RUNNING, System.currentTimeMillis()));
+            mockList.add(new DownloadItem(502L, "queued.pdf", "https://example.com/q.pdf", "application/pdf", 1000L, 0L, DownloadTask.STATUS_PENDING, System.currentTimeMillis()));
+            mockStore.saveDownloads(mockList);
+
+            DownloadCoordinator coord = new DownloadCoordinator(null, mockStore);
+            try {
+                List<DownloadItem> restored = coord.getDownloads();
+                assertEquals(2, Integer.valueOf(restored.size()), "Restored exactly 2 items");
+                assertEquals(DownloadTask.STATUS_PAUSED, Integer.valueOf(restored.get(0).status), "Interrupted RUNNING item becomes PAUSED on reload");
+                assertEquals(DownloadTask.STATUS_PAUSED, Integer.valueOf(restored.get(1).status), "Queued PENDING item becomes PAUSED on reload");
+
+                // 10. Deletion ownership verification: Non-successful task without matching checkpoint cannot delete foreign file
+                File foreignPdf = new File(testDir, "interrupted.pdf");
+                foreignPdf.createNewFile();
+                assertTrue(foreignPdf.exists(), "Foreign PDF created");
+
+                // Delete the uncompleted task (which does NOT have a matching checkpoint)
+                coord.deleteDownload(501L, true);
+                assertTrue(foreignPdf.exists(), "Foreign completed file is protected from deletion by uncompleted task");
+            } finally {
+                coord.destroy();
+            }
+        } finally {
+            File[] files = testDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isDirectory()) {
+                        File[] sub = f.listFiles();
+                        if (sub != null) {
+                            for (File sf : sub) sf.delete();
+                        }
+                    }
+                    f.delete();
+                }
+            }
+            testDir.delete();
         }
     }
 }

@@ -20,10 +20,13 @@ import com.acid.browser.AcidIo;
 import com.acid.browser.AcidSettings;
 import com.acid.browser.BrowserDataStore;
 
+import org.json.JSONObject;
+
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -114,9 +117,24 @@ public class DownloadCoordinator {
     private void reloadSavedDownloads() {
         if (mDataStore != null) {
             List<DownloadItem> saved = mDataStore.loadDownloads();
+            boolean changed = false;
+            for (DownloadItem it : saved) {
+                // If app process was terminated while a task was RUNNING or PENDING, reset to PAUSED
+                // so the user can cleanly resume from where it left off instead of being stuck in RUNNING
+                if (it.status == DownloadTask.STATUS_RUNNING || it.status == DownloadTask.STATUS_PENDING) {
+                    it.status = DownloadTask.STATUS_PAUSED;
+                    it.speedBytesPerSec = 0;
+                    it.formattedSpeed = "";
+                    it.remainingTime = "";
+                    changed = true;
+                }
+            }
             synchronized (mDownloads) {
                 mDownloads.clear();
                 mDownloads.addAll(saved);
+                if (changed) {
+                    mDataStore.saveDownloads(mDownloads);
+                }
             }
         }
     }
@@ -299,6 +317,122 @@ public class DownloadCoordinator {
         return "*/*";
     }
 
+    public interface FilenameConflictChecker {
+        boolean isBusy(File destDir, String candidate);
+    }
+
+    public File getDownloadDestinationDir() {
+        File destDir = null;
+        try {
+            destDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        } catch (Throwable ignored) {}
+        if (destDir == null || (!destDir.exists() && !destDir.mkdirs())) {
+            File extFiles = mContext != null ? mContext.getExternalFilesDir(null) : null;
+            destDir = new File(extFiles != null ? extFiles : (mContext != null ? mContext.getFilesDir() : new File(".")), "Download");
+            destDir.mkdirs();
+        }
+        return destDir;
+    }
+
+    public static String[] splitBaseNameAndExtension(String fileName) {
+        if (fileName == null || fileName.isEmpty()) {
+            return new String[]{"download", ""};
+        }
+        String lower = fileName.toLowerCase(Locale.US);
+        if (lower.endsWith(".tar.gz")) {
+            return new String[]{fileName.substring(0, fileName.length() - 7), ".tar.gz"};
+        } else if (lower.endsWith(".tar.bz2")) {
+            return new String[]{fileName.substring(0, fileName.length() - 8), ".tar.bz2"};
+        } else if (lower.endsWith(".tar.xz")) {
+            return new String[]{fileName.substring(0, fileName.length() - 7), ".tar.xz"};
+        }
+        int dot = fileName.lastIndexOf('.');
+        if (dot > 0 && dot < fileName.length() - 1) {
+            return new String[]{fileName.substring(0, dot), fileName.substring(dot)};
+        }
+        return new String[]{fileName, ""};
+    }
+
+    public static boolean isPhysicalFileBusy(File destDir, String candidateFileName) {
+        if (destDir == null || candidateFileName == null || candidateFileName.trim().isEmpty()) return false;
+        String name = candidateFileName.trim();
+        File target = new File(destDir, name);
+        if (target.exists()) return true;
+        File cfg = new File(destDir, name + ".part.cfg");
+        return cfg.exists();
+    }
+
+    public boolean isFileNameBusy(File destDir, String candidateFileName) {
+        if (candidateFileName == null || candidateFileName.trim().isEmpty()) return false;
+        String name = candidateFileName.trim();
+        if (isPhysicalFileBusy(destDir, name)) return true;
+        if (mDownloader != null && mDownloader.isFileNameActive(name)) {
+            return true;
+        }
+        synchronized (mDownloads) {
+            for (DownloadItem item : mDownloads) {
+                if (name.equalsIgnoreCase(item.fileName)) {
+                    if (item.status == DownloadTask.STATUS_RUNNING || item.status == DownloadTask.STATUS_PENDING) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    public static String resolveUniqueFileName(File destDir, String rawFileName, FilenameConflictChecker checker) {
+        if (rawFileName == null || rawFileName.trim().isEmpty()) {
+            rawFileName = "download";
+        }
+        rawFileName = rawFileName.trim();
+        boolean busy = (checker != null) ? checker.isBusy(destDir, rawFileName) : isPhysicalFileBusy(destDir, rawFileName);
+        if (!busy) {
+            return rawFileName;
+        }
+
+        String[] parts = splitBaseNameAndExtension(rawFileName);
+        String base = parts[0];
+        String ext = parts[1];
+
+        int openParen = base.lastIndexOf(" (");
+        if (openParen > 0 && base.endsWith(")")) {
+            String numStr = base.substring(openParen + 2, base.length() - 1);
+            try {
+                int n = Integer.parseInt(numStr);
+                if (n > 0) {
+                    base = base.substring(0, openParen);
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+
+        for (int i = 1; i < 10000; i++) {
+            String candidate = base + " (" + i + ")" + ext;
+            boolean candBusy = (checker != null) ? checker.isBusy(destDir, candidate) : isPhysicalFileBusy(destDir, candidate);
+            if (!candBusy) {
+                return candidate;
+            }
+        }
+        return base + "_" + System.currentTimeMillis() + ext;
+    }
+
+    public static String resolveUniqueFileName(File destDir, String rawFileName) {
+        return resolveUniqueFileName(destDir, rawFileName, null);
+    }
+
+    public synchronized String generateUniqueFileName(File destDir, final String rawFileName) {
+        if (destDir == null) {
+            destDir = getDownloadDestinationDir();
+        }
+        final File finalDir = destDir;
+        return resolveUniqueFileName(destDir, rawFileName, new FilenameConflictChecker() {
+            @Override
+            public boolean isBusy(File dir, String candidate) {
+                return isFileNameBusy(finalDir, candidate);
+            }
+        });
+    }
+
     public List<DownloadItem> getDownloads() {
         synchronized (mDownloads) {
             return new ArrayList<DownloadItem>(mDownloads);
@@ -439,6 +573,8 @@ public class DownloadCoordinator {
         if (fileName == null || fileName.trim().isEmpty()) {
             fileName = smartGuessFileName(url, contentDisposition, mimeType);
         }
+        File destDir = getDownloadDestinationDir();
+        fileName = generateUniqueFileName(destDir, fileName);
         String effectiveMime = resolveMimeType(fileName, mimeType);
         long now = System.currentTimeMillis();
 
@@ -530,18 +666,13 @@ public class DownloadCoordinator {
             if (fileName == null || fileName.trim().isEmpty()) {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
-            String effectiveMime = resolveMimeType(fileName, mimeType);
-
-            File destDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            if (destDir == null || (!destDir.exists() && !destDir.mkdirs())) {
-                File extFiles = mContext.getExternalFilesDir(null);
-                destDir = new File(extFiles != null ? extFiles : mContext.getFilesDir(), "Download");
-                destDir.mkdirs();
-            }
+            File destDir = getDownloadDestinationDir();
+            String safeFileName = generateUniqueFileName(destDir, fileName);
+            String effectiveMime = resolveMimeType(safeFileName, mimeType);
 
             Map<String, String> headers = buildCloudDriveAwareHeaders(url, userAgent);
 
-            final DownloadTask task = mDownloader.enqueue(url, fileName, effectiveMime, destDir, headers);
+            final DownloadTask task = mDownloader.enqueue(url, safeFileName, effectiveMime, destDir, headers);
 
             DownloadItem item = new DownloadItem(
                 task.id,
@@ -562,8 +693,8 @@ public class DownloadCoordinator {
                 }
             }
 
-            Log.i(TAG, "[DOWNLOAD] Enqueued multi-thread task: " + fileName + " (id=" + task.id + ") -> /Download/");
-            AcidFeedback.ok(mContext, "已开始内置下载: " + fileName + "\n保存至手机 Download 目录");
+            Log.i(TAG, "[DOWNLOAD] Enqueued multi-thread task: " + safeFileName + " (id=" + task.id + ") -> /Download/");
+            AcidFeedback.ok(mContext, "已开始内置下载: " + safeFileName + "\n保存至手机 Download 目录");
         } catch (Exception e) {
             Log.e(TAG, "[DOWNLOAD] Failed to enqueue builtin: " + e.getMessage(), e);
             AcidFeedback.error(mContext, "内置下载发起失败: " + e.getMessage());
@@ -589,7 +720,9 @@ public class DownloadCoordinator {
             if (fileName == null || fileName.trim().isEmpty()) {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
-            String effectiveMime = resolveMimeType(fileName, mimeType);
+            File destDir = getDownloadDestinationDir();
+            String safeFileName = generateUniqueFileName(destDir, fileName);
+            String effectiveMime = resolveMimeType(safeFileName, mimeType);
 
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
             if (effectiveMime != null && !effectiveMime.isEmpty() && !"*/*".equals(effectiveMime)) {
@@ -609,15 +742,15 @@ public class DownloadCoordinator {
 
             request.allowScanningByMediaScanner();
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setTitle(fileName);
+            request.setTitle(safeFileName);
             request.setDescription("Acid Browser 系统下载");
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeFileName);
 
             long downloadId = dm.enqueue(request);
 
             DownloadItem item = new DownloadItem(
                 downloadId,
-                fileName,
+                safeFileName,
                 url,
                 effectiveMime,
                 contentLength,
@@ -634,8 +767,8 @@ public class DownloadCoordinator {
                 }
             }
 
-            Log.i(TAG, "[DOWNLOAD] Enqueued system task: " + fileName + " (id=" + downloadId + ") -> /Download/");
-            AcidFeedback.ok(mContext, "已通过系统下载器开始下载: " + fileName);
+            Log.i(TAG, "[DOWNLOAD] Enqueued system task: " + safeFileName + " (id=" + downloadId + ") -> /Download/");
+            AcidFeedback.ok(mContext, "已通过系统下载器开始下载: " + safeFileName);
         } catch (Exception e) {
             Log.w(TAG, "[DOWNLOAD] System download enqueue failed: " + e.getMessage() + ", falling back to builtin");
             startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
@@ -654,12 +787,12 @@ public class DownloadCoordinator {
                 if (task.supportsRange && task.checkpointFile != null && task.checkpointFile.exists()) {
                     return mDownloader.resume(downloadId);
                 }
-                // Non-range download or missing checkpoint: clean up stale task and restart fresh from scratch
+                // Non-range download or missing checkpoint: cancel stale task without deleting physical files
                 String retryUrl = task.url;
                 String retryFileName = task.fileName;
                 String retryMime = task.mimeType;
                 long retryContentLength = task.contentLength;
-                mDownloader.cancel(downloadId, true);
+                mDownloader.cancel(downloadId, false);
                 startDownload(retryUrl, retryFileName, null, null, retryMime, retryContentLength);
                 return true;
             }
@@ -668,12 +801,125 @@ public class DownloadCoordinator {
         synchronized (mDownloads) {
             for (DownloadItem it : mDownloads) {
                 if (it.downloadId == downloadId) {
-                    startDownload(it.url, it.fileName, null, null, it.mimeType, it.contentLength);
-                    return true;
+                    return resumeSavedDownload(it);
                 }
             }
         }
         return false;
+    }
+
+    public static boolean isCheckpointMatchingUrl(File checkpointFile, String expectedUrl) {
+        if (checkpointFile == null || !checkpointFile.exists() || checkpointFile.length() == 0 || expectedUrl == null) {
+            return false;
+        }
+        try {
+            String content = AcidIo.readFileUtf8OrEmpty(checkpointFile, 65536);
+            if (content == null || content.isEmpty()) return false;
+            JSONObject root = new JSONObject(content);
+            String savedUrl = root.optString("url", "");
+            return !savedUrl.isEmpty() && savedUrl.equals(expectedUrl);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Resumes a previously saved download record (e.g. after process restart).
+     * Verifies file ownership: if the target file on disk already exists without a valid matching
+     * checkpoint (e.g. taken by another completed download), it automatically re-allocates a unique
+     * file name to prevent truncating or overwriting foreign files.
+     */
+    public boolean resumeSavedDownload(DownloadItem it) {
+        if (it == null || it.url == null || it.url.isEmpty()) return false;
+        try {
+            File destDir = getDownloadDestinationDir();
+
+            // Ownership & collision verification:
+            File targetFile = new File(destDir, it.fileName);
+            boolean hasValidMatchingCheckpoint = false;
+            File cfgFile = new File(destDir, it.fileName + ".part.cfg");
+            if (cfgFile.exists() && cfgFile.length() > 0) {
+                hasValidMatchingCheckpoint = isCheckpointMatchingUrl(cfgFile, it.url);
+            }
+
+            // If target file already exists on disk, but does NOT have our matching checkpoint
+            // (or if another active in-memory task is already using it.fileName):
+            // The file name is occupied! Re-allocate a unique file name.
+            if ((targetFile.exists() && !hasValidMatchingCheckpoint) ||
+                (mDownloader != null && mDownloader.isFileNameActive(it.fileName))) {
+                String safeName = generateUniqueFileName(destDir, it.fileName);
+                it.fileName = safeName;
+                it.downloadedBytes = 0;
+            }
+
+            Map<String, String> headers = buildCloudDriveAwareHeaders(it.url, null);
+            DownloadTask task = mDownloader.enqueue(
+                it.downloadId,
+                it.url,
+                it.fileName,
+                it.mimeType,
+                destDir,
+                headers
+            );
+            synchronized (mDownloads) {
+                it.status = DownloadTask.STATUS_RUNNING;
+                if (mDataStore != null) {
+                    mDataStore.saveDownloads(mDownloads);
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to resume saved download: " + it.fileName, e);
+            return false;
+        }
+    }
+
+    /**
+     * Completely redownloads a task from scratch (cleans previous dirty checkpoints and partial files).
+     * Immediately purges the old record from mDownloads so it does not linger as a ghost duplicate.
+     */
+    public void redownload(long downloadId) {
+        DownloadItem target = null;
+        synchronized (mDownloads) {
+            for (int i = 0; i < mDownloads.size(); i++) {
+                DownloadItem it = mDownloads.get(i);
+                if (it.downloadId == downloadId) {
+                    target = it;
+                    mDownloads.remove(i);
+                    break;
+                }
+            }
+            if (mDataStore != null) {
+                mDataStore.saveDownloads(mDownloads);
+            }
+        }
+        if (target == null) return;
+
+        // 1. Cancel and halt any active task in AcidDownloader without deleting physical files
+        DownloadTask activeTask = mDownloader.getTask(downloadId);
+        if (activeTask != null) {
+            mDownloader.cancel(downloadId, false);
+        }
+
+        // 2. Clean checkpoint file only if it belongs to this task
+        File destDir = getDownloadDestinationDir();
+        File cfg = new File(destDir, target.fileName + ".part.cfg");
+        boolean ownsCheckpoint = isCheckpointMatchingUrl(cfg, target.url);
+        if (ownsCheckpoint) {
+            try { cfg.delete(); } catch (Exception ignored) {}
+        }
+
+        // 3. Purge dirty incomplete partial file ONLY if it belongs to this task
+        // If there was no matching checkpoint, target.fileName on disk does NOT belong to this task!
+        if (ownsCheckpoint && (target.status == DownloadTask.STATUS_FAILED || target.status == DownloadTask.STATUS_PAUSED)) {
+            File partial = new File(destDir, target.fileName);
+            if (partial.exists()) {
+                try { partial.delete(); } catch (Exception ignored) {}
+            }
+        }
+
+        // 4. Start fresh download
+        startDownload(target.url, target.fileName, null, null, target.mimeType, target.contentLength);
     }
 
     public void onDownloadCompleted(long downloadId) {
@@ -938,13 +1184,41 @@ public class DownloadCoordinator {
 
         if (deletePhysicalFile && target != null) {
             try {
-                File file = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), target.fileName);
-                if (file.exists()) {
-                    file.delete();
-                } else {
-                    File fallback = new File(new File(mContext.getExternalFilesDir(null), "Download"), target.fileName);
-                    if (fallback.exists()) fallback.delete();
+                File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                File file = new File(dir, target.fileName);
+                if (!file.exists()) {
+                    File fallbackDir = new File(mContext != null ? mContext.getExternalFilesDir(null) : null, "Download");
+                    file = new File(fallbackDir, target.fileName);
                 }
+
+                // Check if any other surviving record in mDownloads still references target.fileName
+                boolean otherRecordReferencesFileName = false;
+                synchronized (mDownloads) {
+                    for (DownloadItem it : mDownloads) {
+                        if (target.fileName.equalsIgnoreCase(it.fileName)) {
+                            otherRecordReferencesFileName = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (target.status == DownloadTask.STATUS_SUCCESSFUL || target.status == DownloadManager.STATUS_SUCCESSFUL) {
+                    // Task was successful: delete the physical file only if no other record references it
+                    if (!otherRecordReferencesFileName && file.exists()) {
+                        file.delete();
+                    }
+                } else {
+                    // Task was NOT successful: this task does not own any completed file!
+                    // Only delete the physical file if its matching .part.cfg exists and belongs to this task's URL
+                    File cfg = new File(file.getParentFile(), target.fileName + ".part.cfg");
+                    if (cfg.exists() && isCheckpointMatchingUrl(cfg, target.url)) {
+                        cfg.delete();
+                        if (!otherRecordReferencesFileName && file.exists()) {
+                            file.delete();
+                        }
+                    }
+                }
+
                 DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
                 if (dm != null && downloadId > 0) {
                     dm.remove(downloadId);

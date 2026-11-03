@@ -408,7 +408,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
             @Override
             public void run() {
                 if (mDownloads != null) {
-                    mDownloads.startDownload(it.url, it.fileName, null, null, it.mimeType, it.contentLength);
+                    mDownloads.redownload(it.downloadId);
                     updateDownloadListRows();
                     startProgressPolling();
                 }

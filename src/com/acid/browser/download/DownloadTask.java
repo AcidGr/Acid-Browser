@@ -44,6 +44,8 @@ public class DownloadTask {
     public volatile boolean supportsRange = false;
     public volatile int status = STATUS_PENDING;
     public volatile String errorMessage = null;
+    public volatile String eTag = null;
+    public volatile String lastModified = null;
 
     public final long createdAt;
     public volatile long completedAt = 0;
@@ -222,6 +224,8 @@ public class DownloadTask {
             root.put("contentLength", contentLength);
             root.put("downloadedBytes", downloadedBytes);
             root.put("supportsRange", supportsRange);
+            if (eTag != null && !eTag.isEmpty()) root.put("etag", eTag);
+            if (lastModified != null && !lastModified.isEmpty()) root.put("lastModified", lastModified);
 
             JSONArray chunkArr = new JSONArray();
             for (DownloadChunk chunk : chunks) {
@@ -256,9 +260,18 @@ public class DownloadTask {
             reader.close();
 
             JSONObject root = new JSONObject(sb.toString());
+
+            // Strict URL validation: Verify this checkpoint belongs to the exact same URL
+            String savedUrl = root.optString("url", "");
+            if (savedUrl.isEmpty() || !savedUrl.equals(this.url)) {
+                return false;
+            }
+
             this.finalUrl = root.optString("finalUrl", this.url);
             this.contentLength = root.optLong("contentLength", -1);
             this.supportsRange = root.optBoolean("supportsRange", false);
+            this.eTag = root.has("etag") ? root.optString("etag", null) : null;
+            this.lastModified = root.has("lastModified") ? root.optString("lastModified", null) : null;
 
             JSONArray chunkArr = root.optJSONArray("chunks");
             if (chunkArr != null && chunkArr.length() > 0) {

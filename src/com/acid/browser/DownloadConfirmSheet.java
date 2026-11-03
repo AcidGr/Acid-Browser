@@ -15,6 +15,8 @@ import android.widget.TextView;
 import com.acid.browser.download.DownloadCoordinator;
 import com.acid.browser.download.DownloadItem;
 
+import java.io.File;
+
 /**
  * Download Confirmation Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage} template
  * with pinned bottom CTA buttons and live filename draft preservation.
@@ -51,6 +53,10 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
     ) {
         mPendingUrl = url != null ? url : "";
         mPendingFileName = fileName != null ? fileName : "download";
+        if (mDownloads != null) {
+            File destDir = mDownloads.getDownloadDestinationDir();
+            mPendingFileName = mDownloads.generateUniqueFileName(destDir, mPendingFileName);
+        }
         mPendingUserAgent = userAgent;
         mPendingContentDisposition = contentDisposition;
         mPendingMimeType = mimeType;
