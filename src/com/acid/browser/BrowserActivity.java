@@ -1721,7 +1721,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 mController.getUserscriptManager().getStorage().flushSync();
             } catch (Exception ignored) {}
         }
-        if (mDataStore != null && mDataStore.isClearOnExit()) {
+        if (isFinishing() && mDataStore != null && mDataStore.isClearOnExit()) {
             mDataStore.clearBrowsingData(mController, true, true, false, true, false);
         }
         if (mDownloadReceiver != null) {

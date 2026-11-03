@@ -127,11 +127,11 @@ public final class HttpProbe {
                 }
             }
 
-            String mimeType = conn.getContentType();
-            String disposition = conn.getHeaderField("Content-Disposition");
+            String mimeType = (code >= 200 && code < 300) ? conn.getContentType() : null;
+            String disposition = (code >= 200 && code < 300) ? conn.getHeaderField("Content-Disposition") : null;
             String fileName = parseFileNameFromDisposition(disposition);
-            String eTag = conn.getHeaderField("ETag");
-            String lastModified = conn.getHeaderField("Last-Modified");
+            String eTag = (code >= 200 && code < 300) ? conn.getHeaderField("ETag") : null;
+            String lastModified = (code >= 200 && code < 300) ? conn.getHeaderField("Last-Modified") : null;
 
             // Clean up stream safely
             try {

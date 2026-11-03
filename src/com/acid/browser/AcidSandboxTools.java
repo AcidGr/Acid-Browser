@@ -34,13 +34,41 @@ public class AcidSandboxTools {
 
     private final BrowserController mController;
     private final File mWorkspaceDir;
-    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+    private final Handler mMainHandler;
 
     public AcidSandboxTools(BrowserController controller) {
+        this(controller, controller != null ? controller.getWorkspaceDir() : null);
+    }
+
+    public AcidSandboxTools(BrowserController controller, File workspaceDir) {
         mController = controller;
-        mWorkspaceDir = controller.getWorkspaceDir();
+        File ws = workspaceDir != null ? workspaceDir : (controller != null ? controller.getWorkspaceDir() : null);
+        mWorkspaceDir = ws != null ? ws : new File(".");
         if (!mWorkspaceDir.exists()) {
             mWorkspaceDir.mkdirs();
+        }
+        Handler h = null;
+        try {
+            if (Looper.getMainLooper() != null) {
+                h = new Handler(Looper.getMainLooper());
+            }
+        } catch (Throwable ignored) {}
+        mMainHandler = h;
+    }
+
+    private void runOnMain(Runnable r) {
+        if (mMainHandler != null) {
+            mMainHandler.post(r);
+        } else {
+            r.run();
+        }
+    }
+
+    private void log(String msg) {
+        if (mController != null) {
+            mController.emitLog(msg);
+        } else {
+            Log.i(TAG, msg);
         }
     }
 
@@ -225,7 +253,7 @@ public class AcidSandboxTools {
 
             @Override
             public ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) {
-                return new ToolExecResult(host.executeEditTool(args), false, null);
+                return new ToolExecResult(host.executeEditTool(args, source), false, null);
             }
         });
 
@@ -416,11 +444,14 @@ public class AcidSandboxTools {
             String url = args.optString("url", "");
             if (url.startsWith("workspace://")) {
                 File f = resolveSandboxFile(url.substring("workspace://".length()));
+                if (f == null) {
+                    return new ToolExecResult("Error: Access denied: path escapes sandbox workspace (" + url + ")", false, null);
+                }
                 url = "file://" + f.getAbsolutePath();
             } else if (!url.contains("://") && !url.startsWith("about:") && !url.startsWith("javascript:")) {
                 // Check if it refers to a local HTML file inside workspace
                 File possibleLocal = resolveSandboxFile(url);
-                if (possibleLocal.exists() && possibleLocal.isFile()) {
+                if (possibleLocal != null && possibleLocal.exists() && possibleLocal.isFile()) {
                     url = "file://" + possibleLocal.getAbsolutePath();
                 }
             }
@@ -537,7 +568,7 @@ public class AcidSandboxTools {
 
         if ("set_mode".equals(action)) {
             final CountDownLatch latch = new CountDownLatch(1);
-            mMainHandler.post(new Runnable() {
+            runOnMain(new Runnable() {
                 @Override
                 public void run() {
                     if (args.has("mode")) {
@@ -560,7 +591,7 @@ public class AcidSandboxTools {
         if ("tabs".equals(action)) {
             final String sub = args.optString("tab_action", "list").toLowerCase();
             final CountDownLatch latch = new CountDownLatch(1);
-            mMainHandler.post(new Runnable() {
+            runOnMain(new Runnable() {
                 @Override
                 public void run() {
                     if ("new".equals(sub)) {
@@ -597,7 +628,7 @@ public class AcidSandboxTools {
         if ("back".equals(action) || "reload".equals(action)) {
             final boolean isBack = "back".equals(action);
             final CountDownLatch latch = new CountDownLatch(1);
-            mMainHandler.post(new Runnable() {
+            runOnMain(new Runnable() {
                 @Override
                 public void run() {
                     BrowserController.TabSession tab = mController.getTargetTab();
@@ -619,7 +650,7 @@ public class AcidSandboxTools {
 
         if ("request_takeover".equals(action)) {
             final String reason = args.optString("reason", "需要人工协助完成当前页面操作（如登录或验证码）");
-            mMainHandler.post(new Runnable() {
+            runOnMain(new Runnable() {
                 @Override
                 public void run() {
                     mController.setControlMode(AgentOverlayView.MODE_TAKEOVER_REQUESTED, reason);
@@ -690,16 +721,23 @@ public class AcidSandboxTools {
     // 2. Sandbox File Tools: read, write, edit
     // =========================================================================
 
-    private File resolveSandboxFile(String rawPath) {
+    public File resolveSandboxFile(String rawPath) {
         if (rawPath == null || rawPath.trim().isEmpty()) {
             return mWorkspaceDir;
         }
         String p = rawPath.trim();
         File f = p.startsWith("/") ? new File(p) : new File(mWorkspaceDir, p);
         try {
-            return f.getCanonicalFile();
+            File targetCanon = f.getCanonicalFile();
+            File wsCanon = mWorkspaceDir.getCanonicalFile();
+            String wsPath = wsCanon.getPath();
+            String targetPath = targetCanon.getPath();
+            if (targetPath.equals(wsPath) || targetPath.startsWith(wsPath + File.separator)) {
+                return targetCanon;
+            }
+            return null; // Path traversal detected
         } catch (Exception e) {
-            return f.getAbsoluteFile();
+            return null;
         }
     }
 
@@ -709,6 +747,9 @@ public class AcidSandboxTools {
         int limit = Math.max(1, Math.min(2000, args.optInt("limit", 200)));
 
         File f = resolveSandboxFile(pathStr);
+        if (f == null) {
+            return "Error: Access denied: path escapes sandbox workspace (" + pathStr + ")";
+        }
         if (f.exists() && f.isDirectory() && isInsideSkills(f) && mController != null && mController.getSkillManager() != null) {
             File resolved = mController.getSkillManager().resolveSkillFile(pathStr);
             if (resolved != null && resolved.exists() && resolved.isFile()) {
@@ -759,6 +800,9 @@ public class AcidSandboxTools {
             return "Error: file_path is required.";
         }
         File f = resolveSandboxFile(pathStr);
+        if (f == null) {
+            return "Error: Access denied: path escapes sandbox workspace (" + pathStr + ")";
+        }
 
         // Writing into userscripts/ is an install, not a plain write: it must go through
         // validation so a script without @match cannot silently end up running everywhere.
@@ -781,7 +825,7 @@ public class AcidSandboxTools {
 
         try {
             AcidIo.writeFileUtf8(f, content);
-            mController.emitLog("[WRITE] Saved " + f.getName() + " (" + content.length() + " chars)");
+            log("[WRITE] Saved " + f.getName() + " (" + content.length() + " chars)");
             notifyWorkspaceFileMutated(f);
             return "Successfully wrote " + content.length() + " characters to " + f.getAbsolutePath() +
                 " (Accessible in browser via: file://" + f.getAbsolutePath() + ")";
@@ -792,39 +836,49 @@ public class AcidSandboxTools {
 
     private void notifyWorkspaceFileMutated(final File f) {
         if (f == null) return;
+        if (isInsideUserscripts(f)) {
+            if (mController != null && mController.getUserscriptManager() != null) {
+                mController.getUserscriptManager().invalidateCache();
+            }
+            log("[USERSCRIPTS] Invalidated userscript cache after updating " + f.getName());
+            return;
+        }
         if (isInsideAdBlock(f)) {
-            AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
-            mController.emitLog("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
+            if (mController != null && mController.getContext() != null) {
+                AdBlockManager.getInstance(mController.getContext()).reloadCustomRules();
+            }
+            log("[ADBLOCK] Reloaded custom adblock rules from " + f.getName());
             return;
         }
         if (isInsideSkills(f)) {
             if (mController != null && mController.getSkillManager() != null) {
                 mController.getSkillManager().notifyExternalMutation();
-                mController.emitLog("[SKILLS] Reloaded skills catalog after updating " + f.getName());
             }
+            log("[SKILLS] Reloaded skills catalog after updating " + f.getName());
             return;
         }
+        if (mController == null) return;
         final BrowserDataStore store = mController.getDataStore();
         if (store == null) return;
         String name = f.getName();
         if ("settings.json".equals(name)) {
             final boolean reloaded = store.reloadFromJsonFile();
             if (reloaded) {
-                mMainHandler.post(new Runnable() {
+                runOnMain(new Runnable() {
                     @Override
                     public void run() {
                         mController.applySettingsHotReload();
-                        mController.emitLog("[SETTINGS] Live hot-reloaded browser settings from settings.json");
+                        log("[SETTINGS] Live hot-reloaded browser settings from settings.json");
                     }
                 });
             }
         } else if ("bookmarks.json".equals(name)) {
             if (store.reloadBookmarksFromJsonFile()) {
-                mController.emitLog("[BOOKMARKS] Live hot-reloaded bookmarks from bookmarks.json");
+                log("[BOOKMARKS] Live hot-reloaded bookmarks from bookmarks.json");
             }
         } else if ("history.json".equals(name)) {
             if (store.reloadHistoryFromJsonFile()) {
-                mController.emitLog("[HISTORY] Live hot-reloaded history from history.json");
+                log("[HISTORY] Live hot-reloaded history from history.json");
             }
         }
     }
@@ -833,7 +887,9 @@ public class AcidSandboxTools {
     private boolean isInsideUserscripts(File f) {
         if (f == null) return false;
         try {
-            File dir = mController.getUserscriptManager().getUserscriptsDir().getCanonicalFile();
+            File dir = (mController != null && mController.getUserscriptManager() != null)
+                ? mController.getUserscriptManager().getUserscriptsDir().getCanonicalFile()
+                : new File(mWorkspaceDir, "userscripts").getCanonicalFile();
             File target = f.getCanonicalFile();
             return target.getParentFile() != null && target.getParentFile().equals(dir);
         } catch (Exception e) {
@@ -866,18 +922,26 @@ public class AcidSandboxTools {
         }
     }
 
-    private String executeEditTool(JSONObject args) {
+    private String executeEditTool(JSONObject args, ToolSource source) {
         String pathStr = args.optString("file_path", "");
         String oldStr = args.optString("old_string", "");
         String newStr = args.optString("new_string", "");
         boolean replaceAll = args.optBoolean("replace_all", false);
 
         File f = resolveSandboxFile(pathStr);
+        if (f == null) {
+            return "Error: Access denied: path escapes sandbox workspace (" + pathStr + ")";
+        }
         if (!f.exists() || !f.isFile()) {
             return "Error: File not found: " + f.getAbsolutePath();
         }
         if (oldStr.isEmpty()) {
             return "Error: old_string cannot be empty.";
+        }
+        if (isInsideUserscripts(f)) {
+            if (source != ToolSource.AGENT_UI) {
+                return "Error: editing userscripts is only available from the in-app agent chat, not through the MCP gateway.";
+            }
         }
         try {
             String content = AcidIo.readFileUtf8(f);
@@ -895,8 +959,16 @@ public class AcidSandboxTools {
                 }
                 updated = content.substring(0, firstIdx) + newStr + content.substring(firstIdx + oldStr.length());
             }
+
+            if (isInsideUserscripts(f)) {
+                UserscriptMeta meta = UserscriptMeta.parse(f.getName(), updated);
+                if (!meta.hasMetadata || (meta.matches.isEmpty() && meta.includes.isEmpty())) {
+                    return "Error: edited userscript must contain a valid ==UserScript== header with @match or @include.";
+                }
+            }
+
             AcidIo.writeFileUtf8(f, updated);
-            mController.emitLog("[EDIT] Updated " + f.getName());
+            log("[EDIT] Updated " + f.getName());
             notifyWorkspaceFileMutated(f);
             return "Successfully edited " + f.getAbsolutePath();
         } catch (Exception e) {
@@ -914,7 +986,7 @@ public class AcidSandboxTools {
         if (cmd.trim().isEmpty()) {
             return "Error: command is empty.";
         }
-        mController.emitLog("[BASH] $ " + (cmd.length() > 60 ? cmd.substring(0, 60) + "..." : cmd));
+        log("[BASH] $ " + (cmd.length() > 60 ? cmd.substring(0, 60) + "..." : cmd));
 
         Process proc = null;
         try {

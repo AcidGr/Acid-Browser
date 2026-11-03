@@ -475,8 +475,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         s.setDatabaseEnabled(true);
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
-        s.setAllowFileAccessFromFileURLs(true);
-        s.setAllowUniversalAccessFromFileURLs(true);
+        s.setAllowFileAccessFromFileURLs(false);
+        s.setAllowUniversalAccessFromFileURLs(false);
         s.setJavaScriptCanOpenWindowsAutomatically(true);
         s.setSupportMultipleWindows(true);
         s.setUseWideViewPort(true);
@@ -1362,16 +1362,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mIsDesktopMode = desktop;
         for (TabSession t : mTabs) {
             applyIdentityToSettings(t.webView, desktop);
-            if (t.webView != null) {
-                if (DesktopViewportManager.isEligibleUrl(t.url)) {
-                    DesktopViewportManager.applyDesktopViewport(t.webView, desktop);
-                }
-                try {
-                    t.webView.evaluateJavascript(
-                        "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(" + desktop + ");}",
-                        null
-                    );
-                } catch (Exception ignored) {}
+            if (t.webView != null && DesktopViewportManager.isEligibleUrl(t.url)) {
+                DesktopViewportManager.applyDesktopViewport(t.webView, desktop);
             }
         }
         if (reloadCurrent && mActiveTab != null) {

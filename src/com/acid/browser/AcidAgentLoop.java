@@ -58,6 +58,8 @@ public class AcidAgentLoop {
     private volatile boolean mPausedForTakeover = false;
     private volatile int mMaxLoopSteps = DEFAULT_MAX_LOOP_STEPS;
     private Thread mWorkerThread = null;
+    private volatile HttpURLConnection mActiveConnection = null;
+    private final java.util.concurrent.atomic.AtomicInteger mRunGeneration = new java.util.concurrent.atomic.AtomicInteger(0);
 
     public AcidAgentLoop(Context context, BrowserController controller, AgentLoopListener listener) {
         mContext = context;
@@ -173,6 +175,17 @@ public class AcidAgentLoop {
     public void stopLoop() {
         mStopRequested = true;
         mPausedForTakeover = false;
+        mRunning = false;
+        mRunGeneration.incrementAndGet();
+
+        final HttpURLConnection conn = mActiveConnection;
+        if (conn != null) {
+            try {
+                conn.disconnect();
+            } catch (Exception ignored) {}
+        }
+        mActiveConnection = null;
+
         if (mWorkerThread != null) {
             try {
                 mWorkerThread.interrupt();
@@ -198,6 +211,10 @@ public class AcidAgentLoop {
                 }
             }
         });
+    }
+
+    public int getRunGeneration() {
+        return mRunGeneration.get();
     }
 
     /**
@@ -269,6 +286,7 @@ public class AcidAgentLoop {
         mStopRequested = false;
         mPausedForTakeover = false;
         mRunning = true;
+        final int runGen = mRunGeneration.incrementAndGet();
 
         // Bind the current active tab to this session/loop turn
         BrowserController.TabSession activeTab = mController.getActiveTab();
@@ -293,7 +311,7 @@ public class AcidAgentLoop {
         mWorkerThread = new Thread(new Runnable() {
             @Override
             public void run() {
-                runAgentLoopInternal(session, userPrompt);
+                runAgentLoopInternal(session, userPrompt, runGen);
             }
         }, "AcidAgentLoopThread");
         mWorkerThread.start();
@@ -345,7 +363,7 @@ public class AcidAgentLoop {
             "- Format your final explanations clearly using Markdown (headings, bold, lists, code blocks).";
     }
 
-    private void runAgentLoopInternal(AcidSessionStore.AgentSession session, String userPrompt) {
+    private void runAgentLoopInternal(AcidSessionStore.AgentSession session, String userPrompt, final int runGen) {
         try {
             JSONObject initObs = mController.getAutomationDriver().observeSync(mController.isSomEnabled(), true, false);
             String initSnapshot = initObs != null ? initObs.optString("compactText", "") : "";
@@ -362,7 +380,7 @@ public class AcidAgentLoop {
 
             // Guarded ReAct autonomous loop: continues until task completed, stopped by user, takeover requested, or max steps reached
             for (int step = 1; ; step++) {
-                if (mStopRequested) break;
+                if (mStopRequested || mRunGeneration.get() != runGen) break;
                 if (step > mMaxLoopSteps) {
                     addErrorItem("已达到单次任务最大自主执行步数上限 (" + mMaxLoopSteps + " 步)，智能体已暂停以防止死循环。如需继续，请发送新指令。");
                     break;
@@ -372,7 +390,7 @@ public class AcidAgentLoop {
                 JSONArray payloadMessages = buildPrunedMessagesForRequest(session);
                 JSONObject responseMsg = callChatCompletionsStream(session, payloadMessages, step);
 
-                if (mStopRequested || responseMsg == null) break;
+                if (mStopRequested || mRunGeneration.get() != runGen || responseMsg == null) break;
 
                 String reasoning = responseMsg.optString("reasoning_content", "");
                 String content = responseMsg.isNull("content") ? "" : responseMsg.optString("content", "");
@@ -427,7 +445,7 @@ public class AcidAgentLoop {
                 int executedToolCount = 0;
                 try {
                     for (int i = 0; i < toolCalls.length(); i++) {
-                        if (mStopRequested) break;
+                        if (mStopRequested || mRunGeneration.get() != runGen) break;
                         JSONObject tc = toolCalls.getJSONObject(i);
                         String callId = tc.optString("id", "call_" + step + "_" + i);
                         JSONObject fn = tc.optJSONObject("function");
@@ -499,27 +517,29 @@ public class AcidAgentLoop {
                 }
             }
         } catch (final Exception e) {
-            if (!mStopRequested) {
+            if (!mStopRequested && mRunGeneration.get() == runGen) {
                 addErrorItem("请求异常: " + e.getMessage());
             }
         } finally {
-            mRunning = false;
-            closePendingRunningUiItems(session, mStopRequested ? "[任务已由用户手动停止]" : null);
-            final boolean paused = mPausedForTakeover;
-            mMainHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    if (!paused) {
-                        mController.setAgentBoundTabId(-1);
+            if (mRunGeneration.get() == runGen) {
+                mRunning = false;
+                closePendingRunningUiItems(session, mStopRequested ? "[任务已由用户手动停止]" : null);
+                final boolean paused = mPausedForTakeover;
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!paused) {
+                            mController.setAgentBoundTabId(-1);
+                        }
+                        if (!paused && mController.getControlMode() == AgentOverlayView.MODE_AGENT) {
+                            mController.setControlMode(AgentOverlayView.MODE_HUMAN, "");
+                        }
+                        if (mListener != null) {
+                            mListener.onLoopStateChanged(false, paused, 0);
+                        }
                     }
-                    if (!paused && mController.getControlMode() == AgentOverlayView.MODE_AGENT) {
-                        mController.setControlMode(AgentOverlayView.MODE_HUMAN, "");
-                    }
-                    if (mListener != null) {
-                        mListener.onLoopStateChanged(false, paused, 0);
-                    }
-                }
-            });
+                });
+            }
         }
     }
 
@@ -687,6 +707,100 @@ public class AcidAgentLoop {
         public final StringBuilder arguments = new StringBuilder();
     }
 
+    /**
+     * Stateful streaming parser for inline {@code <think>...</think>} blocks that safely
+     * handles tags split across arbitrary SSE token/chunk boundaries.
+     */
+    public static class ThinkStreamParser {
+        private static final String OPEN_TAG = "<think>";
+        private static final String CLOSE_TAG = "</think>";
+
+        public final StringBuilder reasoningSb = new StringBuilder();
+        public final StringBuilder contentSb = new StringBuilder();
+        private final StringBuilder mPending = new StringBuilder();
+        public boolean insideThinkTag = false;
+        public boolean thinkUpdated = false;
+        public boolean thinkClosed = false;
+        public boolean contentUpdated = false;
+
+        public void feedReasoningDelta(String rChunk) {
+            if (rChunk == null || rChunk.isEmpty() || "null".equals(rChunk)) return;
+            reasoningSb.append(rChunk);
+            thinkUpdated = true;
+        }
+
+        public void feedContentDelta(String cChunk) {
+            if (cChunk == null || cChunk.isEmpty() || "null".equals(cChunk)) return;
+            mPending.append(cChunk);
+            drainPending(false);
+        }
+
+        public void finish() {
+            drainPending(true);
+        }
+
+        private void drainPending(boolean flushAll) {
+            while (mPending.length() > 0) {
+                if (!insideThinkTag) {
+                    int openIdx = mPending.indexOf(OPEN_TAG);
+                    if (openIdx >= 0) {
+                        if (openIdx > 0) {
+                            contentSb.append(mPending, 0, openIdx);
+                            contentUpdated = true;
+                        }
+                        mPending.delete(0, openIdx + OPEN_TAG.length());
+                        insideThinkTag = true;
+                        continue;
+                    }
+                    int hold = flushAll ? 0 : partialTagSuffixLength(mPending, OPEN_TAG);
+                    int flushLen = mPending.length() - hold;
+                    if (flushLen > 0) {
+                        contentSb.append(mPending, 0, flushLen);
+                        mPending.delete(0, flushLen);
+                        contentUpdated = true;
+                    }
+                    break;
+                } else {
+                    int closeIdx = mPending.indexOf(CLOSE_TAG);
+                    if (closeIdx >= 0) {
+                        if (closeIdx > 0) {
+                            reasoningSb.append(mPending, 0, closeIdx);
+                            thinkUpdated = true;
+                        }
+                        mPending.delete(0, closeIdx + CLOSE_TAG.length());
+                        insideThinkTag = false;
+                        thinkClosed = true;
+                        continue;
+                    }
+                    int hold = flushAll ? 0 : partialTagSuffixLength(mPending, CLOSE_TAG);
+                    int flushLen = mPending.length() - hold;
+                    if (flushLen > 0) {
+                        reasoningSb.append(mPending, 0, flushLen);
+                        mPending.delete(0, flushLen);
+                        thinkUpdated = true;
+                    }
+                    break;
+                }
+            }
+        }
+
+        private static int partialTagSuffixLength(StringBuilder sb, String tag) {
+            int maxCheck = Math.min(sb.length(), tag.length() - 1);
+            for (int len = maxCheck; len >= 1; len--) {
+                boolean match = true;
+                int start = sb.length() - len;
+                for (int i = 0; i < len; i++) {
+                    if (sb.charAt(start + i) != tag.charAt(i)) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) return len;
+            }
+            return 0;
+        }
+    }
+
     public static void accumulateToolCallsDelta(
         Map<Integer, StreamingToolCall> toolCallsMap,
         JSONArray toolCallsDelta
@@ -762,6 +876,7 @@ public class AcidAgentLoop {
         byte[] payload = reqBody.toString().getBytes(StandardCharsets.UTF_8);
 
         HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
+        mActiveConnection = conn;
         conn.setRequestMethod("POST");
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(90000);
@@ -788,8 +903,9 @@ public class AcidAgentLoop {
         InputStream is = conn.getInputStream();
         BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
 
-        StringBuilder reasoningSb = new StringBuilder();
-        StringBuilder contentSb = new StringBuilder();
+        ThinkStreamParser streamParser = new ThinkStreamParser();
+        StringBuilder reasoningSb = streamParser.reasoningSb;
+        StringBuilder contentSb = streamParser.contentSb;
         Map<Integer, StreamingToolCall> toolCallsMap = new TreeMap<Integer, StreamingToolCall>();
 
         AcidSessionStore.UiMessageItem currentThinkItem = null;
@@ -797,7 +913,6 @@ public class AcidAgentLoop {
 
         long lastUiUpdate = 0;
         final long THROTTLE_MS = 60;
-        boolean insideThinkTag = false;
 
         try {
             String line;
@@ -854,10 +969,19 @@ public class AcidAgentLoop {
                 JSONObject delta = choice0.optJSONObject("delta");
                 if (delta == null) continue;
 
+                streamParser.thinkUpdated = false;
+                streamParser.thinkClosed = false;
+                streamParser.contentUpdated = false;
+
                 // 1. Process reasoning_content (DeepSeek R1 / Reasoner native)
                 String rChunk = delta.isNull("reasoning_content") ? "" : delta.optString("reasoning_content", "");
-                if ("null".equals(rChunk)) rChunk = "";
-                if (!rChunk.isEmpty()) {
+                streamParser.feedReasoningDelta(rChunk);
+
+                // 2. Process content (including cross-chunk <think>...</think> state machine)
+                String cChunk = delta.isNull("content") ? "" : delta.optString("content", "");
+                streamParser.feedContentDelta(cChunk);
+
+                if (streamParser.thinkUpdated) {
                     if (currentThinkItem == null) {
                         currentThinkItem = new AcidSessionStore.UiMessageItem();
                         currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
@@ -868,7 +992,6 @@ public class AcidAgentLoop {
                         }
                         notifyItemAdded(currentThinkItem);
                     }
-                    reasoningSb.append(rChunk);
                     long now = System.currentTimeMillis();
                     if (now - lastUiUpdate >= THROTTLE_MS) {
                         lastUiUpdate = now;
@@ -877,92 +1000,34 @@ public class AcidAgentLoop {
                     }
                 }
 
-                // 2. Process content (including handling potential inline <think> tags)
-                String cChunk = delta.isNull("content") ? "" : delta.optString("content", "");
-                if ("null".equals(cChunk)) cChunk = "";
-                if (!cChunk.isEmpty()) {
-                    if (cChunk.contains("<think>")) {
-                        insideThinkTag = true;
-                        int s = cChunk.indexOf("<think>");
-                        String before = cChunk.substring(0, s);
-                        String after = cChunk.substring(s + 7);
-                        if (!before.isEmpty()) {
-                            contentSb.append(before);
-                        }
-                        cChunk = after;
+                if (streamParser.thinkClosed && currentThinkItem != null && currentThinkItem.isRunning) {
+                    currentThinkItem.isRunning = false;
+                    currentThinkItem.text = reasoningSb.toString().trim();
+                    notifyItemUpdated(currentThinkItem);
+                }
+
+                if (streamParser.contentUpdated && contentSb.length() > 0) {
+                    if (currentThinkItem != null && currentThinkItem.isRunning) {
+                        currentThinkItem.isRunning = false;
+                        currentThinkItem.text = reasoningSb.toString().trim();
+                        notifyItemUpdated(currentThinkItem);
                     }
 
-                    if (insideThinkTag) {
-                        if (cChunk.contains("</think>")) {
-                            insideThinkTag = false;
-                            int e = cChunk.indexOf("</think>");
-                            String inside = cChunk.substring(0, e);
-                            String after = cChunk.substring(e + 8);
-                            if (!inside.isEmpty()) {
-                                if (currentThinkItem == null) {
-                                    currentThinkItem = new AcidSessionStore.UiMessageItem();
-                                    currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
-                                    currentThinkItem.isRunning = true;
-                                    currentThinkItem.timestamp = System.currentTimeMillis();
-                                    synchronized (mSessionStore) {
-                                        session.uiItems.add(currentThinkItem);
-                                    }
-                                    notifyItemAdded(currentThinkItem);
-                                }
-                                reasoningSb.append(inside);
-                            }
-                            if (currentThinkItem != null) {
-                                currentThinkItem.isRunning = false;
-                                currentThinkItem.text = reasoningSb.toString().trim();
-                                notifyItemUpdated(currentThinkItem);
-                            }
-                            cChunk = after;
-                        } else {
-                            if (currentThinkItem == null) {
-                                currentThinkItem = new AcidSessionStore.UiMessageItem();
-                                currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
-                                currentThinkItem.isRunning = true;
-                                currentThinkItem.timestamp = System.currentTimeMillis();
-                                synchronized (mSessionStore) {
-                                    session.uiItems.add(currentThinkItem);
-                                }
-                                notifyItemAdded(currentThinkItem);
-                            }
-                            reasoningSb.append(cChunk);
-                            long now = System.currentTimeMillis();
-                            if (now - lastUiUpdate >= THROTTLE_MS) {
-                                lastUiUpdate = now;
-                                currentThinkItem.text = reasoningSb.toString();
-                                notifyItemUpdated(currentThinkItem);
-                            }
-                            cChunk = "";
+                    if (currentReplyItem == null) {
+                        currentReplyItem = new AcidSessionStore.UiMessageItem();
+                        currentReplyItem.type = AcidSessionStore.TYPE_ASSISTANT;
+                        currentReplyItem.isRunning = true;
+                        currentReplyItem.timestamp = System.currentTimeMillis();
+                        synchronized (mSessionStore) {
+                            session.uiItems.add(currentReplyItem);
                         }
+                        notifyItemAdded(currentReplyItem);
                     }
-
-                    if (!cChunk.isEmpty()) {
-                        if (currentThinkItem != null && currentThinkItem.isRunning) {
-                            currentThinkItem.isRunning = false;
-                            currentThinkItem.text = reasoningSb.toString().trim();
-                            notifyItemUpdated(currentThinkItem);
-                        }
-
-                        if (currentReplyItem == null) {
-                            currentReplyItem = new AcidSessionStore.UiMessageItem();
-                            currentReplyItem.type = AcidSessionStore.TYPE_ASSISTANT;
-                            currentReplyItem.isRunning = true;
-                            currentReplyItem.timestamp = System.currentTimeMillis();
-                            synchronized (mSessionStore) {
-                                session.uiItems.add(currentReplyItem);
-                            }
-                            notifyItemAdded(currentReplyItem);
-                        }
-                        contentSb.append(cChunk);
-                        long now = System.currentTimeMillis();
-                        if (now - lastUiUpdate >= THROTTLE_MS) {
-                            lastUiUpdate = now;
-                            currentReplyItem.text = contentSb.toString();
-                            notifyItemUpdated(currentReplyItem);
-                        }
+                    long now = System.currentTimeMillis();
+                    if (now - lastUiUpdate >= THROTTLE_MS) {
+                        lastUiUpdate = now;
+                        currentReplyItem.text = contentSb.toString();
+                        notifyItemUpdated(currentReplyItem);
                     }
                 }
 
@@ -972,6 +1037,7 @@ public class AcidAgentLoop {
                     accumulateToolCallsDelta(toolCallsMap, toolCallsDelta);
                 }
             }
+            streamParser.finish();
         } catch (Exception e) {
             if (currentThinkItem != null && currentThinkItem.isRunning) {
                 currentThinkItem.isRunning = false;
@@ -983,10 +1049,17 @@ public class AcidAgentLoop {
             }
             throw e;
         } finally {
+            if (mActiveConnection == conn) {
+                mActiveConnection = null;
+            }
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (Exception ignored) {}
+            }
             try {
-                reader.close();
+                conn.disconnect();
             } catch (Exception ignored) {}
-            conn.disconnect();
         }
 
         // Finalize thinking item
@@ -1007,7 +1080,17 @@ public class AcidAgentLoop {
         }
 
         // Finalize reply item
-        if (currentReplyItem != null) {
+        if (currentReplyItem == null && contentSb.length() > 0) {
+            currentReplyItem = new AcidSessionStore.UiMessageItem();
+            currentReplyItem.type = AcidSessionStore.TYPE_ASSISTANT;
+            currentReplyItem.isRunning = false;
+            currentReplyItem.text = contentSb.toString();
+            currentReplyItem.timestamp = System.currentTimeMillis();
+            synchronized (mSessionStore) {
+                session.uiItems.add(currentReplyItem);
+            }
+            notifyItemAdded(currentReplyItem);
+        } else if (currentReplyItem != null) {
             currentReplyItem.isRunning = false;
             currentReplyItem.text = contentSb.toString();
             notifyItemUpdated(currentReplyItem);

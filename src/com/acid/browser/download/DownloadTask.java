@@ -8,6 +8,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -98,9 +99,11 @@ public class DownloadTask {
 
     // Rolling speed tracking & progress dispatch throttling
     public static final long PROGRESS_THROTTLE_MS = 200L;
+    public static final long CHECKPOINT_THROTTLE_MS = 1500L;
     private long mLastSpeedSampleTime = 0;
     private long mLastSpeedSampleBytes = 0;
     private long mLastProgressDispatchTime = 0;
+    private long mLastCheckpointSaveTime = 0;
     public volatile long currentSpeedBytesPerSec = 0;
 
     public DownloadTask(long id,
@@ -127,6 +130,35 @@ public class DownloadTask {
         }
     }
 
+    /**
+     * Resets progress counters, chunks, and truncates any stale partial destination file
+     * before starting or restarting a download from byte 0.
+     */
+    public synchronized void resetForFreshStart() {
+        this.downloadedBytes = 0;
+        this.currentSpeedBytesPerSec = 0;
+        this.mLastSpeedSampleTime = 0;
+        this.mLastSpeedSampleBytes = 0;
+        this.mLastCheckpointSaveTime = 0;
+        this.chunks.clear();
+        cleanCheckpointFile();
+        if (this.destinationFile != null && this.destinationFile.exists()) {
+            RandomAccessFile raf = null;
+            try {
+                raf = new RandomAccessFile(this.destinationFile, "rw");
+                raf.setLength(0);
+            } catch (Exception e) {
+                try {
+                    this.destinationFile.delete();
+                } catch (Exception ignored) {}
+            } finally {
+                if (raf != null) {
+                    try { raf.close(); } catch (Exception ignored) {}
+                }
+            }
+        }
+    }
+
     public synchronized List<DownloadChunk> getChunksSnapshot() {
         return new ArrayList<DownloadChunk>(chunks);
     }
@@ -145,6 +177,18 @@ public class DownloadTask {
     public synchronized boolean shouldDispatchProgress(long nowMs) {
         if (nowMs - mLastProgressDispatchTime >= PROGRESS_THROTTLE_MS) {
             mLastProgressDispatchTime = nowMs;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns true at most once every {@link #CHECKPOINT_THROTTLE_MS} milliseconds
+     * to throttle saving chunk progress to .part.cfg while download is actively in-flight.
+     */
+    public synchronized boolean shouldSaveCheckpoint(long nowMs) {
+        if (supportsRange && (mLastCheckpointSaveTime == 0 || (nowMs - mLastCheckpointSaveTime >= CHECKPOINT_THROTTLE_MS))) {
+            mLastCheckpointSaveTime = nowMs;
             return true;
         }
         return false;

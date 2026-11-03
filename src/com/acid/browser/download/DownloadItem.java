@@ -13,7 +13,7 @@ public class DownloadItem {
     public long downloadId;
     public String fileName;
     public final String url;
-    public final String mimeType;
+    public String mimeType;
     public long contentLength;
     public long downloadedBytes;
     public int status;

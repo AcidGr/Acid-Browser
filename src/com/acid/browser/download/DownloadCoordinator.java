@@ -51,6 +51,8 @@ public class DownloadCoordinator {
     private BrowserDataStore mDataStore;
     /** Guards against stacking overlapping DownloadManager passes. */
     private volatile boolean mSyncInFlight = false;
+    private static final long PERSIST_THROTTLE_MS = 1500L;
+    private long mLastPersistTimeMs = 0L;
 
     public DownloadCoordinator(Context context, BrowserDataStore dataStore) {
         Context appCtx = (context != null) ? context.getApplicationContext() : null;
@@ -68,28 +70,28 @@ public class DownloadCoordinator {
         mDownloaderListener = new AcidDownloader.DownloaderListener() {
             @Override
             public void onTaskStarted(DownloadTask task) {
-                updateDownloadItemFromTask(task);
+                updateDownloadItemFromTask(task, true);
             }
 
             @Override
             public void onTaskProgress(DownloadTask task) {
-                updateDownloadItemFromTask(task);
+                updateDownloadItemFromTask(task, false);
             }
 
             @Override
             public void onTaskPaused(DownloadTask task) {
-                updateDownloadItemFromTask(task);
+                updateDownloadItemFromTask(task, true);
             }
 
             @Override
             public void onTaskCompleted(DownloadTask task) {
-                updateDownloadItemFromTask(task);
+                updateDownloadItemFromTask(task, true);
                 onDownloadCompleted(task.id);
             }
 
             @Override
             public void onTaskFailed(DownloadTask task, String error) {
-                updateDownloadItemFromTask(task);
+                updateDownloadItemFromTask(task, true);
             }
         };
         mDownloader.addListener(mDownloaderListener);
@@ -443,15 +445,26 @@ public class DownloadCoordinator {
         return mDownloader;
     }
 
-    private void updateDownloadItemFromTask(DownloadTask task) {
+    private void updateDownloadItemFromTask(DownloadTask task, boolean forcePersist) {
         if (task == null) return;
         boolean changed = false;
+        boolean statusChanged = false;
         synchronized (mDownloads) {
             for (DownloadItem it : mDownloads) {
                 if (it.downloadId == task.id) {
+                    if (task.fileName != null && !task.fileName.isEmpty() && !task.fileName.equals(it.fileName)) {
+                        it.fileName = task.fileName;
+                        statusChanged = true;
+                    }
+                    if (task.mimeType != null && !task.mimeType.isEmpty() && !"*/*".equals(task.mimeType) && !task.mimeType.equals(it.mimeType)) {
+                        it.mimeType = task.mimeType;
+                    }
                     it.downloadedBytes = task.downloadedBytes;
                     if (task.contentLength > 0) it.contentLength = task.contentLength;
-                    it.status = task.status;
+                    if (it.status != task.status) {
+                        it.status = task.status;
+                        statusChanged = true;
+                    }
                     it.speedBytesPerSec = task.currentSpeedBytesPerSec;
                     it.formattedSpeed = task.getFormattedSpeed();
                     it.remainingTime = task.getEstimatedRemainingTime();
@@ -460,7 +473,11 @@ public class DownloadCoordinator {
                 }
             }
             if (changed && mDataStore != null) {
-                mDataStore.saveDownloads(mDownloads);
+                long now = System.currentTimeMillis();
+                if (forcePersist || statusChanged || (now - mLastPersistTimeMs >= PERSIST_THROTTLE_MS)) {
+                    mLastPersistTimeMs = now;
+                    mDataStore.saveDownloads(mDownloads);
+                }
             }
         }
     }
@@ -622,13 +639,31 @@ public class DownloadCoordinator {
         return savedItem;
     }
 
-    private void removeSavedOrFailedDuplicateLocked(String url) {
+    private void purgeSavedOrFailedDuplicatesForUrl(String url, File destDir) {
         if (url == null || url.isEmpty()) return;
-        for (int i = mDownloads.size() - 1; i >= 0; i--) {
-            DownloadItem existing = mDownloads.get(i);
-            if (url.equals(existing.url) &&
-                (existing.status == DownloadItem.STATUS_SAVED || existing.status == DownloadTask.STATUS_FAILED)) {
-                mDownloads.remove(i);
+        List<DownloadItem> removedItems = new ArrayList<DownloadItem>();
+        synchronized (mDownloads) {
+            for (int i = mDownloads.size() - 1; i >= 0; i--) {
+                DownloadItem existing = mDownloads.get(i);
+                if (url.equals(existing.url) &&
+                    (existing.status == DownloadItem.STATUS_SAVED || existing.status == DownloadTask.STATUS_FAILED)) {
+                    removedItems.add(mDownloads.remove(i));
+                }
+            }
+        }
+        for (DownloadItem old : removedItems) {
+            if (mDownloader != null && old.downloadId > 0) {
+                mDownloader.cancel(old.downloadId, false);
+            }
+            if (destDir != null && old.fileName != null && !old.fileName.isEmpty()) {
+                File cfg = new File(destDir, old.fileName + ".part.cfg");
+                if (cfg.exists() && isCheckpointMatchingUrl(cfg, url)) {
+                    try { cfg.delete(); } catch (Exception ignored) {}
+                    File partial = new File(destDir, old.fileName);
+                    if (partial.exists()) {
+                        try { partial.delete(); } catch (Exception ignored) {}
+                    }
+                }
             }
         }
     }
@@ -667,6 +702,7 @@ public class DownloadCoordinator {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
             File destDir = getDownloadDestinationDir();
+            purgeSavedOrFailedDuplicatesForUrl(url, destDir);
             String safeFileName = generateUniqueFileName(destDir, fileName);
             String effectiveMime = resolveMimeType(safeFileName, mimeType);
 
@@ -686,7 +722,6 @@ public class DownloadCoordinator {
             );
 
             synchronized (mDownloads) {
-                removeSavedOrFailedDuplicateLocked(url);
                 mDownloads.add(0, item);
                 if (mDataStore != null) {
                     mDataStore.saveDownloads(mDownloads);
@@ -721,6 +756,7 @@ public class DownloadCoordinator {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
             File destDir = getDownloadDestinationDir();
+            purgeSavedOrFailedDuplicatesForUrl(url, destDir);
             String safeFileName = generateUniqueFileName(destDir, fileName);
             String effectiveMime = resolveMimeType(safeFileName, mimeType);
 
@@ -760,7 +796,6 @@ public class DownloadCoordinator {
             );
 
             synchronized (mDownloads) {
-                removeSavedOrFailedDuplicateLocked(url);
                 mDownloads.add(0, item);
                 if (mDataStore != null) {
                     mDataStore.saveDownloads(mDownloads);
