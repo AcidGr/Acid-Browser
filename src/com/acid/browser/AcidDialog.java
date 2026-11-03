@@ -93,6 +93,7 @@ public final class AcidDialog {
     private OnActionListener mNeutralListener = null;
 
     private DialogInterface.OnCancelListener mCancelListener = null;
+    private DialogInterface.OnDismissListener mDismissListener = null;
     private boolean mCancelable = true;
 
     public AcidDialog(Context context, boolean dark) {
@@ -165,6 +166,11 @@ public final class AcidDialog {
         return this;
     }
 
+    public AcidDialog setOnDismissListener(DialogInterface.OnDismissListener listener) {
+        mDismissListener = listener;
+        return this;
+    }
+
     public Dialog show() {
         final Dialog dialog = new Dialog(mContext);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -172,6 +178,9 @@ public final class AcidDialog {
         dialog.setCanceledOnTouchOutside(mCancelable);
         if (mCancelListener != null) {
             dialog.setOnCancelListener(mCancelListener);
+        }
+        if (mDismissListener != null) {
+            dialog.setOnDismissListener(mDismissListener);
         }
 
         DisplayMetrics dm = mContext.getResources().getDisplayMetrics();
@@ -341,6 +350,9 @@ public final class AcidDialog {
 
         if (isHostActivityInactive(mContext)) {
             Log.w("AcidDialog", "Host activity is finishing or destroyed; skipping dialog.show()");
+            if (mDismissListener != null) {
+                try { mDismissListener.onDismiss(dialog); } catch (Throwable ignored) {}
+            }
             return dialog;
         }
 
@@ -348,6 +360,9 @@ public final class AcidDialog {
             dialog.show();
         } catch (WindowManager.BadTokenException | IllegalStateException e) {
             Log.w("AcidDialog", "Failed to show dialog: host window token is invalid or activity detached", e);
+            if (mDismissListener != null) {
+                try { mDismissListener.onDismiss(dialog); } catch (Throwable ignored) {}
+            }
         }
         return dialog;
     }

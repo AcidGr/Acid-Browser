@@ -104,22 +104,32 @@ public class WebAutomationDriver {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<String> ref = new AtomicReference<String>("{\"ok\":false,\"error\":\"TIMEOUT\"}");
 
+        if (mMainHandler == null) {
+            return "{\"ok\":false,\"error\":\"NO_HANDLER\"}";
+        }
+
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
-                BrowserController.TabSession targetTab = mHost.getTargetTab();
-                if (targetTab == null) {
-                    ref.set("{\"ok\":false,\"error\":\"NO_TARGET_TAB\"}");
-                    latch.countDown();
-                    return;
-                }
-                targetTab.webView.evaluateJavascript(jsExpr, new ValueCallback<String>() {
-                    @Override
-                    public void onReceiveValue(String value) {
-                        ref.set(unescapeEvaluateResult(value));
+                try {
+                    BrowserController.TabSession targetTab = mHost.getTargetTab();
+                    if (targetTab == null || targetTab.webView == null) {
+                        ref.set("{\"ok\":false,\"error\":\"NO_TARGET_TAB\"}");
                         latch.countDown();
+                        return;
                     }
-                });
+                    targetTab.webView.evaluateJavascript(jsExpr, new ValueCallback<String>() {
+                        @Override
+                        public void onReceiveValue(String value) {
+                            ref.set(unescapeEvaluateResult(value));
+                            latch.countDown();
+                        }
+                    });
+                } catch (Throwable t) {
+                    Log.w(TAG, "evaluateJavascript crashed on UI thread: " + t.getMessage());
+                    ref.set("{\"ok\":false,\"error\":\"EVAL_EXCEPTION: " + JSONObject.quote(String.valueOf(t.getMessage())) + "\"}");
+                    latch.countDown();
+                }
             }
         });
 
@@ -425,17 +435,22 @@ public class WebAutomationDriver {
                             mMainHandler.post(new Runnable() {
                                 @Override
                                 public void run() {
-                                    BrowserController.TabSession tab = mHost.getTargetTab();
-                                    if (tab != null && tab.webView != null) {
-                                        tab.webView.evaluateJavascript(bridgeJs, null);
-                                        if (mHost.isDesktopMode()) {
-                                            tab.webView.evaluateJavascript(
-                                                "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
-                                                null
-                                            );
+                                    try {
+                                        BrowserController.TabSession tab = mHost.getTargetTab();
+                                        if (tab != null && tab.webView != null) {
+                                            tab.webView.evaluateJavascript(bridgeJs, null);
+                                            if (mHost.isDesktopMode()) {
+                                                tab.webView.evaluateJavascript(
+                                                    "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
+                                                    null
+                                                );
+                                            }
                                         }
+                                    } catch (Throwable t) {
+                                        Log.w(TAG, "Bridge re-injection on UI thread caught: " + t.getMessage());
+                                    } finally {
+                                        latch.countDown();
                                     }
-                                    latch.countDown();
                                 }
                             });
                             try {
@@ -827,27 +842,31 @@ public class WebAutomationDriver {
                     mMainHandler.post(new Runnable() {
                         @Override
                         public void run() {
-                            BrowserController.TabSession activeTab = mHost.getTargetTab();
-                            if (activeTab == null) {
-                                tapLatch.countDown();
-                                return;
-                            }
-                            WebView wv = activeTab.webView;
-                            float scale = wv.getScale();
-                            if (scale <= 0.01f) {
-                                scale = mContext.getResources().getDisplayMetrics().density;
-                            }
-                            final float vx = (float) (cssX * scale);
-                            final float vy = (float) (cssY * scale);
-                            viewXRef.set(vx);
-                            viewYRef.set(vy);
+                            try {
+                                BrowserController.TabSession activeTab = mHost.getTargetTab();
+                                if (activeTab == null || activeTab.webView == null) {
+                                    return;
+                                }
+                                WebView wv = activeTab.webView;
+                                float scale = wv.getScale();
+                                if (scale <= 0.01f) {
+                                    scale = mContext.getResources().getDisplayMetrics().density;
+                                }
+                                final float vx = (float) (cssX * scale);
+                                final float vy = (float) (cssY * scale);
+                                viewXRef.set(vx);
+                                viewYRef.set(vy);
 
-                            AgentOverlayView overlay = mHost.getOverlayView();
-                            if (overlay != null && mHost.isTargetTabActive()) {
-                                overlay.showClickPulse(vx, vy, "[" + targetRef + "] " + label);
+                                AgentOverlayView overlay = mHost.getOverlayView();
+                                if (overlay != null && mHost.isTargetTabActive()) {
+                                    overlay.showClickPulse(vx, vy, "[" + targetRef + "] " + label);
+                                }
+                                dispatchHardwareMotionTap(wv, vx, vy);
+                            } catch (Throwable t) {
+                                Log.w(TAG, "Native motion tap failed on UI thread: " + t.getMessage());
+                            } finally {
+                                tapLatch.countDown();
                             }
-                            dispatchHardwareMotionTap(wv, vx, vy);
-                            tapLatch.countDown();
                         }
                     });
                     try {
@@ -965,15 +984,20 @@ public class WebAutomationDriver {
             mMainHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    BrowserController.TabSession targetTab = mHost.getTargetTab();
-                    if (targetTab != null && isForeground) {
-                        AgentOverlayView overlay = mHost.getOverlayView();
-                        if (overlay != null) {
-                            overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
+                    try {
+                        BrowserController.TabSession targetTab = mHost.getTargetTab();
+                        if (targetTab != null && targetTab.webView != null && isForeground) {
+                            AgentOverlayView overlay = mHost.getOverlayView();
+                            if (overlay != null) {
+                                overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
+                            }
+                            dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
                         }
-                        dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
+                    } catch (Throwable t) {
+                        Log.w(TAG, "Coordinate click failed on UI thread: " + t.getMessage());
+                    } finally {
+                        latch.countDown();
                     }
-                    latch.countDown();
                 }
             });
             try {

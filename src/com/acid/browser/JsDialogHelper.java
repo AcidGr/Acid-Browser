@@ -57,6 +57,15 @@ public final class JsDialogHelper {
                         }
                     }
                 })
+                .setOnDismissListener(new DialogInterface.OnDismissListener() {
+                    @Override
+                    public void onDismiss(DialogInterface d) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.cancel();
+                        }
+                    }
+                })
                 .show();
         } catch (Exception e) {
             if (!settled[0]) result.cancel();
@@ -92,6 +101,15 @@ public final class JsDialogHelper {
                 .setOnCancelListener(new DialogInterface.OnCancelListener() {
                     @Override
                     public void onCancel(DialogInterface d) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.cancel();
+                        }
+                    }
+                })
+                .setOnDismissListener(new DialogInterface.OnDismissListener() {
+                    @Override
+                    public void onDismiss(DialogInterface d) {
                         if (!settled[0]) {
                             settled[0] = true;
                             result.cancel();
@@ -148,6 +166,15 @@ public final class JsDialogHelper {
                 .setOnCancelListener(new DialogInterface.OnCancelListener() {
                     @Override
                     public void onCancel(DialogInterface d) {
+                        if (!settled[0]) {
+                            settled[0] = true;
+                            result.cancel();
+                        }
+                    }
+                })
+                .setOnDismissListener(new DialogInterface.OnDismissListener() {
+                    @Override
+                    public void onDismiss(DialogInterface d) {
                         if (!settled[0]) {
                             settled[0] = true;
                             result.cancel();

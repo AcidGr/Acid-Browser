@@ -14,10 +14,12 @@ import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -153,6 +155,25 @@ public class HttpControlServer {
         return null;
     }
 
+    public static boolean isLocalOrTrustedOrigin(String origin) {
+        if (origin == null || origin.trim().isEmpty()) return true;
+        String o = origin.trim().toLowerCase(Locale.ROOT);
+        if ("null".equals(o)) return false;
+        try {
+            URI uri = URI.create(o);
+            String host = uri.getHost();
+            if (host == null) return false;
+            return "localhost".equalsIgnoreCase(host)
+                || "127.0.0.1".equals(host)
+                || "::1".equals(host)
+                || "[::1]".equals(host)
+                || host.startsWith("127.")
+                || "0.0.0.0".equals(host);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public synchronized void start() {
         if (mRunning) return;
         mRunning = true;
@@ -241,7 +262,7 @@ public class HttpControlServer {
             }
 
             String headerText = new String(headerBuffer.toByteArray(), StandardCharsets.US_ASCII);
-            String[] lines = headerText.split("\r\n");
+            String[] lines = headerText.split("\r?\n");
             if (lines.length == 0 || lines[0].trim().isEmpty()) {
                 socket.close();
                 return;
@@ -283,16 +304,28 @@ public class HttpControlServer {
                 }
             }
 
+            // 0. Authentication Verification
+            boolean authEnabled = mController != null && mController.getDataStore() != null
+                && mController.getDataStore().isMcpAuthEnabled();
+
             // CORS preflight
             if ("OPTIONS".equals(method)) {
+                String origin = headers.get("origin");
+                if (!authEnabled && origin != null && !isLocalOrTrustedOrigin(origin)) {
+                    sendJsonResponse(os, 403, new JSONObject()
+                        .put("jsonrpc", "2.0")
+                        .put("error", new JSONObject()
+                            .put("code", -32000)
+                            .put("message", "Forbidden: Cross-origin preflight from external web pages is blocked when MCP token authentication is disabled.")
+                        ));
+                    socket.close();
+                    return;
+                }
                 sendCorsPreflightResponse(os);
                 socket.close();
                 return;
             }
 
-            // 0. Authentication Verification
-            boolean authEnabled = mController != null && mController.getDataStore() != null
-                && mController.getDataStore().isMcpAuthEnabled();
             if (authEnabled) {
                 String expectedToken = mController.getDataStore().getOrCreateMcpToken();
                 String clientToken = null;
@@ -307,6 +340,18 @@ public class HttpControlServer {
 
                 if (clientToken == null || !clientToken.equals(expectedToken)) {
                     sendUnauthorizedResponse(os);
+                    socket.close();
+                    return;
+                }
+            } else {
+                String origin = headers.get("origin");
+                if (origin != null && !isLocalOrTrustedOrigin(origin)) {
+                    sendJsonResponse(os, 403, new JSONObject()
+                        .put("jsonrpc", "2.0")
+                        .put("error", new JSONObject()
+                            .put("code", -32000)
+                            .put("message", "Forbidden: Cross-origin requests from external web pages are blocked when MCP token authentication is disabled.")
+                        ));
                     socket.close();
                     return;
                 }
@@ -339,6 +384,11 @@ public class HttpControlServer {
                             int r = is.read(bodyBytes, readTotal, len - readTotal);
                             if (r < 0) break;
                             readTotal += r;
+                        }
+                        if (readTotal < len) {
+                            byte[] truncated = new byte[readTotal];
+                            System.arraycopy(bodyBytes, 0, truncated, 0, readTotal);
+                            bodyBytes = truncated;
                         }
                     } catch (OutOfMemoryError oom) {
                         Log.e(TAG, "OOM while allocating " + len + " bytes for request body", oom);

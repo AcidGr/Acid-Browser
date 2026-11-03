@@ -31,7 +31,7 @@ public final class DesktopViewportManager {
      */
     public static String buildViewportScript(boolean desktop) {
         if (desktop) {
-            return "javascript:(function(){try{" +
+            return "(function(){try{" +
                 "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);return;}" +
                 "var tw=" + DESKTOP_WIDTH + ";" +
                 "var tc='" + TARGET_CONTENT + "';" +
@@ -58,7 +58,7 @@ public final class DesktopViewportManager {
                 "}" +
                 "}catch(e){}})()";
         } else {
-            return "javascript:(function(){try{" +
+            return "(function(){try{" +
                 "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(false);return;}" +
                 "if(window.__acid_desktop_observer){" +
                 "  window.__acid_desktop_observer.disconnect();" +
