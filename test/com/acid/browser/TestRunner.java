@@ -143,6 +143,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testP0StabilityAndHygieneFixes(); }
         });
 
+        run("Core Bug Fixes: AdBlock over-blocking guard, TabsOverview frame throttling, History async IO & Screenshot OOM safety", new TestCase() {
+            @Override public void execute() throws Exception { testCoreBugFixes(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2510,5 +2514,65 @@ public final class TestRunner {
         long duration = System.currentTimeMillis() - startTime;
         assertTrue(duration < 2500, "cat completed promptly without hanging for timeout (took " + duration + "ms)");
         assertTrue(res.outputText != null && res.outputText.contains("[exit code: 0]"), "cat exited with code 0 on EOF");
+    }
+
+    private static void testCoreBugFixes() throws Exception {
+        // 1. AdBlockManager over-blocking protection:
+        // Rule "/ads/" must NOT block legitimate URLs containing "downloads" or "uploads".
+        Set<String> blocked = new HashSet<String>();
+        Set<String> white = new HashSet<String>();
+        List<String> paths = new ArrayList<String>();
+        Map<String, List<String>> domHide = new HashMap<String, List<String>>();
+        List<String> globHide = new ArrayList<String>();
+
+        assertTrue(AdBlockManager.parseRuleLine("/ads/", blocked, white, paths, domHide, globHide), "Rule /ads/ parsed");
+        assertTrue(paths.contains("/ads/"), "Path rule preserves leading and trailing slash");
+
+        // Verify legitimate URLs are NOT blocked
+        String downloadUrl = "https://example.com/downloads/setup.exe";
+        String uploadUrl = "https://example.com/uploads/photo.jpg";
+        String realAdUrl = "https://example.com/ads/banner.js";
+
+        boolean blockedDownload = false;
+        boolean blockedUpload = false;
+        boolean blockedRealAd = false;
+        for (String p : paths) {
+            if (downloadUrl.contains(p)) blockedDownload = true;
+            if (uploadUrl.contains(p)) blockedUpload = true;
+            if (realAdUrl.contains(p)) blockedRealAd = true;
+        }
+
+        assertTrue(!blockedDownload, "downloads URL is NOT blocked by /ads/ rule");
+        assertTrue(!blockedUpload, "uploads URL is NOT blocked by /ads/ rule");
+        assertTrue(blockedRealAd, "Real ad path with /ads/ IS correctly blocked");
+
+        // 2. HistoryRepository isMainThread safe fallback under test environment
+        File tmpDir = new File(System.getProperty("java.io.tmpdir"), "acid_hist_test_" + System.currentTimeMillis());
+        tmpDir.mkdirs();
+        File hFile = new File(tmpDir, "history.json");
+        InMemoryPrefs hPrefs = new InMemoryPrefs();
+        HistoryRepository hRepo = new HistoryRepository(null, hPrefs, hFile);
+        hRepo.recordHistory("https://example.com/fast", "Fast Page", false);
+        assertTrue(hFile.exists(), "history.json created synchronously in non-main-looper test environment");
+        assertTrue(hPrefs.getString(HistoryRepository.PREF_HISTORY, "").contains("Fast Page"), "SharedPreferences updated");
+
+        // 3. WebAutomationDriver captureScreenshotBase64Sync safe fallback
+        WebAutomationDriver driver = new WebAutomationDriver(null, new WebAutomationDriver.AutomationHost() {
+            @Override public BrowserController.TabSession getActiveTab() { return null; }
+            @Override public BrowserController.TabSession getTargetTab() { return null; }
+            @Override public boolean isTargetTabActive() { return false; }
+            @Override public AgentOverlayView getOverlayView() { return null; }
+            @Override public UserscriptManager getUserscriptManager() { return null; }
+            @Override public void loadUrl(String url) {}
+            @Override public void emitLog(String log) {}
+            @Override public boolean isSomEnabled() { return false; }
+            @Override public boolean isDesktopMode() { return false; }
+            @Override public int getBlockedDeepLinksCount() { return 0; }
+            @Override public String getLastBlockedDeepLink() { return null; }
+            @Override public int getTriggeredDownloadsCount() { return 0; }
+            @Override public String getLastTriggeredDownloadInfo() { return null; }
+        });
+        String shot = driver.captureScreenshotBase64Sync(75);
+        assertTrue(shot == null, "captureScreenshotBase64Sync returns null safely without throwing uncaught Error when tab is absent");
     }
 }

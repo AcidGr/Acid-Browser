@@ -407,7 +407,9 @@ public class AdBlockManager {
 
         // 4. Path pattern /pattern/
         if (line.startsWith("/") && line.endsWith("/") && line.length() > 2) {
-            paths.add(line.substring(1, line.length() - 1).toLowerCase(Locale.ROOT));
+            // Preserve slash boundaries (e.g. "/ads/") so substring matching never collaterally
+            // blocks legitimate URLs containing words like "downloads" or "uploads".
+            paths.add(line.toLowerCase(Locale.ROOT));
             return true;
         }
 
