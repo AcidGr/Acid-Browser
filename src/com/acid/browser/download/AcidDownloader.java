@@ -93,6 +93,48 @@ public class AcidDownloader {
     }
 
     /**
+     * Checks if any active (PENDING or RUNNING) task is currently downloading to this file name.
+     */
+    public boolean isFileNameActive(String fileName) {
+        if (fileName == null || fileName.isEmpty()) return false;
+        for (DownloadTask task : mTasks.values()) {
+            if (task == null) continue;
+            synchronized (task) {
+                if (task.status == DownloadTask.STATUS_PENDING || task.status == DownloadTask.STATUS_RUNNING) {
+                    if (fileName.equalsIgnoreCase(task.fileName)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Enqueues a new download task with a specific id (or auto-generated if id <= 0).
+     */
+    public DownloadTask enqueue(long specificId,
+                                String url,
+                                String fileName,
+                                String mimeType,
+                                File destinationDir,
+                                Map<String, String> headers) {
+        long id = specificId > 0 ? specificId : mNextId.incrementAndGet();
+        if (specificId > 0) {
+            long cur;
+            do {
+                cur = mNextId.get();
+                if (specificId <= cur) break;
+            } while (!mNextId.compareAndSet(cur, specificId));
+        }
+        final DownloadTask task = new DownloadTask(id, url, fileName, mimeType, destinationDir, headers);
+        mTasks.put(id, task);
+
+        startTaskAsync(task);
+        return task;
+    }
+
+    /**
      * Enqueues a new download task.
      */
     public DownloadTask enqueue(String url,
@@ -100,12 +142,7 @@ public class AcidDownloader {
                                 String mimeType,
                                 File destinationDir,
                                 Map<String, String> headers) {
-        long id = mNextId.incrementAndGet();
-        final DownloadTask task = new DownloadTask(id, url, fileName, mimeType, destinationDir, headers);
-        mTasks.put(id, task);
-
-        startTaskAsync(task);
-        return task;
+        return enqueue(0, url, fileName, mimeType, destinationDir, headers);
     }
 
     /**
@@ -205,6 +242,28 @@ public class AcidDownloader {
                 }
             }
 
+            if (resumed) {
+                // Verify remote file consistency before resuming to ensure the server resource hasn't changed
+                try {
+                    HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders);
+                    if (probe.contentLength > 0 && task.contentLength > 0 && probe.contentLength != task.contentLength) {
+                        // Remote size changed! Checkpoint is obsolete
+                        resumed = false;
+                        task.cleanCheckpointFile();
+                    } else if (probe.eTag != null && task.eTag != null && !probe.eTag.equals(task.eTag)) {
+                        // Remote ETag changed! Resource was modified
+                        resumed = false;
+                        task.cleanCheckpointFile();
+                    } else {
+                        task.finalUrl = probe.finalUrl;
+                        if (probe.eTag != null) task.eTag = probe.eTag;
+                        if (probe.lastModified != null) task.lastModified = probe.lastModified;
+                    }
+                } catch (Exception ignored) {
+                    // Probe network hiccup: allow workers to proceed with existing checkpoint
+                }
+            }
+
             if (!resumed) {
                 // Pre-flight probe to discover range support & total size
                 HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders);
@@ -216,6 +275,8 @@ public class AcidDownloader {
                     task.finalUrl = probe.finalUrl;
                     task.contentLength = probe.contentLength;
                     task.supportsRange = probe.supportsRange;
+                    task.eTag = probe.eTag;
+                    task.lastModified = probe.lastModified;
 
                     if (task.mimeType == null || task.mimeType.isEmpty() || "*/*".equals(task.mimeType)) {
                         task.mimeType = probe.mimeType;

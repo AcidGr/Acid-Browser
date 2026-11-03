@@ -24,6 +24,8 @@ public final class HttpProbe {
         public final String mimeType;
         public final String suggestedFileName;
         public final int responseCode;
+        public final String eTag;
+        public final String lastModified;
 
         public ProbeResult(String finalUrl,
                            long contentLength,
@@ -31,12 +33,25 @@ public final class HttpProbe {
                            String mimeType,
                            String suggestedFileName,
                            int responseCode) {
+            this(finalUrl, contentLength, supportsRange, mimeType, suggestedFileName, responseCode, null, null);
+        }
+
+        public ProbeResult(String finalUrl,
+                           long contentLength,
+                           boolean supportsRange,
+                           String mimeType,
+                           String suggestedFileName,
+                           int responseCode,
+                           String eTag,
+                           String lastModified) {
             this.finalUrl = finalUrl;
             this.contentLength = contentLength;
             this.supportsRange = supportsRange;
             this.mimeType = mimeType;
             this.suggestedFileName = suggestedFileName;
             this.responseCode = responseCode;
+            this.eTag = eTag;
+            this.lastModified = lastModified;
         }
     }
 
@@ -115,6 +130,8 @@ public final class HttpProbe {
             String mimeType = conn.getContentType();
             String disposition = conn.getHeaderField("Content-Disposition");
             String fileName = parseFileNameFromDisposition(disposition);
+            String eTag = conn.getHeaderField("ETag");
+            String lastModified = conn.getHeaderField("Last-Modified");
 
             // Clean up stream safely
             try {
@@ -123,7 +140,7 @@ public final class HttpProbe {
             } catch (Exception ignored) {}
             conn.disconnect();
 
-            return new ProbeResult(currentUrl, totalLength, supportsRange, mimeType, fileName, code);
+            return new ProbeResult(currentUrl, totalLength, supportsRange, mimeType, fileName, code, eTag, lastModified);
         }
 
         throw new IOException("Too many redirects (exceeded " + MAX_REDIRECTS + ")");
