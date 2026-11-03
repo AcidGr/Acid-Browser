@@ -908,6 +908,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mProgressBar = new View(this);
         mProgressBar.setVisibility(View.INVISIBLE);
+        mProgressBar.setPivotX(0f);
+        mProgressBar.setScaleX(0f);
         mMainContentLayout.addView(mProgressBar, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(2)
         ));
@@ -1200,8 +1202,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mTopBar.setVisibility(enabled ? View.GONE : View.VISIBLE);
         mTopBarDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
-        if (enabled && mProgressBar != null) {
-            mProgressBar.setVisibility(View.GONE);
+        if (mProgressBar != null) {
+            mProgressBar.setVisibility(enabled ? View.GONE : View.INVISIBLE);
         }
         mBottomBar.setVisibility(enabled ? View.GONE : View.VISIBLE);
         mBottomDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
@@ -1497,7 +1499,19 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                mProgressBar.setVisibility(isLoading ? View.VISIBLE : View.INVISIBLE);
+                if (mProgressBar != null) {
+                    if (mIsFullscreenMode) {
+                        mProgressBar.setVisibility(View.GONE);
+                    } else if (isLoading) {
+                        mProgressBar.setPivotX(0f);
+                        float scale = Math.max(0.06f, Math.min(1.0f, progress / 100f));
+                        mProgressBar.setScaleX(scale);
+                        mProgressBar.setVisibility(View.VISIBLE);
+                    } else {
+                        mProgressBar.setScaleX(1.0f);
+                        mProgressBar.setVisibility(View.INVISIBLE);
+                    }
+                }
                 mBtnReload.setIcon(isLoading ? AcidIcons.ICON_CLOSE : AcidIcons.ICON_RELOAD);
                 updateNavButtons();
             }

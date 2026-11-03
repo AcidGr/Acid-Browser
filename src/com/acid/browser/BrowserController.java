@@ -308,6 +308,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public boolean switchToTab(int tabId) {
+        if (mActiveTab != null && mActiveTab.id == tabId) return true;
         TabSession target = null;
         for (TabSession t : mTabs) {
             if (t.id == tabId) {
@@ -316,6 +317,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
         }
         if (target == null) return false;
+
+        if (isCustomViewShowing()) {
+            hideCustomView();
+        }
 
         captureActiveTabSnapshot();
 
@@ -357,6 +362,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
 
         boolean wasActive = mActiveTab != null && mActiveTab.id == tabId;
+        if (isCustomViewShowing() && (wasActive || mTabs.size() <= 1)) {
+            hideCustomView();
+        }
         if (wasActive) {
             // The WebView is about to be destroyed: never snapshot / switch away from it.
             mActiveTab = null;
@@ -384,6 +392,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void closeOtherTabs(int keepTabId) {
+        if (isCustomViewShowing() && mActiveTab != null && mActiveTab.id != keepTabId) {
+            hideCustomView();
+        }
         for (int i = mTabs.size() - 1; i >= 0; i--) {
             TabSession t = mTabs.get(i);
             if (t.id != keepTabId) {
@@ -606,7 +617,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                if (url != null && (url.endsWith(".user.js") || url.contains(".user.js?"))) {
+                if (isUserscriptUrl(url)) {
                     String guessName = DownloadCoordinator.smartGuessFileName(url, null, "application/javascript");
                     if (mListener != null) {
                         mListener.onUserscriptInstallRequested(url, guessName);
@@ -619,7 +630,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (Build.VERSION.SDK_INT >= 24 && request != null && request.getUrl() != null) {
                     String u = request.getUrl().toString();
-                    if (u.endsWith(".user.js") || u.contains(".user.js?")) {
+                    if (isUserscriptUrl(u)) {
                         String guessName = DownloadCoordinator.smartGuessFileName(u, null, "application/javascript");
                         if (mListener != null) {
                             mListener.onUserscriptInstallRequested(u, guessName);
@@ -835,7 +846,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         emitLog("[DOWNLOAD] Triggered: " + fileName + " (" + resolvedLength + " B, " + resolvedMime + ")");
 
         // Intercept userscript downloads directly into the script installer.
-        if (fileName.endsWith(".user.js") || (url != null && url.contains(".user.js"))) {
+        if ((fileName != null && fileName.toLowerCase().endsWith(".user.js")) || isUserscriptUrl(url)) {
             mMainHandler.post(new Runnable() {
                 @Override
                 public void run() {
@@ -1115,6 +1126,19 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             "}" +
             "})()";
         wv.evaluateJavascript(js, null);
+    }
+
+    public static boolean isUserscriptUrl(String url) {
+        if (url == null || url.trim().isEmpty()) return false;
+        try {
+            Uri uri = Uri.parse(url.trim());
+            String path = uri.getPath();
+            if (path != null && path.toLowerCase().endsWith(".user.js")) {
+                return true;
+            }
+        } catch (Exception ignored) {}
+        String cleanUrl = url.split("[?#]")[0].trim().toLowerCase();
+        return cleanUrl.endsWith(".user.js");
     }
 
     public String normalizeUrl(String raw) {
@@ -1489,6 +1513,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
      * Cascading lifecycle teardown for all browser subsystems, WebViews, and native Chromium contexts.
      */
     public void destroy() {
+        if (isCustomViewShowing()) {
+            hideCustomView();
+        }
         List<TabSession> tabsCopy = new ArrayList<TabSession>(mTabs);
         mTabs.clear();
         mActiveTab = null;
