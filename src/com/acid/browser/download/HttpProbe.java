@@ -153,10 +153,8 @@ public final class HttpProbe {
     public static String parseFileNameFromDisposition(String disposition) {
         if (disposition == null || disposition.isEmpty()) return null;
 
-        String lower = disposition.toLowerCase();
-
         // 1. Try RFC 5987 / 6266 filename*=UTF-8''... (highest priority)
-        int fnStar = lower.indexOf("filename*=");
+        int fnStar = indexOfIgnoreCase(disposition, "filename*=", 0);
         if (fnStar >= 0) {
             String val = disposition.substring(fnStar + 10).trim();
             int semi = val.indexOf(';');
@@ -164,8 +162,7 @@ public final class HttpProbe {
             if (val.startsWith("\"") && val.endsWith("\"") && val.length() >= 2) {
                 val = val.substring(1, val.length() - 1).trim();
             }
-            String valLower = val.toLowerCase();
-            if (valLower.startsWith("utf-8''")) {
+            if (startsWithIgnoreCase(val, "utf-8''")) {
                 val = val.substring(7);
             } else {
                 int quoteQuote = val.indexOf("''");
@@ -182,7 +179,7 @@ public final class HttpProbe {
         // 2. Try standard filename="..." or filename=...;
         int searchFrom = 0;
         while (searchFrom < disposition.length()) {
-            int fn = lower.indexOf("filename=", searchFrom);
+            int fn = indexOfIgnoreCase(disposition, "filename=", searchFrom);
             if (fn < 0) break;
             // Ensure we didn't match the tail of "filename*="
             if (fn > 0 && disposition.charAt(fn - 1) == '*') {
@@ -216,6 +213,47 @@ public final class HttpProbe {
         }
 
         return null;
+    }
+
+    /**
+     * Case-insensitive {@code indexOf} that never changes the string's length.
+     *
+     * <p>Replaces the previous {@code disposition.toLowerCase().indexOf(...)} pattern, which
+     * returned offsets into a string that can be <em>longer</em> than the original:
+     * {@code "İ".toLowerCase()} yields two chars, so the offset was then applied to the original
+     * and could run past its end ({@code StringIndexOutOfBoundsException}) or slice mid-token and
+     * silently corrupt the filename. Only U+0130 expands under case folding, but one hostile
+     * Content-Disposition header was enough to crash the browser on the UI thread.
+     *
+     * <p>Comparison is ASCII-only case folding, which is all HTTP header tokens need.
+     */
+    static int indexOfIgnoreCase(String haystack, String needle, int fromIndex) {
+        if (haystack == null || needle == null || needle.isEmpty()) return -1;
+        int max = haystack.length() - needle.length();
+        for (int i = Math.max(0, fromIndex); i <= max; i++) {
+            if (regionMatchesIgnoreCase(haystack, i, needle)) return i;
+        }
+        return -1;
+    }
+
+    private static boolean startsWithIgnoreCase(String s, String prefix) {
+        return s != null && prefix != null && s.length() >= prefix.length()
+            && regionMatchesIgnoreCase(s, 0, prefix);
+    }
+
+    private static boolean regionMatchesIgnoreCase(String haystack, int offset, String needle) {
+        for (int i = 0; i < needle.length(); i++) {
+            char a = haystack.charAt(offset + i);
+            char b = needle.charAt(i);
+            if (a == b) continue;
+            // ASCII-only folding: toLowerCase()/toUpperCase() on a char cannot change length.
+            if (toLowerAscii(a) != toLowerAscii(b)) return false;
+        }
+        return true;
+    }
+
+    private static char toLowerAscii(char c) {
+        return (c >= 'A' && c <= 'Z') ? (char) (c + ('a' - 'A')) : c;
     }
 
     /**

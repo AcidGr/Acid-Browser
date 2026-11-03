@@ -93,6 +93,15 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private int mNextTabId = 1;
     private TabSession mActiveTab = null;
     private int mAgentBoundTabId = -1;
+    /**
+     * True when the agent had a target tab but it disappeared (the user closed it).
+     *
+     * <p>{@code mAgentBoundTabId == -1} alone is ambiguous: it means both "no task running"
+     * and "task running, but its tab is gone". Only the latter must stop {@link #getTargetTab()}
+     * from silently falling back to {@link #mActiveTab} — otherwise closing a tab while the
+     * agent runs would hand the agent the page the user is currently reading.
+     */
+    private boolean mAgentTargetLost = false;
     private boolean mOverviewShowing = false;
 
     private boolean mIsDesktopMode = false;
@@ -358,7 +367,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (toRemove == null) return false;
 
         if (mAgentBoundTabId == tabId) {
+            // The agent's target is gone. Mark it lost rather than merely unbinding: without the
+            // flag, getTargetTab() would fall back to mActiveTab and the agent would silently
+            // start driving whatever page the user switched to.
             mAgentBoundTabId = -1;
+            mAgentTargetLost = true;
         }
 
         boolean wasActive = mActiveTab != null && mActiveTab.id == tabId;
@@ -416,8 +429,17 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mActiveTab;
     }
 
+    /**
+     * Binds (or unbinds with a value {@code <= 0}) the tab the agent operates on.
+     *
+     * <p>Any explicit bind clears {@link #mAgentTargetLost}: the caller is deliberately
+     * choosing a target, so a previous "target vanished" state no longer applies. This is
+     * also what lets the agent recover on its own through {@code browser(action='tabs',
+     * tab_action='switch'|'new')} after the user closed the tab it was driving.
+     */
     public void setAgentBoundTabId(int tabId) {
         mAgentBoundTabId = tabId;
+        mAgentTargetLost = false;
         if (mOverlayView != null) {
             mOverlayView.postInvalidateOnAnimation();
         }
@@ -427,6 +449,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mAgentBoundTabId;
     }
 
+    /** True when the agent's tab was closed out from under it and no new target was chosen yet. */
+    public boolean isAgentTargetLost() {
+        return mAgentTargetLost;
+    }
+
     public TabSession getTabById(int tabId) {
         for (TabSession t : mTabs) {
             if (t.id == tabId) return t;
@@ -434,15 +461,51 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return null;
     }
 
+    /**
+     * Resolves which tab a tool call should act on.
+     *
+     * <p>Three states, matching {@link #resolveAgentTargetState}:
+     * <ul>
+     *   <li>no binding ({@code boundTabId <= 0}, not lost) — human browsing, fall back to the
+     *       active tab;</li>
+     *   <li>bound to a live tab — use it;</li>
+     *   <li>binding exists but no longer resolves (tab closed, or bound to an id that never
+     *       existed) — return {@code null} so tools answer {@code NO_TARGET_TAB} instead of
+     *       silently hijacking whatever the user is looking at.</li>
+     * </ul>
+     */
     @Override
     public TabSession getTargetTab() {
-        if (mAgentBoundTabId > 0) {
-            TabSession bound = getTabById(mAgentBoundTabId);
-            if (bound != null && bound.webView != null) {
+        TabSession bound = mAgentBoundTabId > 0 ? getTabById(mAgentBoundTabId) : null;
+        boolean boundUsable = bound != null && bound.webView != null;
+        switch (resolveAgentTargetState(mAgentBoundTabId, mAgentTargetLost, boundUsable)) {
+            case TARGET_BOUND_TAB:
                 return bound;
-            }
+            case TARGET_LOST:
+                return null;
+            default:
+                return mActiveTab;
         }
-        return mActiveTab;
+    }
+
+    /** Target-state codes returned by {@link #resolveAgentTargetState}. */
+    public static final int TARGET_ACTIVE_TAB = 0;
+    public static final int TARGET_BOUND_TAB = 1;
+    public static final int TARGET_LOST = 2;
+
+    /**
+     * Pure decision function behind {@link #getTargetTab()}, extracted so the three-state
+     * contract can be unit-tested on the host JVM (a real {@link BrowserController} needs a
+     * WebView and cannot be constructed there).
+     *
+     * @param boundTabId     current {@code mAgentBoundTabId}
+     * @param targetLost     current {@code mAgentTargetLost}
+     * @param boundTabExists whether a live tab with that id is present right now
+     */
+    public static int resolveAgentTargetState(int boundTabId, boolean targetLost, boolean boundTabExists) {
+        if (targetLost) return TARGET_LOST;
+        if (boundTabId > 0) return boundTabExists ? TARGET_BOUND_TAB : TARGET_LOST;
+        return TARGET_ACTIVE_TAB;
     }
 
     public void setOverviewShowing(boolean showing) {
@@ -464,6 +527,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public boolean isAgentDrivingCurrentTab() {
         if (mOverviewShowing) return false;
+        // A lost target means the agent has nothing to drive: report false so the overlay stops
+        // showing the "AI is driving this page" lock on a page the agent can no longer touch.
+        if (mAgentTargetLost) return false;
         if (mAgentBoundTabId <= 0) return true;
         return mActiveTab != null && mActiveTab.id == mAgentBoundTabId;
     }

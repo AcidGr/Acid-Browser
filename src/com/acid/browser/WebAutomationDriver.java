@@ -510,6 +510,14 @@ public class WebAutomationDriver {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.observe({includeSom:" +
                 includeSom + ", viewportOnly:" + viewportOnly + "})); })()";
             String raw = evaluateJsSync(expr, 6000);
+            // No target tab at all (the agent's tab was closed and it has not rebound yet).
+            // Report it as such instead of falling through to the "degraded" path, which would
+            // blame page loading and mislead the agent into waiting instead of switching tabs.
+            if (raw != null && raw.contains("NO_TARGET_TAB")) {
+                return buildFallbackObservation("NO_TARGET_TAB",
+                    "智能体当前没有绑定的标签页（原标签页已被关闭）。请先调用 browser(action='tabs', tab_action='list') "
+                    + "查看现有标签页，再用 tab_action='switch' 或 'new' 指定目标后继续。");
+            }
             if (raw != null && !raw.trim().isEmpty() && !"null".equals(raw)) {
                 JSONObject obj = new JSONObject(raw);
                 if (obj.optBoolean("ok", false)) {

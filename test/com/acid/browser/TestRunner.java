@@ -155,6 +155,14 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testP1HttpRedirectAndAtomicDownloadAndDialogGuards(); }
         });
 
+        run("Agent target state machine: lost tab, rebind & no silent hijack", new TestCase() {
+            @Override public void execute() throws Exception { testAgentTargetStateMachine(); }
+        });
+
+        run("Download filename hardening: traversal, dot-only names & case-folding offsets", new TestCase() {
+            @Override public void execute() throws Exception { testDownloadFilenameHardening(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2747,5 +2755,141 @@ public final class TestRunner {
             }
             testDir.delete();
         }
+    }
+
+    private static void testAgentTargetStateMachine() throws Exception {
+        // 1. Human browsing: nothing bound -> tools fall back to the active tab.
+        assertEquals(Integer.valueOf(BrowserController.TARGET_ACTIVE_TAB),
+            Integer.valueOf(BrowserController.resolveAgentTargetState(-1, false, false)),
+            "unbound + not lost resolves to the active tab");
+        assertEquals(Integer.valueOf(BrowserController.TARGET_ACTIVE_TAB),
+            Integer.valueOf(BrowserController.resolveAgentTargetState(0, false, false)),
+            "zero bound id also means unbound");
+
+        // 2. Bound to a live tab -> that tab wins.
+        assertEquals(Integer.valueOf(BrowserController.TARGET_BOUND_TAB),
+            Integer.valueOf(BrowserController.resolveAgentTargetState(7, false, true)),
+            "bound to a live tab resolves to the bound tab");
+
+        // 3. Bound to an id that no longer exists -> LOST, never a fallback.
+        //    This is the regression that used to hand the agent the user's current page.
+        assertEquals(Integer.valueOf(BrowserController.TARGET_LOST),
+            Integer.valueOf(BrowserController.resolveAgentTargetState(7, false, false)),
+            "a bound tab that vanished must not fall back to the active tab");
+
+        // 4. Explicit lost flag wins over everything.
+        assertEquals(Integer.valueOf(BrowserController.TARGET_LOST),
+            Integer.valueOf(BrowserController.resolveAgentTargetState(-1, true, false)),
+            "lost flag survives an unbind");
+        assertEquals(Integer.valueOf(BrowserController.TARGET_LOST),
+            Integer.valueOf(BrowserController.resolveAgentTargetState(7, true, true)),
+            "lost flag wins even if the id happens to resolve again");
+
+        // 5. Regression guard: the old code returned the active tab for case 3.
+        int oldBehaviour = 7 > 0 ? BrowserController.TARGET_ACTIVE_TAB : BrowserController.TARGET_LOST;
+        assertTrue(oldBehaviour != BrowserController.resolveAgentTargetState(7, false, false),
+            "old fallback-to-active-tab behaviour is gone");
+
+        // 6. Rebind clears the lost state (agent recovers via tabs(action='switch'|'new')).
+        //    setAgentBoundTabId() sets mAgentTargetLost=false, so a fresh bind is never LOST.
+        assertEquals(Integer.valueOf(BrowserController.TARGET_BOUND_TAB),
+            Integer.valueOf(BrowserController.resolveAgentTargetState(9, false, true)),
+            "rebinding to a live tab restores normal targeting");
+    }
+
+    /** Covers download filename sanitisation and the Content-Disposition offset fix. */
+    private static void testDownloadFilenameHardening() throws Exception {
+        // 1. Path traversal must be reduced to a leaf name.
+        assertEquals("x.xml", DownloadCoordinator.sanitizeDownloadFileName("../../databases/x.xml"),
+            "parent-directory traversal is stripped");
+        assertEquals("evil.txt", DownloadCoordinator.sanitizeDownloadFileName("..\\..\\evil.txt"),
+            "windows-style traversal is stripped");
+        assertEquals("x.apk", DownloadCoordinator.sanitizeDownloadFileName("Acid-browser-v../../x.apk"),
+            "traversal embedded after a prefix is stripped");
+        assertEquals("evil.txt", DownloadCoordinator.sanitizeDownloadFileName("%2e%2e%2f%2e%2e%2fevil.txt"),
+            "percent-encoded traversal is decoded then stripped");
+        assertEquals("passwd", DownloadCoordinator.sanitizeDownloadFileName("/etc/passwd"),
+            "absolute paths are reduced to their leaf");
+
+        // 2. Dot-only names resolve to a directory, so they must be replaced.
+        assertEquals("download", DownloadCoordinator.sanitizeDownloadFileName(".."),
+            "'..' cannot be used as a filename");
+        assertEquals("download", DownloadCoordinator.sanitizeDownloadFileName("."),
+            "'.' cannot be used as a filename");
+        assertEquals("download", DownloadCoordinator.sanitizeDownloadFileName("..."),
+            "dot-only sequences are rejected");
+        assertEquals("download", DownloadCoordinator.sanitizeDownloadFileName(""),
+            "empty name falls back to a default");
+        assertEquals("download", DownloadCoordinator.sanitizeDownloadFileName(null),
+            "null name falls back to a default");
+
+        // 3. Normal names are preserved verbatim.
+        assertEquals("report.pdf", DownloadCoordinator.sanitizeDownloadFileName("report.pdf"),
+            "ordinary filenames are untouched");
+        assertEquals("报告 2026.docx", DownloadCoordinator.sanitizeDownloadFileName("报告 2026.docx"),
+            "non-ASCII filenames are untouched");
+
+        // 4. DownloadTask must confine the destination even when handed a raw traversal name.
+        File tmpRoot = new File(System.getProperty("java.io.tmpdir"),
+            "acid_dl_boundary_" + System.currentTimeMillis());
+        File destDir = new File(tmpRoot, "Download");
+        destDir.mkdirs();
+        try {
+            DownloadTask task = new DownloadTask(
+                1L, "https://example.com/f", "../../escape.bin",
+                "application/octet-stream", destDir, null);
+            String destPath = task.destinationFile.getCanonicalPath();
+            String basePath = destDir.getCanonicalPath();
+            assertTrue(destPath.startsWith(basePath + File.separator),
+                "DownloadTask confines the destination inside the download dir: " + destPath);
+
+            DownloadTask dotTask = new DownloadTask(
+                2L, "https://example.com/f", "..",
+                "application/octet-stream", destDir, null);
+            assertTrue(dotTask.destinationFile.getCanonicalPath().startsWith(basePath + File.separator),
+                "DownloadTask rejects dot-only names: " + dotTask.destinationFile);
+        } finally {
+            File[] fs = destDir.listFiles();
+            if (fs != null) { for (File f : fs) f.delete(); }
+            destDir.delete();
+            tmpRoot.delete();
+        }
+
+        // 5. Content-Disposition parsing must not throw on case-folding offsets.
+        //    U+0130 is the only codepoint whose lowercase form is longer than the original,
+        //    which used to shift the substring offset past the end of the string.
+        assertEquals("report.pdf",
+            HttpProbe.parseFileNameFromDisposition("attachment; filename=\"report.pdf\""),
+            "plain ASCII disposition still parses");
+        assertEquals("İstanbul.jpg",
+            HttpProbe.parseFileNameFromDisposition("attachment; filename=\"İstanbul.jpg\""),
+            "U+0130 inside the filename value is preserved");
+
+        String[] hostile = {
+            "attachment; x-note=\"İ\"; filename=",
+            "attachment; x-note=\"İ\"; filename=\"a.txt\"",
+            "attachment; a=\"İİİİİ\"; filename=\"a.txt\"",
+            "attachment; x=\"İ\"; filename*=UTF-8''a.txt",
+            "attachment; filename=İ",
+        };
+        for (String header : hostile) {
+            try {
+                HttpProbe.parseFileNameFromDisposition(header);
+            } catch (StringIndexOutOfBoundsException e) {
+                throw new AssertionError(
+                    "Content-Disposition parsing crashed on a case-folding offset for: " + header, e);
+            }
+        }
+
+        // 6. The fixed parser must still honour a correct name sitting after a U+0130 prefix.
+        assertEquals("a.txt",
+            HttpProbe.parseFileNameFromDisposition("attachment; x-note=\"İ\"; filename=\"a.txt\""),
+            "filename after a U+0130 prefix is sliced at the right offset");
+        assertEquals("a.txt",
+            HttpProbe.parseFileNameFromDisposition("attachment; a=\"İİİİİ\"; filename=\"a.txt\""),
+            "multiple expanding codepoints no longer corrupt the offset");
+        assertEquals("a.txt",
+            HttpProbe.parseFileNameFromDisposition("attachment; x=\"İ\"; filename*=UTF-8''a.txt"),
+            "filename* survives a U+0130 prefix");
     }
 }

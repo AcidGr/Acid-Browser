@@ -682,11 +682,36 @@ public class DownloadCoordinator {
             return;
         }
 
+        // Single choke point for every download path (confirm sheet, OTA, GM_download, agent).
+        // The name reaches `new File(destDir, name)` untouched further down, so a name carrying
+        // "../" would otherwise write outside the Download directory.
+        fileName = sanitizeDownloadFileName(fileName);
+
         if (getDownloaderEngine() == AcidSettings.DOWNLOADER_SYSTEM) {
             startDownloadWithSystem(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
         } else {
             startDownloadWithBuiltin(url, fileName, userAgent, contentDisposition, mimeType, contentLength);
         }
+    }
+
+    /**
+     * Normalises a caller-supplied filename into a safe leaf name.
+     *
+     * <p>{@link HttpProbe#decodeAndSanitizeFileName} already strips directory components, but it
+     * happily returns {@code ".."} or {@code "."} unchanged (no slash to cut, no reserved char to
+     * replace) — both of which resolve to a directory, not a file. Anything empty or dot-only
+     * therefore falls back to a neutral default.
+     *
+     * @return a non-empty leaf name that cannot escape the destination directory
+     */
+    public static String sanitizeDownloadFileName(String raw) {
+        String cleaned = HttpProbe.decodeAndSanitizeFileName(raw);
+        if (cleaned == null) return "download";
+        cleaned = cleaned.trim();
+        if (cleaned.isEmpty()) return "download";
+        // Reject pure dot sequences: ".", "..", "..." all resolve to a directory entry.
+        if (cleaned.replace(".", "").isEmpty()) return "download";
+        return cleaned;
     }
 
     public void startDownloadWithBuiltin(
