@@ -994,6 +994,9 @@ public class AcidSandboxTools {
             pb.directory(mWorkspaceDir);
             pb.redirectErrorStream(true);
             proc = pb.start();
+            try {
+                proc.getOutputStream().close();
+            } catch (Exception ignored) {}
 
             final InputStream is = proc.getInputStream();
             final ByteArrayOutputStream baos = new ByteArrayOutputStream();

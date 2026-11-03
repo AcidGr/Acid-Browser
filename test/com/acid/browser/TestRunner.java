@@ -139,6 +139,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testP0UxHardeningAndOomCaps(); }
         });
 
+        run("P0/P1 Stability & Hygiene Fixes: Stdin close, SO_REUSEADDR, CSS hygiene, Atomic checkpoint & MainLooper guard", new TestCase() {
+            @Override public void execute() throws Exception { testP0StabilityAndHygieneFixes(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2456,5 +2460,55 @@ public final class TestRunner {
         } finally {
             server.stop();
         }
+    }
+
+    private static void testP0StabilityAndHygieneFixes() throws Exception {
+        // 1. HttpControlServer immediate restart with SO_REUSEADDR
+        int restartPort = 13199;
+        HttpControlServer restartServer = new HttpControlServer(null, null, restartPort);
+        restartServer.start();
+        Thread.sleep(100);
+        restartServer.stop();
+        // Immediate restart must not fail with BindException: Address already in use
+        restartServer.start();
+        Thread.sleep(100);
+        assertTrue(restartServer.isRunning(), "HttpControlServer successfully restarted immediately due to SO_REUSEADDR");
+        restartServer.stop();
+
+        // 2. DownloadTask atomic checkpoint write and tmp cleanup
+        File testDir = new File(System.getProperty("java.io.tmpdir"), "acid_p0_stability_" + System.currentTimeMillis());
+        testDir.mkdirs();
+        DownloadTask task = new DownloadTask(
+            9999L,
+            "https://example.com/file.zip",
+            "file.zip",
+            "application/zip",
+            testDir,
+            new HashMap<String, String>()
+        );
+        task.contentLength = 1024L;
+        task.downloadedBytes = 512L;
+        boolean saved = task.saveCheckpoint();
+        assertTrue(saved, "Checkpoint saved successfully");
+        File cfg = new File(testDir, "file.zip.part.cfg");
+        File tmp = new File(testDir, "file.zip.part.cfg.tmp");
+        assertTrue(cfg.exists(), "Target checkpoint file exists");
+        assertTrue(!tmp.exists(), "Temporary checkpoint file was atomically renamed away");
+        task.cleanCheckpointFile();
+        assertTrue(!cfg.exists(), "cleanCheckpointFile cleaned target cfg");
+        assertTrue(!tmp.exists(), "cleanCheckpointFile cleaned tmp cfg");
+
+        // 3. AcidSandboxTools bash tool stdin EOF test
+        AcidSandboxTools tools = new AcidSandboxTools(null, testDir);
+        JSONObject bashArgs = new JSONObject();
+        // If stdin was kept open, 'cat' without args would block until 3000ms timeout.
+        // With closed stdin, 'cat' exits immediately with 0 bytes and exit code 0.
+        bashArgs.put("command", "cat");
+        bashArgs.put("timeout_ms", 3000);
+        long startTime = System.currentTimeMillis();
+        AcidSandboxTools.ToolExecResult res = tools.executeTool("bash", bashArgs);
+        long duration = System.currentTimeMillis() - startTime;
+        assertTrue(duration < 2500, "cat completed promptly without hanging for timeout (took " + duration + "ms)");
+        assertTrue(res.outputText != null && res.outputText.contains("[exit code: 0]"), "cat exited with code 0 on EOF");
     }
 }

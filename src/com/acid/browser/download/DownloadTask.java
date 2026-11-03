@@ -277,10 +277,40 @@ public class DownloadTask {
             }
             root.put("chunks", chunkArr);
 
-            FileOutputStream fos = new FileOutputStream(checkpointFile);
+            File parent = checkpointFile.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+
+            File tmpFile = new File(checkpointFile.getAbsolutePath() + ".tmp");
+            FileOutputStream fos = new FileOutputStream(tmpFile);
             fos.write(root.toString(2).getBytes(StandardCharsets.UTF_8));
+            fos.flush();
+            try {
+                fos.getFD().sync();
+            } catch (Exception ignored) {}
             fos.close();
-            return true;
+
+            if (tmpFile.renameTo(checkpointFile)) {
+                return true;
+            } else {
+                if (checkpointFile.exists()) {
+                    checkpointFile.delete();
+                }
+                if (tmpFile.renameTo(checkpointFile)) {
+                    return true;
+                }
+                try {
+                    FileOutputStream directFos = new FileOutputStream(checkpointFile);
+                    directFos.write(root.toString(2).getBytes(StandardCharsets.UTF_8));
+                    directFos.flush();
+                    directFos.close();
+                    tmpFile.delete();
+                    return true;
+                } catch (Exception ignored) {
+                    return false;
+                }
+            }
         } catch (Exception e) {
             return false;
         }
@@ -339,8 +369,14 @@ public class DownloadTask {
 
     public void cleanCheckpointFile() {
         try {
-            if (checkpointFile != null && checkpointFile.exists()) {
-                checkpointFile.delete();
+            if (checkpointFile != null) {
+                if (checkpointFile.exists()) {
+                    checkpointFile.delete();
+                }
+                File tmp = new File(checkpointFile.getAbsolutePath() + ".tmp");
+                if (tmp.exists()) {
+                    tmp.delete();
+                }
             }
         } catch (Exception ignored) {}
     }
