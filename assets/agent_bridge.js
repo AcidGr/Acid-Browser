@@ -77,6 +77,10 @@
                 viewportObserver.disconnect();
                 viewportObserver = null;
             }
+            if (window.__acid_desktop_observer) {
+                try { window.__acid_desktop_observer.disconnect(); } catch (e) {}
+                window.__acid_desktop_observer = null;
+            }
             const desktopMetas = document.querySelectorAll('meta[data-acid-viewport="desktop"]');
             desktopMetas.forEach((m) => m.remove());
             if (!document.querySelector('meta[name="viewport"]')) {
@@ -114,12 +118,13 @@
         }
 
         lockViewportMeta();
-        if (!viewportObserver) {
+        if (!window.__acid_desktop_observer) {
             const head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
             if (head) {
                 viewportObserver = new MutationObserver(() => {
                     if (desktopSpoofEnabled) lockViewportMeta();
                 });
+                window.__acid_desktop_observer = viewportObserver;
                 viewportObserver.observe(head, { childList: true, subtree: false });
             }
         }

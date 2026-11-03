@@ -157,6 +157,7 @@ public class UserscriptHttpHandler {
         boolean connected = false;
         for (int redirects = 0; redirects < 5; redirects++) {
             URL url = new URL(currentUrl);
+            validateAllowedHttpTarget(url);
             conn = (HttpURLConnection) url.openConnection();
             flight.conn = conn;
             conn.setRequestMethod(method);
@@ -225,6 +226,7 @@ public class UserscriptHttpHandler {
                 String loc = conn.getHeaderField("Location");
                 if (loc != null && !loc.trim().isEmpty()) {
                     URL nextUrl = new URL(new URL(currentUrl), loc.trim());
+                    validateAllowedHttpTarget(nextUrl);
                     if (!isSameOrigin(new URL(currentUrl), nextUrl)) {
                         stripSensitiveHeadersOnCrossDomain(customHeaders);
                     }
@@ -410,6 +412,30 @@ public class UserscriptHttpHandler {
                 }
             }
         });
+    }
+
+    /**
+     * Enforces HTTP(S)-only transport and blocks SSRF attempts against the local Acid MCP control port.
+     */
+    public static void validateAllowedHttpTarget(URL url) throws SecurityException {
+        if (url == null) {
+            throw new SecurityException("Null request URL");
+        }
+        String proto = url.getProtocol() != null ? url.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
+        if (!"http".equals(proto) && !"https".equals(proto)) {
+            throw new SecurityException("Unsupported protocol in GM_xmlhttpRequest: " + proto);
+        }
+        String host = url.getHost() != null ? url.getHost().toLowerCase(java.util.Locale.ROOT).trim() : "";
+        int port = url.getPort() != -1 ? url.getPort() : url.getDefaultPort();
+        boolean isLoopback = "localhost".equals(host)
+            || "127.0.0.1".equals(host)
+            || "::1".equals(host)
+            || "[::1]".equals(host)
+            || host.startsWith("127.")
+            || "0.0.0.0".equals(host);
+        if (isLoopback && port == HttpControlServer.DEFAULT_PORT) {
+            throw new SecurityException("Blocked SSRF access to local Acid MCP gateway port " + port);
+        }
     }
 
     private static boolean isSameOrigin(URL a, URL b) {

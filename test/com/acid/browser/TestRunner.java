@@ -127,6 +127,14 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testDownloaderCollisionAndCheckpointIsolation(); }
         });
 
+        run("Deep Audit Fixes: cross-chunk <think> parser, stale file truncation & SSRF guard", new TestCase() {
+            @Override public void execute() throws Exception { testStreamThinkSplitSsrfAndResetGuards(); }
+        });
+
+        run("P0 Security & Concurrency Fixes: Stop deadlock, Checkpoint throttle, Sandbox boundary, Userscript edit & Duplicate dispatch", new TestCase() {
+            @Override public void execute() throws Exception { testP0SecurityAndConcurrencyFixes(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2112,6 +2120,197 @@ public final class TestRunner {
                 }
             }
             testDir.delete();
+        }
+    }
+
+    private static void testStreamThinkSplitSsrfAndResetGuards() throws Exception {
+        // 1. Cross-chunk <think>...</think> state machine parser across arbitrary token splits
+        AcidAgentLoop.ThinkStreamParser parser = new AcidAgentLoop.ThinkStreamParser();
+        String[] chunks = new String[] {
+            "<thi",
+            "nk>Step 1: analyze ",
+            "page <div",
+            "> structure.</th",
+            "ink>Here is the ",
+            "final <t",
+            "able> result <"
+        };
+        for (String c : chunks) {
+            parser.feedContentDelta(c);
+        }
+        parser.finish();
+
+        assertTrue(!parser.insideThinkTag, "Think tag closed cleanly after split </think>");
+        assertTrue(parser.thinkClosed, "thinkClosed flag recorded");
+        assertEquals("Step 1: analyze page <div> structure.", parser.reasoningSb.toString(),
+            "Split <think> and </think> reasoning extracted without leaking tags");
+        assertEquals("Here is the final <table> result <", parser.contentSb.toString(),
+            "Post-think content and partial '<t' / '<' prefixes flushed accurately");
+
+        // 2. DownloadTask.resetForFreshStart() truncates stale partial file & resets downloadedBytes
+        File tmpDir = new File(System.getProperty("java.io.tmpdir"), "acid_reset_test_" + System.currentTimeMillis());
+        tmpDir.mkdirs();
+        try {
+            DownloadTask task = new DownloadTask(
+                701L, "https://example.com/updated.bin", "updated.bin", "application/octet-stream", tmpDir, null
+            );
+            AcidIo.writeBytes(task.destinationFile, new byte[8192]);
+            task.downloadedBytes = 4096L;
+            List<DownloadChunk> staleChunks = new ArrayList<DownloadChunk>();
+            staleChunks.add(new DownloadChunk(0, 0, 8191, 4096, false));
+            task.setChunks(staleChunks);
+            task.saveCheckpoint();
+
+            assertEquals(8192L, Long.valueOf(task.destinationFile.length()), "Stale destination file is 8192 bytes");
+            assertTrue(task.checkpointFile.exists(), "Stale checkpoint exists before reset");
+
+            task.resetForFreshStart();
+            assertEquals(0L, Long.valueOf(task.downloadedBytes), "downloadedBytes reset to 0");
+            assertTrue(task.getChunksSnapshot().isEmpty(), "Stale chunks cleared");
+            assertTrue(!task.checkpointFile.exists(), "Stale checkpoint deleted");
+            assertEquals(0L, Long.valueOf(task.destinationFile.length()), "Stale destination file truncated to 0 bytes");
+        } finally {
+            File[] files = tmpDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            tmpDir.delete();
+        }
+
+        // 3. UserscriptHttpHandler SSRF & scheme guards
+        UserscriptHttpHandler.validateAllowedHttpTarget(new java.net.URL("https://api.github.com/repos"));
+        UserscriptHttpHandler.validateAllowedHttpTarget(new java.net.URL("http://127.0.0.1:8080/test"));
+
+        boolean blockedFileScheme = false;
+        try {
+            UserscriptHttpHandler.validateAllowedHttpTarget(new java.net.URL("file:///data/data/com.acid.browser/files/settings.json"));
+        } catch (SecurityException se) {
+            blockedFileScheme = true;
+        }
+        assertTrue(blockedFileScheme, "file:// protocol rejected in GM_xmlhttpRequest");
+
+        boolean blockedMcpLoopback = false;
+        try {
+            UserscriptHttpHandler.validateAllowedHttpTarget(new java.net.URL("http://127.0.0.1:" + HttpControlServer.DEFAULT_PORT + "/mcp"));
+        } catch (SecurityException se) {
+            blockedMcpLoopback = true;
+        }
+        assertTrue(blockedMcpLoopback, "SSRF to local Acid MCP gateway port 3090 on 127.0.0.1 blocked");
+
+        boolean blockedMcpLocalhost = false;
+        try {
+            UserscriptHttpHandler.validateAllowedHttpTarget(new java.net.URL("http://localhost:" + HttpControlServer.DEFAULT_PORT + "/sse"));
+        } catch (SecurityException se) {
+            blockedMcpLocalhost = true;
+        }
+        assertTrue(blockedMcpLocalhost, "SSRF to local Acid MCP gateway port 3090 on localhost blocked");
+    }
+
+    private static void testP0SecurityAndConcurrencyFixes() throws Exception {
+        // 1. DownloadTask incremental checkpoint throttling
+        File tmpDir = new File(System.getProperty("java.io.tmpdir"), "p0_test_" + System.currentTimeMillis());
+        tmpDir.mkdirs();
+        try {
+            DownloadTask rangeTask = new DownloadTask(801L, "https://example.com/throttle.bin", "throttle.bin", "application/octet-stream", tmpDir, null);
+            rangeTask.supportsRange = true;
+            assertTrue(rangeTask.shouldSaveCheckpoint(1000L), "First checkpoint save should pass");
+            assertTrue(!rangeTask.shouldSaveCheckpoint(1500L), "Check within 1500ms throttle interval should be skipped");
+            assertTrue(rangeTask.shouldSaveCheckpoint(2600L), "Check after >= 1500ms elapsed should pass");
+
+            DownloadTask nonRangeTask = new DownloadTask(802L, "https://example.com/stream.bin", "stream.bin", "application/octet-stream", tmpDir, null);
+            nonRangeTask.supportsRange = false;
+            assertTrue(!nonRangeTask.shouldSaveCheckpoint(5000L), "Non-range task never saves mid-stream checkpoint");
+
+            // 2. Sandbox path traversal protection
+            File wsDir = new File(tmpDir, "sandbox_ws");
+            wsDir.mkdirs();
+            AcidSandboxTools tools = new AcidSandboxTools(null, wsDir);
+
+            File normalFile = tools.resolveSandboxFile("notes.txt");
+            assertTrue(normalFile != null, "Normal sandbox path resolves");
+            assertEquals(new File(wsDir, "notes.txt").getCanonicalPath(), normalFile.getCanonicalPath(), "Normal path matches canonical target");
+
+            File traversal1 = tools.resolveSandboxFile("../secret.txt");
+            assertTrue(traversal1 == null, "Path with ../ must be rejected by sandbox boundary");
+
+            File traversal2 = tools.resolveSandboxFile("../../etc/passwd");
+            assertTrue(traversal2 == null, "Path escaping workspace root must be rejected");
+
+            File traversal3 = tools.resolveSandboxFile("/data/data/com.acid.browser/shared_prefs/acid_model_store.xml");
+            assertTrue(traversal3 == null, "Absolute path escaping workspace must be rejected");
+
+            // Read tool path traversal guard
+            JSONObject readArgs = new JSONObject();
+            readArgs.put("file_path", "../secret.txt");
+            AcidSandboxTools.ToolExecResult readRes = tools.executeTool("read", readArgs);
+            assertTrue(readRes.outputText != null && readRes.outputText.contains("Access denied"), "read tool blocks path traversal");
+
+            // Write tool path traversal guard
+            JSONObject writeArgs = new JSONObject();
+            writeArgs.put("file_path", "../secret.txt");
+            writeArgs.put("content", "hacked");
+            AcidSandboxTools.ToolExecResult writeRes = tools.executeTool("write", writeArgs);
+            assertTrue(writeRes.outputText != null && writeRes.outputText.contains("Access denied"), "write tool blocks path traversal");
+
+            // Edit tool path traversal guard
+            JSONObject editArgs = new JSONObject();
+            editArgs.put("file_path", "../secret.txt");
+            editArgs.put("old_string", "foo");
+            editArgs.put("new_string", "bar");
+            AcidSandboxTools.ToolExecResult editRes = tools.executeTool("edit", editArgs);
+            assertTrue(editRes.outputText != null && editRes.outputText.contains("Access denied"), "edit tool blocks path traversal");
+
+            // 3. Edit tool userscript security: MCP source rejection
+            File userscriptsDir = new File(wsDir, "userscripts");
+            userscriptsDir.mkdirs();
+            File testScript = new File(userscriptsDir, "test.user.js");
+            AcidIo.writeFileUtf8(testScript, "// ==UserScript==\n// @name Test\n// @match *://*/*\n// ==/UserScript==\nconsole.log(1);");
+
+            JSONObject scriptEditArgs = new JSONObject();
+            scriptEditArgs.put("file_path", "userscripts/test.user.js");
+            scriptEditArgs.put("old_string", "console.log(1);");
+            scriptEditArgs.put("new_string", "console.log(2);");
+
+            AcidSandboxTools.ToolExecResult mcpEditRes = tools.executeTool("edit", scriptEditArgs, AcidSandboxTools.ToolSource.MCP);
+            assertTrue(mcpEditRes.outputText != null && mcpEditRes.outputText.contains("Error: editing userscripts is only available from the in-app agent chat"),
+                "MCP source is rejected when editing userscripts");
+
+            // Agent UI source succeeds and updates userscript
+            AcidSandboxTools.ToolExecResult uiEditRes = tools.executeTool("edit", scriptEditArgs, AcidSandboxTools.ToolSource.AGENT_UI);
+            assertTrue(uiEditRes.outputText != null && uiEditRes.outputText.contains("Successfully edited"),
+                "Agent UI source can edit userscript");
+            String editedContent = AcidIo.readFileUtf8(testScript);
+            assertTrue(editedContent.contains("console.log(2);"), "Userscript file content updated on disk");
+
+            // Edit that breaks ==UserScript== header is rejected
+            JSONObject badEditArgs = new JSONObject();
+            badEditArgs.put("file_path", "userscripts/test.user.js");
+            badEditArgs.put("old_string", "// @match *://*/*\n");
+            badEditArgs.put("new_string", "");
+            AcidSandboxTools.ToolExecResult badEditRes = tools.executeTool("edit", badEditArgs, AcidSandboxTools.ToolSource.AGENT_UI);
+            assertTrue(badEditRes.outputText != null && badEditRes.outputText.contains("valid ==UserScript== header with @match"),
+                "Corrupting userscript header via edit is rejected");
+
+            // 4. Duplicate dispatchCompleted guard verification
+            AcidDownloader downloader = AcidDownloader.getInstance();
+            DownloadTask finishTask = downloader.enqueue("https://example.com/finish_check.zip", "finish_check.zip", "application/zip", tmpDir, null);
+            downloader.pause(finishTask.id);
+            finishTask.status = DownloadTask.STATUS_SUCCESSFUL;
+            assertTrue(finishTask.status == DownloadTask.STATUS_SUCCESSFUL, "Task is already SUCCESSFUL");
+            assertTrue(finishTask.status != DownloadTask.STATUS_FAILED, "Task status is not failed");
+
+        } finally {
+            File[] files = tmpDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isDirectory()) {
+                        File[] sub = f.listFiles();
+                        if (sub != null) for (File s : sub) s.delete();
+                    }
+                    f.delete();
+                }
+            }
+            tmpDir.delete();
         }
     }
 }

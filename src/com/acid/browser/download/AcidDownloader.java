@@ -254,7 +254,11 @@ public class AcidDownloader {
                         // Remote ETag changed! Resource was modified
                         resumed = false;
                         task.cleanCheckpointFile();
-                    } else {
+                    } else if (probe.responseCode == 200 && !probe.supportsRange) {
+                        // Server no longer supports Range requests
+                        resumed = false;
+                        task.cleanCheckpointFile();
+                    } else if (probe.responseCode >= 200 && probe.responseCode < 300) {
                         task.finalUrl = probe.finalUrl;
                         if (probe.eTag != null) task.eTag = probe.eTag;
                         if (probe.lastModified != null) task.lastModified = probe.lastModified;
@@ -272,14 +276,19 @@ public class AcidDownloader {
                     if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
                         return;
                     }
+                    // Reset progress and purge/truncate any stale partial file from an invalidated checkpoint
+                    task.resetForFreshStart();
+
                     task.finalUrl = probe.finalUrl;
                     task.contentLength = probe.contentLength;
                     task.supportsRange = probe.supportsRange;
                     task.eTag = probe.eTag;
                     task.lastModified = probe.lastModified;
 
-                    if (task.mimeType == null || task.mimeType.isEmpty() || "*/*".equals(task.mimeType)) {
-                        task.mimeType = probe.mimeType;
+                    if (probe.responseCode >= 200 && probe.responseCode < 300 && probe.mimeType != null) {
+                        if (task.mimeType == null || task.mimeType.isEmpty() || "*/*".equals(task.mimeType)) {
+                            task.mimeType = probe.mimeType;
+                        }
                     }
 
                     // If destination dir doesn't exist, create it
@@ -328,7 +337,11 @@ public class AcidDownloader {
                 @Override
                 public void onChunkProgress(DownloadTask t, DownloadChunk c, int bytesRead) {
                     if (t.getGeneration() != runGen || t.isPaused || t.isCanceled) return;
-                    if (t.shouldDispatchProgress(System.currentTimeMillis())) {
+                    long now = System.currentTimeMillis();
+                    if (t.shouldSaveCheckpoint(now)) {
+                        t.saveCheckpoint();
+                    }
+                    if (t.shouldDispatchProgress(now)) {
                         dispatchProgress(t);
                     }
                 }
@@ -336,12 +349,16 @@ public class AcidDownloader {
                 @Override
                 public void onChunkCompleted(DownloadTask t, DownloadChunk c) {
                     synchronized (t) {
-                        if (t.getGeneration() != runGen || t.isCanceled || t.isPaused || t.status == DownloadTask.STATUS_FAILED) {
+                        if (t.getGeneration() != runGen || t.isCanceled || t.isPaused
+                            || t.status == DownloadTask.STATUS_FAILED
+                            || t.status == DownloadTask.STATUS_SUCCESSFUL) {
                             return;
                         }
                         t.saveCheckpoint();
                         int rem = remainingChunks.decrementAndGet();
-                        if (rem <= 0 && !t.isPaused && !t.isCanceled && t.status != DownloadTask.STATUS_FAILED) {
+                        if (rem <= 0 && !t.isPaused && !t.isCanceled
+                            && t.status != DownloadTask.STATUS_FAILED
+                            && t.status != DownloadTask.STATUS_SUCCESSFUL) {
                             t.status = DownloadTask.STATUS_SUCCESSFUL;
                             t.completedAt = System.currentTimeMillis();
                             t.cleanCheckpointFile();
@@ -389,7 +406,9 @@ public class AcidDownloader {
 
             synchronized (task) {
                 if (task.getGeneration() == runGen && remainingChunks.get() <= 0
-                    && !task.isPaused && !task.isCanceled && task.status != DownloadTask.STATUS_FAILED) {
+                    && !task.isPaused && !task.isCanceled
+                    && task.status != DownloadTask.STATUS_SUCCESSFUL
+                    && task.status != DownloadTask.STATUS_FAILED) {
                     task.status = DownloadTask.STATUS_SUCCESSFUL;
                     task.completedAt = System.currentTimeMillis();
                     task.cleanCheckpointFile();
