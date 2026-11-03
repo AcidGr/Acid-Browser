@@ -331,25 +331,43 @@ public class WebAutomationDriver {
             err.put("hint", "页面可能仍在加载中，请稍候重试或调用 browser(action='wait', condition='stable') 等待稳定");
 
             final JSONObject partial = new JSONObject();
-            final CountDownLatch latch = new CountDownLatch(1);
-            mMainHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        BrowserController.TabSession tab = mHost.getTargetTab();
-                        if (tab != null && tab.webView != null) {
-                            partial.put("url", tab.webView.getUrl() != null ? tab.webView.getUrl() : tab.url);
-                            partial.put("title", tab.webView.getTitle() != null ? tab.webView.getTitle() : tab.title);
-                            partial.put("progress", tab.webView.getProgress());
-                            partial.put("isLoading", tab.isLoading);
-                        }
-                    } catch (Exception e) {
-                        Log.w(TAG, "Failed to collect partial page metadata while building fallback observation", e);
+            if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+                try {
+                    BrowserController.TabSession tab = mHost.getTargetTab();
+                    if (tab != null && tab.webView != null) {
+                        partial.put("url", tab.webView.getUrl() != null ? tab.webView.getUrl() : tab.url);
+                        partial.put("title", tab.webView.getTitle() != null ? tab.webView.getTitle() : tab.title);
+                        partial.put("progress", tab.webView.getProgress());
+                        partial.put("isLoading", tab.isLoading);
                     }
-                    latch.countDown();
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to collect partial page metadata while building fallback observation", e);
                 }
-            });
-            latch.await(500, TimeUnit.MILLISECONDS);
+            } else {
+                final CountDownLatch latch = new CountDownLatch(1);
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            BrowserController.TabSession tab = mHost.getTargetTab();
+                            if (tab != null && tab.webView != null) {
+                                partial.put("url", tab.webView.getUrl() != null ? tab.webView.getUrl() : tab.url);
+                                partial.put("title", tab.webView.getTitle() != null ? tab.webView.getTitle() : tab.title);
+                                partial.put("progress", tab.webView.getProgress());
+                                partial.put("isLoading", tab.isLoading);
+                            }
+                        } catch (Exception e) {
+                            Log.w(TAG, "Failed to collect partial page metadata while building fallback observation", e);
+                        }
+                        latch.countDown();
+                    }
+                });
+                try {
+                    latch.await(500, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             err.put("partial", partial);
 
             String url = partial.optString("url", "about:blank");
@@ -375,24 +393,41 @@ public class WebAutomationDriver {
                 if (um != null) {
                     final String bridgeJs = um.getBridgeJs();
                     if (bridgeJs != null && !bridgeJs.isEmpty()) {
-                        final CountDownLatch latch = new CountDownLatch(1);
-                        mMainHandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                BrowserController.TabSession tab = mHost.getTargetTab();
-                                if (tab != null && tab.webView != null) {
-                                    tab.webView.evaluateJavascript(bridgeJs, null);
-                                    if (mHost.isDesktopMode()) {
-                                        tab.webView.evaluateJavascript(
-                                            "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
-                                            null
-                                        );
-                                    }
+                        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+                            BrowserController.TabSession tab = mHost.getTargetTab();
+                            if (tab != null && tab.webView != null) {
+                                tab.webView.evaluateJavascript(bridgeJs, null);
+                                if (mHost.isDesktopMode()) {
+                                    tab.webView.evaluateJavascript(
+                                        "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
+                                        null
+                                    );
                                 }
-                                latch.countDown();
                             }
-                        });
-                        latch.await(1000, TimeUnit.MILLISECONDS);
+                        } else {
+                            final CountDownLatch latch = new CountDownLatch(1);
+                            mMainHandler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    BrowserController.TabSession tab = mHost.getTargetTab();
+                                    if (tab != null && tab.webView != null) {
+                                        tab.webView.evaluateJavascript(bridgeJs, null);
+                                        if (mHost.isDesktopMode()) {
+                                            tab.webView.evaluateJavascript(
+                                                "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
+                                                null
+                                            );
+                                        }
+                                    }
+                                    latch.countDown();
+                                }
+                            });
+                            try {
+                                latch.await(1000, TimeUnit.MILLISECONDS);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                        }
                     }
                 }
             } else if (mHost.isDesktopMode()) {
@@ -662,6 +697,13 @@ public class WebAutomationDriver {
     }
 
     public JSONObject navigateSync(final String url, long waitSettleMs) {
+        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+            Log.w(TAG, "navigateSync called directly on MainLooper; dispatching loadUrl without blocking wait to prevent UI deadlock");
+            mHost.loadUrl(url);
+            mHost.emitLog("[NAV] Navigated -> " + url);
+            return observeSync(mHost.isSomEnabled(), true, false);
+        }
+
         final CountDownLatch latch = new CountDownLatch(1);
         mMainHandler.post(new Runnable() {
             @Override
@@ -734,18 +776,12 @@ public class WebAutomationDriver {
 
             boolean isForeground = mHost.isTargetTabActive();
             if (useNativeMotionEvent && isForeground) {
-                final CountDownLatch tapLatch = new CountDownLatch(1);
                 final AtomicReference<Float> viewXRef = new AtomicReference<Float>(0f);
                 final AtomicReference<Float> viewYRef = new AtomicReference<Float>(0f);
 
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        BrowserController.TabSession activeTab = mHost.getTargetTab();
-                        if (activeTab == null) {
-                            tapLatch.countDown();
-                            return;
-                        }
+                if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+                    BrowserController.TabSession activeTab = mHost.getTargetTab();
+                    if (activeTab != null) {
                         WebView wv = activeTab.webView;
                         float scale = wv.getScale();
                         if (scale <= 0.01f) {
@@ -761,11 +797,42 @@ public class WebAutomationDriver {
                             overlay.showClickPulse(vx, vy, "[" + targetRef + "] " + label);
                         }
                         dispatchHardwareMotionTap(wv, vx, vy);
-                        tapLatch.countDown();
                     }
-                });
-                tapLatch.await(2000, TimeUnit.MILLISECONDS);
-                Thread.sleep(220);
+                } else {
+                    final CountDownLatch tapLatch = new CountDownLatch(1);
+                    mMainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            BrowserController.TabSession activeTab = mHost.getTargetTab();
+                            if (activeTab == null) {
+                                tapLatch.countDown();
+                                return;
+                            }
+                            WebView wv = activeTab.webView;
+                            float scale = wv.getScale();
+                            if (scale <= 0.01f) {
+                                scale = mContext.getResources().getDisplayMetrics().density;
+                            }
+                            final float vx = (float) (cssX * scale);
+                            final float vy = (float) (cssY * scale);
+                            viewXRef.set(vx);
+                            viewYRef.set(vy);
+
+                            AgentOverlayView overlay = mHost.getOverlayView();
+                            if (overlay != null && mHost.isTargetTabActive()) {
+                                overlay.showClickPulse(vx, vy, "[" + targetRef + "] " + label);
+                            }
+                            dispatchHardwareMotionTap(wv, vx, vy);
+                            tapLatch.countDown();
+                        }
+                    });
+                    try {
+                        tapLatch.await(2000, TimeUnit.MILLISECONDS);
+                        Thread.sleep(220);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
 
                 String stateRaw = evaluateJsSync("(function(){ return JSON.stringify(window.__acidBridge.getState()); })()", 2000);
                 JSONObject stateAfter = new JSONObject(stateRaw);
@@ -859,27 +926,38 @@ public class WebAutomationDriver {
     }
 
     public JSONObject clickCoordinateSync(final float viewX, final float viewY) {
-        final CountDownLatch latch = new CountDownLatch(1);
         final boolean isForeground = mHost.isTargetTabActive();
-        mMainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                BrowserController.TabSession targetTab = mHost.getTargetTab();
-                if (targetTab != null && isForeground) {
-                    AgentOverlayView overlay = mHost.getOverlayView();
-                    if (overlay != null) {
-                        overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
-                    }
-                    dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
+        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+            BrowserController.TabSession targetTab = mHost.getTargetTab();
+            if (targetTab != null && isForeground) {
+                AgentOverlayView overlay = mHost.getOverlayView();
+                if (overlay != null) {
+                    overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
                 }
-                latch.countDown();
+                dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
             }
-        });
-        try {
-            latch.await(2000, TimeUnit.MILLISECONDS);
-            Thread.sleep(200);
-        } catch (Exception e) {
-            Log.w(TAG, "Coordinate click wait interrupted", e);
+        } else {
+            final CountDownLatch latch = new CountDownLatch(1);
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    BrowserController.TabSession targetTab = mHost.getTargetTab();
+                    if (targetTab != null && isForeground) {
+                        AgentOverlayView overlay = mHost.getOverlayView();
+                        if (overlay != null) {
+                            overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
+                        }
+                        dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
+                    }
+                    latch.countDown();
+                }
+            });
+            try {
+                latch.await(2000, TimeUnit.MILLISECONDS);
+                Thread.sleep(200);
+            } catch (Exception e) {
+                Log.w(TAG, "Coordinate click wait interrupted", e);
+            }
         }
         if (!isForeground) {
             evaluateJsSync("(function(){ var el = document.elementFromPoint(" + viewX + "," + viewY + "); if (el) el.click(); })()", 2000);
@@ -1002,6 +1080,25 @@ public class WebAutomationDriver {
     }
 
     public String captureScreenshotBase64Sync(final int jpegQuality) {
+        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+            try {
+                BrowserController.TabSession activeTab = mHost.getTargetTab();
+                if (activeTab != null && activeTab.webView != null && activeTab.webView.getWidth() > 0 && activeTab.webView.getHeight() > 0) {
+                    WebView wv = activeTab.webView;
+                    Bitmap bmp = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);
+                    Canvas canvas = new Canvas(bmp);
+                    wv.draw(canvas);
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    bmp.compress(Bitmap.CompressFormat.JPEG, jpegQuality, baos);
+                    bmp.recycle();
+                    return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Screenshot error on main thread", e);
+            }
+            return null;
+        }
+
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<String> b64Ref = new AtomicReference<String>(null);
         mMainHandler.post(new Runnable() {

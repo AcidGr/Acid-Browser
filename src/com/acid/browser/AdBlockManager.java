@@ -513,9 +513,9 @@ public class AdBlockManager {
             }
         }
 
-        // General fallback mobile cleanup selectors
+        // General fallback mobile cleanup selectors (targeted to avoid over-collateral blocking)
         if (selectors.length() > 0) selectors.append(", ");
-        selectors.append(".ad, .ads, .ad-banner, .advertisement, [id^='ad_'], [id*='-ad-'], [class*='app-open'], [class*='bottom-banner']");
+        selectors.append(".ads, .ad-banner, .advertisement, [id^='ad_'], [id^='ad-'], [class*='app-open']");
 
         String cssRule = selectors.toString() + " { display: none !important; height: 0 !important; visibility: hidden !important; pointer-events: none !important; }";
         String js = "(function() {" +

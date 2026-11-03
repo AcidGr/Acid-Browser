@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -55,6 +56,7 @@ public class HttpControlServer {
     private ServerSocket mServerSocket;
     private volatile boolean mRunning = false;
     private volatile boolean mLanBound = false;
+    private final java.util.concurrent.atomic.AtomicInteger mServerGeneration = new java.util.concurrent.atomic.AtomicInteger(0);
 
     // Active SSE client sessions
     private final ConcurrentHashMap<String, SseSession> mSseSessions = new ConcurrentHashMap<String, SseSession>();
@@ -154,6 +156,7 @@ public class HttpControlServer {
     public synchronized void start() {
         if (mRunning) return;
         mRunning = true;
+        final int gen = mServerGeneration.incrementAndGet();
         mPool.execute(new Runnable() {
             @Override
             public void run() {
@@ -162,10 +165,13 @@ public class HttpControlServer {
                         && mController.getDataStore().isMcpLanEnabled();
                     mLanBound = lanEnabled;
                     InetAddress bindAddr = lanEnabled ? InetAddress.getByName("0.0.0.0") : InetAddress.getByName("127.0.0.1");
-                    mServerSocket = new ServerSocket(mPort, 32, bindAddr);
+                    ServerSocket ss = new ServerSocket();
+                    ss.setReuseAddress(true);
+                    ss.bind(new InetSocketAddress(bindAddr, mPort), 32);
+                    mServerSocket = ss;
                     emitLog("[MCP] Acid MCP Server listening on " + (lanEnabled ? "0.0.0.0" : "127.0.0.1") + ":" + mPort
                         + (lanEnabled ? " (LAN enabled)" : " (Localhost only)"));
-                    while (mRunning) {
+                    while (mRunning && mServerGeneration.get() == gen) {
                         final Socket client = mServerSocket.accept();
                         mPool.execute(new Runnable() {
                             @Override
@@ -175,17 +181,20 @@ public class HttpControlServer {
                         });
                     }
                 } catch (Exception e) {
-                    if (mRunning) {
+                    if (mRunning && mServerGeneration.get() == gen) {
                         Log.e(TAG, "MCP Server error", e);
                     }
                 } finally {
-                    mRunning = false;
+                    if (mServerGeneration.get() == gen) {
+                        mRunning = false;
+                    }
                 }
             }
         });
     }
 
     public synchronized void stop() {
+        mServerGeneration.incrementAndGet();
         mRunning = false;
         try {
             if (mServerSocket != null) {
