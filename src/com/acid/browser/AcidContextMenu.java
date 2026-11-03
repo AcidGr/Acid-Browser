@@ -7,6 +7,7 @@ import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -205,6 +206,10 @@ public final class AcidContextMenu {
             posY = AcidTheme.dp(context, 42);
         }
 
-        popup.showAtLocation(hostAnchor, Gravity.NO_GRAVITY, posX, posY);
+        try {
+            popup.showAtLocation(hostAnchor, Gravity.NO_GRAVITY, posX, posY);
+        } catch (Exception e) {
+            Log.w("AcidContextMenu", "Failed to show context menu popup: host window detached or token invalid", e);
+        }
     }
 }

@@ -633,7 +633,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 }
             }
         }
-        scrollChatToBottom();
+        scrollChatToBottomIfNearBottom();
     }
 
     private void addEmptyChatWelcomeCard() {
@@ -1166,6 +1166,23 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 mChatScrollView.fullScroll(View.FOCUS_DOWN);
             }
         });
+    }
+
+    private void scrollChatToBottomIfNearBottom() {
+        if (mChatScrollView == null) return;
+        View content = mChatScrollView.getChildAt(0);
+        if (content == null) {
+            scrollChatToBottom();
+            return;
+        }
+        int scrollY = mChatScrollView.getScrollY();
+        int viewHeight = mChatScrollView.getHeight();
+        int contentHeight = content.getBottom();
+        // Auto-follow stream only when user is within 120dp of bottom; preserves scroll if user inspected history
+        int threshold = Math.round(120 * getResources().getDisplayMetrics().density);
+        if (contentHeight - (scrollY + viewHeight) <= threshold) {
+            scrollChatToBottom();
+        }
     }
 
     public void onLoopStateChanged(boolean running, boolean pausedForTakeover, int step) {

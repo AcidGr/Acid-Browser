@@ -280,6 +280,9 @@ public class AcidSandboxTools {
 
             @Override
             public ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) {
+                if (source != ToolSource.AGENT_UI) {
+                    return new ToolExecResult("Error: shell execution via bash is restricted to in-app agent chat for security.", false, null);
+                }
                 return new ToolExecResult(host.executeBashTool(args), false, null);
             }
         });

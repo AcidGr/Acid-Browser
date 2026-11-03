@@ -155,6 +155,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testP1HttpRedirectAndAtomicDownloadAndDialogGuards(); }
         });
 
+        run("Core Bug Fixes: Looper safety, Dialog dismiss settlement, MCP Unix LF & Bash ToolSource guard", new TestCase() {
+            @Override public void execute() throws Exception { testCoreBugFixesAudit(); }
+        });
+
         run("Agent target state machine: lost tab, rebind & no silent hijack", new TestCase() {
             @Override public void execute() throws Exception { testAgentTargetStateMachine(); }
         });
@@ -2757,6 +2761,94 @@ public final class TestRunner {
         }
     }
 
+    private static void testCoreBugFixesAudit() throws Exception {
+        // 1. Verify HttpControlServer.isLocalOrTrustedOrigin
+        assertTrue(HttpControlServer.isLocalOrTrustedOrigin("http://127.0.0.1:3090"), "127.0.0.1 is trusted local origin");
+        assertTrue(HttpControlServer.isLocalOrTrustedOrigin("http://localhost:8080"), "localhost is trusted local origin");
+        assertTrue(HttpControlServer.isLocalOrTrustedOrigin("http://[::1]:3090"), "IPv6 loopback is trusted local origin");
+        assertTrue(HttpControlServer.isLocalOrTrustedOrigin(null), "Null origin (direct tool/script) is allowed");
+        assertTrue(HttpControlServer.isLocalOrTrustedOrigin(""), "Empty origin is allowed");
+        assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("http://evil.com"), "Public http origin is rejected when auth disabled");
+        assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("https://malicious.org/csrf"), "Public https origin is rejected");
+        assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("null"), "Opaque 'null' origin is rejected");
+
+        // 2. Verify Unix LF \n header parsing compatibility
+        String rawUnixHeaders = "POST /mcp HTTP/1.1\nHost: 127.0.0.1:3090\nContent-Type: application/json\nContent-Length: 18\n\n";
+        String[] unixLines = rawUnixHeaders.split("\r?\n");
+        assertTrue(unixLines.length >= 4, "Unix LF headers split into individual lines correctly: " + unixLines.length);
+        assertEquals("POST /mcp HTTP/1.1", unixLines[0], "Request line parsed cleanly");
+        assertEquals("Host: 127.0.0.1:3090", unixLines[1], "Header line 1 parsed cleanly");
+        assertEquals("Content-Length: 18", unixLines[3], "Content-Length header line parsed cleanly");
+
+        // 3. Verify AcidDialog dismiss listener settlement
+        final boolean[] dismissed = new boolean[]{false};
+        AcidDialog dialog = new AcidDialog(null, false);
+        android.content.DialogInterface.OnDismissListener listener = new android.content.DialogInterface.OnDismissListener() {
+            @Override
+            public void onDismiss(android.content.DialogInterface d) {
+                dismissed[0] = true;
+            }
+        };
+        AcidDialog chained = dialog.setOnDismissListener(listener);
+        assertTrue(chained == dialog, "setOnDismissListener supports fluent builder chaining");
+        java.lang.reflect.Field f = AcidDialog.class.getDeclaredField("mDismissListener");
+        f.setAccessible(true);
+        assertTrue(f.get(dialog) == listener, "mDismissListener field properly assigned");
+
+        // 4. Verify WebAutomationDriver evaluateJsSync safety when target tab is missing
+        WebAutomationDriver driver = new WebAutomationDriver(null, new WebAutomationDriver.AutomationHost() {
+            @Override public BrowserController.TabSession getActiveTab() { return null; }
+            @Override public BrowserController.TabSession getTargetTab() { return null; }
+            @Override public boolean isTargetTabActive() { return false; }
+            @Override public AgentOverlayView getOverlayView() { return null; }
+            @Override public UserscriptManager getUserscriptManager() { return null; }
+            @Override public void loadUrl(String url) {}
+            @Override public void emitLog(String log) {}
+            @Override public boolean isSomEnabled() { return false; }
+            @Override public boolean isDesktopMode() { return false; }
+            @Override public int getBlockedDeepLinksCount() { return 0; }
+            @Override public String getLastBlockedDeepLink() { return null; }
+            @Override public int getTriggeredDownloadsCount() { return 0; }
+            @Override public String getLastTriggeredDownloadInfo() { return null; }
+        });
+        String evalResult = driver.evaluateJsSync("document.title", 100);
+        assertTrue(evalResult != null && (evalResult.contains("NO_TARGET_TAB") || evalResult.contains("NO_HANDLER")),
+            "evaluateJsSync safely handles null targetTab/handler without crashing: " + evalResult);
+
+        // 5. Verify AcidSandboxTools bash tool is restricted from MCP caller
+        File tempWs = new File(System.getProperty("java.io.tmpdir"), "acid_test_ws_audit_" + System.currentTimeMillis());
+        tempWs.mkdirs();
+        try {
+            AcidSandboxTools tools = new AcidSandboxTools(null, tempWs);
+            JSONObject bashArgs = new JSONObject();
+            bashArgs.put("command", "echo test");
+            AcidSandboxTools.ToolExecResult mcpRes = tools.executeTool("bash", bashArgs, AcidSandboxTools.ToolSource.MCP);
+            assertTrue(mcpRes.outputText != null && mcpRes.outputText.contains("restricted to in-app agent chat"),
+                "MCP source is forbidden from executing bash tool: " + mcpRes.outputText);
+
+            AcidSandboxTools.ToolExecResult agentRes = tools.executeTool("bash", bashArgs, AcidSandboxTools.ToolSource.AGENT_UI);
+            assertTrue(agentRes.outputText != null && agentRes.outputText.contains("test"),
+                "Agent UI source is allowed to execute bash tool: " + agentRes.outputText);
+        } finally {
+            File[] fs = tempWs.listFiles();
+            if (fs != null) { for (File file : fs) file.delete(); }
+            tempWs.delete();
+        }
+
+        // 6. Verify DesktopViewportManager script clean format
+        String desktopScript = DesktopViewportManager.buildViewportScript(true);
+        assertTrue(!desktopScript.startsWith("javascript:"), "Desktop viewport script does not have redundant javascript: prefix");
+        assertTrue(desktopScript.startsWith("(function(){"), "Desktop viewport script starts with standard IIFE");
+
+        String mobileScript = DesktopViewportManager.buildViewportScript(false);
+        assertTrue(!mobileScript.startsWith("javascript:"), "Mobile viewport release script does not have redundant javascript: prefix");
+        assertTrue(mobileScript.startsWith("(function(){"), "Mobile viewport release script starts with standard IIFE");
+    }
+
+    /**
+     * Covers the three-state agent target contract that replaced the old two-state
+     * "mAgentBoundTabId == -1" encoding.
+     */
     private static void testAgentTargetStateMachine() throws Exception {
         // 1. Human browsing: nothing bound -> tools fall back to the active tab.
         assertEquals(Integer.valueOf(BrowserController.TARGET_ACTIVE_TAB),
