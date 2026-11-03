@@ -601,8 +601,12 @@ public class AcidSandboxTools {
                         }
                     } else if ("switch".equals(sub)) {
                         int targetId = args.optInt("tab_id", 1);
-                        mController.switchToTab(targetId);
-                        mController.setAgentBoundTabId(targetId);
+                        // Only bind when the switch actually happened. Binding a non-existent id
+                        // used to leave the agent pointed at a phantom tab; now it keeps the
+                        // previous binding (or the lost state) so the failure stays visible.
+                        if (mController.switchToTab(targetId)) {
+                            mController.setAgentBoundTabId(targetId);
+                        }
                     } else if ("close".equals(sub)) {
                         mController.closeTab(args.optInt("tab_id", 1));
                     }

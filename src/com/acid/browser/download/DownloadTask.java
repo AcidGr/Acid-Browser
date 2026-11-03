@@ -117,10 +117,37 @@ public class DownloadTask {
         this.finalUrl = this.url;
         this.fileName = (fileName != null && !fileName.trim().isEmpty()) ? fileName.trim() : "file";
         this.mimeType = mimeType != null ? mimeType : "";
-        this.destinationFile = new File(destinationDir, this.fileName);
-        this.checkpointFile = new File(destinationDir, this.fileName + ".part.cfg");
+        this.destinationFile = resolveInside(destinationDir, this.fileName);
+        this.checkpointFile = resolveInside(destinationDir, this.fileName + ".part.cfg");
         this.requestHeaders = headers != null ? new HashMap<String, String>(headers) : new HashMap<String, String>();
         this.createdAt = System.currentTimeMillis();
+    }
+
+    /**
+     * Last line of defence against a name that escapes {@code dir}.
+     *
+     * <p>Callers are expected to pass an already-sanitised leaf name (see
+     * {@code DownloadCoordinator.sanitizeDownloadFileName}), but this constructor is reached from
+     * several entry points, so it re-verifies instead of trusting them. A name whose canonical
+     * path falls outside {@code dir} is reduced to its leaf component.
+     */
+    private static File resolveInside(File dir, String name) {
+        File candidate = new File(dir, name);
+        try {
+            String basePath = dir.getCanonicalPath();
+            String candidatePath = candidate.getCanonicalPath();
+            if (candidatePath.equals(basePath) || candidatePath.startsWith(basePath + File.separator)) {
+                return candidate;
+            }
+        } catch (Exception ignored) {
+            // Canonicalisation failed (unusual filesystem): fall through to the leaf fallback.
+        }
+        String leaf = name;
+        int slash = Math.max(leaf.lastIndexOf('/'), leaf.lastIndexOf('\\'));
+        if (slash >= 0) leaf = leaf.substring(slash + 1);
+        leaf = leaf.replace(".", "");
+        if (leaf.trim().isEmpty()) leaf = "download";
+        return new File(dir, leaf);
     }
 
     public synchronized void setChunks(List<DownloadChunk> newChunks) {

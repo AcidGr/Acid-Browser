@@ -74,6 +74,8 @@ public class DownloadsSheet extends AcidBottomSheetView {
     private final DownloadCoordinator mDownloads;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private Runnable mProgressPoller = null;
+    /** Interval between download-status polls while the sheet is open. */
+    private static final long PROGRESS_POLL_INTERVAL_MS = 500L;
 
     private int mSelectedCategoryIndex = 0;
     private String mSearchKeyword = "";
@@ -180,24 +182,28 @@ public class DownloadsSheet extends AcidBottomSheetView {
                     stopProgressPolling();
                     return;
                 }
+                // Self-scheduling poll: the next tick is armed here, before the sync is requested,
+                // so it no longer depends on the callback arriving. DownloadCoordinator drops the
+                // callback when a sync is already in flight (guarding against stacked
+                // DownloadManager passes), and the old callback-driven chain stopped forever when
+                // that happened — typically right as a download completed, freezing the list.
+                mMainHandler.postDelayed(mProgressPoller, PROGRESS_POLL_INTERVAL_MS);
                 mDownloads.syncDownloadStatusAsync(new DownloadCoordinator.DownloadSyncCallback() {
                     @Override
                     public void onDownloadSyncDone(boolean anyActive) {
-                        if (!isShowing()) {
-                            stopProgressPolling();
-                            return;
-                        }
+                        if (!isShowing()) return;
                         refreshDownloadProgressInPlace();
-                        if (anyActive) {
-                            mMainHandler.postDelayed(mProgressPoller, 500);
-                        } else {
+                        if (!anyActive) {
+                            // Nothing running any more: do one full rebuild so finished rows pick
+                            // up their final state, then let the timer wind down.
                             updateDownloadListRows();
+                            stopProgressPolling();
                         }
                     }
                 });
             }
         };
-        mMainHandler.postDelayed(mProgressPoller, 500);
+        mMainHandler.postDelayed(mProgressPoller, PROGRESS_POLL_INTERVAL_MS);
     }
 
     private void stopProgressPolling() {
