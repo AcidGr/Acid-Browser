@@ -2,6 +2,7 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Looper;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -198,6 +199,15 @@ public class HistoryRepository {
         }
     }
 
+    private static boolean isMainThread() {
+        try {
+            Looper main = Looper.getMainLooper();
+            return main != null && Looper.myLooper() == main;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     public synchronized void recordHistory(String url, String title, boolean incognitoMode) {
         if (incognitoMode) return;
         if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)
@@ -239,7 +249,18 @@ public class HistoryRepository {
         prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
 
         if (mHistoryJsonFile != null) {
-            saveHistoryToJsonFile(next);
+            if (isMainThread()) {
+                final JSONArray snapshot = next;
+                AcidAsync.run(new AcidAsync.Task<Void>() {
+                    @Override
+                    public Void execute() throws Exception {
+                        saveHistoryToJsonFile(snapshot);
+                        return null;
+                    }
+                }, null);
+            } else {
+                saveHistoryToJsonFile(next);
+            }
         }
 
         dispatchCallback(new Runnable() {

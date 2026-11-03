@@ -48,11 +48,27 @@ public class WebAutomationDriver {
 
     private final Context mContext;
     private final AutomationHost mHost;
-    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+    private final Handler mMainHandler;
 
     public WebAutomationDriver(Context context, AutomationHost host) {
         mContext = context;
         mHost = host;
+        Handler h = null;
+        try {
+            if (Looper.getMainLooper() != null) {
+                h = new Handler(Looper.getMainLooper());
+            }
+        } catch (Throwable ignored) {}
+        mMainHandler = h;
+    }
+
+    private static boolean isMainLooper() {
+        try {
+            Looper main = Looper.getMainLooper();
+            return main != null && Looper.myLooper() == main;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private String unescapeEvaluateResult(String raw) {
@@ -71,7 +87,7 @@ public class WebAutomationDriver {
 
     public String evaluateJsSync(final String jsExpr, long timeoutMs) {
         // Enforce thread contract: never allow blocking latch.await on Android's UI message loop
-        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+        if (isMainLooper()) {
             Log.w(TAG, "evaluateJsSync called directly on MainLooper; dispatching asynchronously without latch await to prevent UI deadlock");
             BrowserController.TabSession targetTab = mHost.getTargetTab();
             if (targetTab == null || targetTab.webView == null) {
@@ -331,7 +347,7 @@ public class WebAutomationDriver {
             err.put("hint", "页面可能仍在加载中，请稍候重试或调用 browser(action='wait', condition='stable') 等待稳定");
 
             final JSONObject partial = new JSONObject();
-            if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+            if (isMainLooper()) {
                 try {
                     BrowserController.TabSession tab = mHost.getTargetTab();
                     if (tab != null && tab.webView != null) {
@@ -393,7 +409,7 @@ public class WebAutomationDriver {
                 if (um != null) {
                     final String bridgeJs = um.getBridgeJs();
                     if (bridgeJs != null && !bridgeJs.isEmpty()) {
-                        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+                        if (isMainLooper()) {
                             BrowserController.TabSession tab = mHost.getTargetTab();
                             if (tab != null && tab.webView != null) {
                                 tab.webView.evaluateJavascript(bridgeJs, null);
@@ -697,7 +713,7 @@ public class WebAutomationDriver {
     }
 
     public JSONObject navigateSync(final String url, long waitSettleMs) {
-        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+        if (isMainLooper()) {
             Log.w(TAG, "navigateSync called directly on MainLooper; dispatching loadUrl without blocking wait to prevent UI deadlock");
             mHost.loadUrl(url);
             mHost.emitLog("[NAV] Navigated -> " + url);
@@ -779,7 +795,7 @@ public class WebAutomationDriver {
                 final AtomicReference<Float> viewXRef = new AtomicReference<Float>(0f);
                 final AtomicReference<Float> viewYRef = new AtomicReference<Float>(0f);
 
-                if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+                if (isMainLooper()) {
                     BrowserController.TabSession activeTab = mHost.getTargetTab();
                     if (activeTab != null) {
                         WebView wv = activeTab.webView;
@@ -927,7 +943,7 @@ public class WebAutomationDriver {
 
     public JSONObject clickCoordinateSync(final float viewX, final float viewY) {
         final boolean isForeground = mHost.isTargetTabActive();
-        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+        if (isMainLooper()) {
             BrowserController.TabSession targetTab = mHost.getTargetTab();
             if (targetTab != null && isForeground) {
                 AgentOverlayView overlay = mHost.getOverlayView();
@@ -1080,22 +1096,30 @@ public class WebAutomationDriver {
     }
 
     public String captureScreenshotBase64Sync(final int jpegQuality) {
-        if (Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()) {
+        if (isMainLooper()) {
+            Bitmap bmp = null;
             try {
                 BrowserController.TabSession activeTab = mHost.getTargetTab();
                 if (activeTab != null && activeTab.webView != null && activeTab.webView.getWidth() > 0 && activeTab.webView.getHeight() > 0) {
                     WebView wv = activeTab.webView;
-                    Bitmap bmp = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);
+                    bmp = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);
                     Canvas canvas = new Canvas(bmp);
                     wv.draw(canvas);
                     ByteArrayOutputStream baos = new ByteArrayOutputStream();
                     bmp.compress(Bitmap.CompressFormat.JPEG, jpegQuality, baos);
-                    bmp.recycle();
                     return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
                 }
-            } catch (Exception e) {
-                Log.e(TAG, "Screenshot error on main thread", e);
+            } catch (Throwable t) {
+                Log.e(TAG, "Screenshot error on main thread", t);
+            } finally {
+                if (bmp != null && !bmp.isRecycled()) {
+                    try { bmp.recycle(); } catch (Throwable ignored) {}
+                }
             }
+            return null;
+        }
+
+        if (mMainHandler == null) {
             return null;
         }
 
@@ -1104,21 +1128,24 @@ public class WebAutomationDriver {
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
+                Bitmap bmp = null;
                 try {
                     BrowserController.TabSession activeTab = mHost.getTargetTab();
-                    if (activeTab != null && activeTab.webView.getWidth() > 0 && activeTab.webView.getHeight() > 0) {
+                    if (activeTab != null && activeTab.webView != null && activeTab.webView.getWidth() > 0 && activeTab.webView.getHeight() > 0) {
                         WebView wv = activeTab.webView;
-                        Bitmap bmp = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);
+                        bmp = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);
                         Canvas canvas = new Canvas(bmp);
                         wv.draw(canvas);
                         ByteArrayOutputStream baos = new ByteArrayOutputStream();
                         bmp.compress(Bitmap.CompressFormat.JPEG, jpegQuality, baos);
-                        bmp.recycle();
                         b64Ref.set(Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP));
                     }
-                } catch (Exception e) {
-                    Log.e(TAG, "Screenshot error", e);
+                } catch (Throwable t) {
+                    Log.e(TAG, "Screenshot error", t);
                 } finally {
+                    if (bmp != null && !bmp.isRecycled()) {
+                        try { bmp.recycle(); } catch (Throwable ignored) {}
+                    }
                     latch.countDown();
                 }
             }

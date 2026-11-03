@@ -236,11 +236,12 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         }
     }
 
-    private static class AgentCardBorderDrawable extends Drawable {
+    private static class AgentCardBorderDrawable extends Drawable implements Runnable {
         private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF mBounds = new RectF();
         private final float mCornerRadius;
         private final float mStrokeWidth;
+        private static final long FRAME_INTERVAL_MS = 50L; // 20 FPS breathing pulse prevents 120Hz CPU/GPU overheating loop
 
         public AgentCardBorderDrawable(float cornerRadius, float strokeWidth) {
             mCornerRadius = cornerRadius;
@@ -261,7 +262,29 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
             float half = mStrokeWidth / 2f;
             mBounds.set(r.left + half, r.top + half, r.right - half, r.bottom - half);
             canvas.drawRoundRect(mBounds, mCornerRadius, mCornerRadius, mPaint);
-            invalidateSelf();
+
+            if (isVisible()) {
+                unscheduleSelf(this);
+                scheduleSelf(this, SystemClock.uptimeMillis() + FRAME_INTERVAL_MS);
+            }
+        }
+
+        @Override
+        public void run() {
+            if (isVisible()) {
+                invalidateSelf();
+            }
+        }
+
+        @Override
+        public boolean setVisible(boolean visible, boolean restart) {
+            boolean changed = super.setVisible(visible, restart);
+            if (!visible) {
+                unscheduleSelf(this);
+            } else if (changed || restart) {
+                scheduleSelf(this, SystemClock.uptimeMillis() + FRAME_INTERVAL_MS);
+            }
+            return changed;
         }
 
         @Override
