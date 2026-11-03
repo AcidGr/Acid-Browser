@@ -135,6 +135,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testP0SecurityAndConcurrencyFixes(); }
         });
 
+        run("P0 UX Hardening: Agent stop/resend alignment, history self-healing & MCP OOM caps", new TestCase() {
+            @Override public void execute() throws Exception { testP0UxHardeningAndOomCaps(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2311,6 +2315,146 @@ public final class TestRunner {
                 }
             }
             tmpDir.delete();
+        }
+    }
+
+    private static void testP0UxHardeningAndOomCaps() throws Exception {
+        // 1. Verify AcidAgentLoop stop/resend alignment & history self-healing
+        AcidSessionStore.AgentSession session = new AcidSessionStore.AgentSession();
+        session.id = "s_test_alignment";
+
+        // Conversation history with broken sequence: assistant declared tool_calls,
+        // user clicked stop and sent new message before tool response arrived
+        JSONObject user1 = new JSONObject();
+        user1.put("role", "user");
+        user1.put("content", "search weather in Tokyo");
+        session.apiMessages.add(user1);
+
+        JSONObject asst1 = new JSONObject();
+        asst1.put("role", "assistant");
+        org.json.JSONArray tcs1 = new org.json.JSONArray();
+        JSONObject tc0 = new JSONObject();
+        tc0.put("id", "call_tokyo_0");
+        JSONObject fn0 = new JSONObject();
+        fn0.put("name", "browser");
+        tc0.put("function", fn0);
+        tcs1.put(tc0);
+        asst1.put("tool_calls", tcs1);
+        session.apiMessages.add(asst1);
+
+        // Immediate user message (would previously cause HTTP 400 because tool response was missing)
+        JSONObject user2 = new JSONObject();
+        user2.put("role", "user");
+        user2.put("content", "stop that, search Kyoto instead");
+        session.apiMessages.add(user2);
+
+        // Dangling / out-of-order tool message appended by delayed thread
+        JSONObject delayedTool = new JSONObject();
+        delayedTool.put("role", "tool");
+        delayedTool.put("tool_call_id", "call_tokyo_0");
+        delayedTool.put("name", "browser");
+        delayedTool.put("content", "Tokyo weather: 18C");
+        session.apiMessages.add(delayedTool);
+
+        // Also add an orphaned tool message
+        JSONObject orphanedTool = new JSONObject();
+        orphanedTool.put("role", "tool");
+        orphanedTool.put("tool_call_id", "call_ghost_999");
+        orphanedTool.put("name", "browser");
+        orphanedTool.put("content", "ghost output");
+        session.apiMessages.add(orphanedTool);
+
+        // Run self-healing and alignment
+        AcidAgentLoop.sanitizeAndAlignApiMessages(session, null);
+
+        // Expected cleaned sequence:
+        // 0: user1
+        // 1: asst1
+        // 2: tool (call_tokyo_0) inserted BEFORE user2
+        // 3: user2
+        // (delayed tool and orphaned tool after user2 are removed/pruned)
+        assertEquals(4, session.apiMessages.size(), "Sanitized messages size is exactly 4");
+        assertEquals("user", session.apiMessages.get(0).optString("role"), "Msg 0 is user");
+        assertEquals("assistant", session.apiMessages.get(1).optString("role"), "Msg 1 is assistant with tool_calls");
+        assertEquals("tool", session.apiMessages.get(2).optString("role"), "Msg 2 is aligned tool response");
+        assertEquals("call_tokyo_0", session.apiMessages.get(2).optString("tool_call_id"), "Tool call id matches");
+        assertEquals("user", session.apiMessages.get(3).optString("role"), "Msg 3 is user prompt");
+        assertEquals("stop that, search Kyoto instead", session.apiMessages.get(3).optString("content"), "User 2 content preserved");
+
+        // 2. Multi-call partial completion self-healing
+        AcidSessionStore.AgentSession sessionMulti = new AcidSessionStore.AgentSession();
+        JSONObject asstMulti = new JSONObject();
+        asstMulti.put("role", "assistant");
+        org.json.JSONArray tcsMulti = new org.json.JSONArray();
+        JSONObject cA = new JSONObject(); cA.put("id", "c_A"); tcsMulti.put(cA);
+        JSONObject cB = new JSONObject(); cB.put("id", "c_B"); tcsMulti.put(cB);
+        asstMulti.put("tool_calls", tcsMulti);
+        sessionMulti.apiMessages.add(asstMulti);
+
+        // Only c_A finished before user interrupted
+        JSONObject toolA = new JSONObject();
+        toolA.put("role", "tool");
+        toolA.put("tool_call_id", "c_A");
+        toolA.put("content", "result A");
+        sessionMulti.apiMessages.add(toolA);
+
+        JSONObject userNext = new JSONObject();
+        userNext.put("role", "user");
+        userNext.put("content", "next task");
+        sessionMulti.apiMessages.add(userNext);
+
+        AcidAgentLoop.sanitizeAndAlignApiMessages(sessionMulti, null);
+        assertEquals(4, sessionMulti.apiMessages.size(), "Multi-call aligned to 4 items");
+        assertEquals("assistant", sessionMulti.apiMessages.get(0).optString("role"), "Multi-call role 0 is assistant");
+        assertEquals("c_A", sessionMulti.apiMessages.get(1).optString("tool_call_id"), "Multi-call 1 has c_A");
+        assertEquals("c_B", sessionMulti.apiMessages.get(2).optString("tool_call_id"), "Multi-call 2 has synthesized c_B");
+        assertEquals("user", sessionMulti.apiMessages.get(3).optString("role"), "Multi-call 3 is user prompt");
+
+        // 3. HttpControlServer OOM boundary protection (MAX_HEADER_BYTES & MAX_BODY_BYTES)
+        assertTrue(HttpControlServer.MAX_HEADER_BYTES == 64 * 1024, "MAX_HEADER_BYTES is 64KB");
+        assertTrue(HttpControlServer.MAX_BODY_BYTES == 10 * 1024 * 1024, "MAX_BODY_BYTES is 10MB");
+
+        int testPort = 13098;
+        HttpControlServer server = new HttpControlServer(null, null, testPort);
+        server.start();
+        try {
+            Thread.sleep(150);
+
+            // A. Content-Length exceeds MAX_BODY_BYTES -> 413 Payload Too Large
+            Socket sBody = new Socket("127.0.0.1", testPort);
+            sBody.setSoTimeout(3000);
+            OutputStream osBody = sBody.getOutputStream();
+            java.io.InputStream isBody = sBody.getInputStream();
+            String reqBody = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 50000000\r\n\r\n";
+            osBody.write(reqBody.getBytes(StandardCharsets.US_ASCII));
+            osBody.flush();
+
+            byte[] respBuf = new byte[1024];
+            int nBody = isBody.read(respBuf);
+            assertTrue(nBody > 0, "Server responded to oversized Content-Length");
+            String respBodyStr = new String(respBuf, 0, nBody, StandardCharsets.UTF_8);
+            assertTrue(respBodyStr.contains("413 Payload Too Large"), "Returns 413 for oversized Content-Length");
+            sBody.close();
+
+            // B. Header exceeds MAX_HEADER_BYTES -> 431 Request Header Fields Too Large
+            Socket sHeader = new Socket("127.0.0.1", testPort);
+            sHeader.setSoTimeout(3000);
+            OutputStream osHeader = sHeader.getOutputStream();
+            java.io.InputStream isHeader = sHeader.getInputStream();
+            osHeader.write("GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Padding: ".getBytes(StandardCharsets.US_ASCII));
+            byte[] padding = new byte[65 * 1024];
+            for (int p = 0; p < padding.length; p++) padding[p] = 'x';
+            osHeader.write(padding);
+            osHeader.write("\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+            osHeader.flush();
+
+            int nHeader = isHeader.read(respBuf);
+            assertTrue(nHeader > 0, "Server responded to oversized Header");
+            String respHeaderStr = new String(respBuf, 0, nHeader, StandardCharsets.UTF_8);
+            assertTrue(respHeaderStr.contains("431 Request Header Fields Too Large"), "Returns 431 for oversized header");
+            sHeader.close();
+        } finally {
+            server.stop();
         }
     }
 }

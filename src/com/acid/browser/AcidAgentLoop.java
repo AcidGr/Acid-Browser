@@ -16,6 +16,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -197,6 +198,7 @@ public class AcidAgentLoop {
         AcidSessionStore.AgentSession active = mSessionStore != null ? mSessionStore.getActiveSession() : null;
         if (active != null) {
             closePendingRunningUiItems(active, "[任务已由用户手动停止]");
+            sanitizeAndAlignApiMessages(active, mSessionStore);
         }
 
         mMainHandler.post(new Runnable() {
@@ -270,6 +272,16 @@ public class AcidAgentLoop {
             addErrorItem("Agent 正在运行中，请先点击停止按钮中断当前任务。");
             return;
         }
+
+        // Wait briefly for any previous worker thread to finish winding down
+        if (mWorkerThread != null && mWorkerThread.isAlive() && Thread.currentThread() != mWorkerThread) {
+            try {
+                mWorkerThread.join(350);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
         AcidModelStore.ConfiguredProvider activeProvider = mModelStore.getActiveProvider();
         AcidModelStore.ModelEntry activeModel = mModelStore.getActiveModel();
         if (activeProvider == null || activeModel == null) {
@@ -295,6 +307,8 @@ public class AcidAgentLoop {
         }
 
         final AcidSessionStore.AgentSession session = mSessionStore.getActiveSession();
+        // Ensure any dangling tool_calls from previous turns are fully closed before inserting new user message
+        sanitizeAndAlignApiMessages(session, mSessionStore);
         mSessionStore.updateTitleIfDefault(userPrompt);
 
         // Create and display User UI bubble
@@ -480,6 +494,10 @@ public class AcidAgentLoop {
                         // Execute tool
                         AcidSandboxTools.ToolExecResult execRes = mSandboxTools.executeTool(toolName, parsedArgs);
 
+                        if (mStopRequested || mRunGeneration.get() != runGen) {
+                            break;
+                        }
+
                         // Update Tool Call UI bubble with complete result
                         toolUiItem.isRunning = false;
                         toolUiItem.toolResult = execRes.outputText;
@@ -504,7 +522,7 @@ public class AcidAgentLoop {
                         }
                     }
                 } finally {
-                    if (executedToolCount < toolCalls.length()) {
+                    if (mRunGeneration.get() == runGen && executedToolCount < toolCalls.length()) {
                         String skipReason = takeoverTriggered
                             ? "[Execution paused: previous tool requested user takeover]"
                             : (mStopRequested ? "[Execution stopped: task stopped by user]" : "[Execution skipped]");
@@ -598,7 +616,109 @@ public class AcidAgentLoop {
         }
     }
 
+    /**
+     * Enforces strict OpenAI/ReAct protocol alignment across the entire conversation history:
+     * - Every 'assistant' message that declares 'tool_calls' MUST be followed by corresponding
+     *   role='tool' responses for each declared tool call before any subsequent user or assistant message.
+     * - Orphaned or out-of-order 'tool' responses (not preceded by assistant with matching tool_call_id)
+     *   are pruned to avoid 400 rejection.
+     * - Any dangling or unclosed 'tool_calls' interrupted by user stoppage or task abort are automatically
+     *   healed and closed with synthetic tool messages before the next user prompt is dispatched.
+     */
+    public static void sanitizeAndAlignApiMessages(
+        AcidSessionStore.AgentSession session,
+        AcidSessionStore sessionStore
+    ) {
+        if (session == null) return;
+        Object lock = sessionStore != null ? sessionStore : session;
+        synchronized (lock) {
+            if (session.apiMessages == null || session.apiMessages.isEmpty()) return;
+            List<JSONObject> cleaned = new ArrayList<JSONObject>();
+            int i = 0;
+            int n = session.apiMessages.size();
+            while (i < n) {
+                JSONObject msg = session.apiMessages.get(i);
+                if (msg == null) {
+                    i++;
+                    continue;
+                }
+                String role = msg.optString("role", "");
+                if ("assistant".equals(role) && msg.has("tool_calls") && !msg.isNull("tool_calls")) {
+                    JSONArray toolCalls = msg.optJSONArray("tool_calls");
+                    cleaned.add(msg);
+                    i++;
+                    if (toolCalls != null && toolCalls.length() > 0) {
+                        Map<String, JSONObject> expectedCalls = new LinkedHashMap<String, JSONObject>();
+                        for (int tcIdx = 0; tcIdx < toolCalls.length(); tcIdx++) {
+                            JSONObject tc = toolCalls.optJSONObject(tcIdx);
+                            if (tc != null) {
+                                String callId = tc.optString("id", "call_" + tcIdx);
+                                expectedCalls.put(callId, tc);
+                            }
+                        }
+
+                        Map<String, JSONObject> receivedResponses = new LinkedHashMap<String, JSONObject>();
+                        while (i < n) {
+                            JSONObject nextMsg = session.apiMessages.get(i);
+                            if (nextMsg == null) {
+                                i++;
+                                continue;
+                            }
+                            if ("tool".equals(nextMsg.optString("role", ""))) {
+                                String tcId = nextMsg.optString("tool_call_id", "");
+                                if (expectedCalls.containsKey(tcId)) {
+                                    receivedResponses.put(tcId, nextMsg);
+                                    i++;
+                                } else {
+                                    // Orphaned or unknown tool response; discard
+                                    i++;
+                                }
+                            } else {
+                                // Hit a non-tool message (user, assistant, system) before all tool_calls fulfilled!
+                                break;
+                            }
+                        }
+
+                        for (Map.Entry<String, JSONObject> entry : expectedCalls.entrySet()) {
+                            String tcId = entry.getKey();
+                            JSONObject tc = entry.getValue();
+                            JSONObject existingResp = receivedResponses.get(tcId);
+                            if (existingResp != null) {
+                                cleaned.add(existingResp);
+                            } else {
+                                JSONObject fn = tc != null ? tc.optJSONObject("function") : null;
+                                String fnName = fn != null ? fn.optString("name", "tool") : "tool";
+                                JSONObject placeholder = new JSONObject();
+                                try {
+                                    placeholder.put("role", "tool");
+                                    placeholder.put("tool_call_id", tcId);
+                                    placeholder.put("name", fnName);
+                                    placeholder.put("content", "[任务已中断或停止]");
+                                } catch (Exception ignored) {}
+                                cleaned.add(placeholder);
+                            }
+                        }
+                    }
+                } else if ("tool".equals(role)) {
+                    // Stray tool message without preceding assistant tool_calls; discard
+                    i++;
+                } else {
+                    cleaned.add(msg);
+                    i++;
+                }
+            }
+
+            session.apiMessages.clear();
+            session.apiMessages.addAll(cleaned);
+            if (sessionStore != null) {
+                sessionStore.saveSession(session);
+            }
+        }
+    }
+
     private JSONArray buildPrunedMessagesForRequest(AcidSessionStore.AgentSession session) throws Exception {
+        sanitizeAndAlignApiMessages(session, mSessionStore);
+
         JSONArray arr = new JSONArray();
         JSONObject sys = new JSONObject();
         sys.put("role", "system");

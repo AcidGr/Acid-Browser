@@ -44,6 +44,8 @@ public class HttpControlServer {
     public static final String MCP_PROTOCOL_VERSION = "2024-11-05";
     public static final String MCP_SERVER_NAME = "AcidBrowser";
     public static final String MCP_SERVER_VERSION = BuildInfo.VERSION_NAME;
+    public static final int MAX_HEADER_BYTES = 64 * 1024; // 64 KB header limit
+    public static final int MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB body limit
 
     private final BrowserController mController;
     private final AcidSandboxTools mSandboxTools;
@@ -96,6 +98,14 @@ public class HttpControlServer {
         mController = controller;
         mSandboxTools = sandboxTools != null ? sandboxTools : new AcidSandboxTools(controller);
         mPort = port;
+    }
+
+    private void emitLog(String msg) {
+        if (mController != null) {
+            mController.emitLog(msg);
+        } else {
+            Log.i(TAG, msg);
+        }
     }
 
     public boolean isRunning() {
@@ -153,7 +163,7 @@ public class HttpControlServer {
                     mLanBound = lanEnabled;
                     InetAddress bindAddr = lanEnabled ? InetAddress.getByName("0.0.0.0") : InetAddress.getByName("127.0.0.1");
                     mServerSocket = new ServerSocket(mPort, 32, bindAddr);
-                    mController.emitLog("[MCP] Acid MCP Server listening on " + (lanEnabled ? "0.0.0.0" : "127.0.0.1") + ":" + mPort
+                    emitLog("[MCP] Acid MCP Server listening on " + (lanEnabled ? "0.0.0.0" : "127.0.0.1") + ":" + mPort
                         + (lanEnabled ? " (LAN enabled)" : " (Localhost only)"));
                     while (mRunning) {
                         final Socket client = mServerSocket.accept();
@@ -194,7 +204,7 @@ public class HttpControlServer {
             }
         }
         mSseSessions.clear();
-        mController.emitLog("[MCP] Acid MCP Server stopped (port " + mPort + " released)");
+        emitLog("[MCP] Acid MCP Server stopped (port " + mPort + " released)");
     }
 
     private void handleClient(Socket socket) {
@@ -208,6 +218,11 @@ public class HttpControlServer {
             int consecutiveNewlines = 0;
             while ((b = is.read()) != -1) {
                 headerBuffer.write(b);
+                if (headerBuffer.size() > MAX_HEADER_BYTES) {
+                    sendJsonResponse(os, 431, new JSONObject().put("error", "Request Header Fields Too Large"));
+                    socket.close();
+                    return;
+                }
                 if (b == '\n') {
                     consecutiveNewlines++;
                     if (consecutiveNewlines == 2) break;
@@ -297,13 +312,30 @@ public class HttpControlServer {
                 } catch (Exception e) {
                     Log.w(TAG, "Ignoring non-numeric Content-Length: " + headers.get("content-length"), e);
                 }
+                if (len > MAX_BODY_BYTES) {
+                    sendJsonResponse(os, 413, new JSONObject()
+                        .put("jsonrpc", "2.0")
+                        .put("error", new JSONObject()
+                            .put("code", -32000)
+                            .put("message", "Payload Too Large: Content-Length exceeds " + (MAX_BODY_BYTES / (1024 * 1024)) + "MB limit (" + len + " bytes)")
+                        ));
+                    socket.close();
+                    return;
+                }
                 if (len > 0) {
-                    bodyBytes = new byte[len];
-                    int readTotal = 0;
-                    while (readTotal < len) {
-                        int r = is.read(bodyBytes, readTotal, len - readTotal);
-                        if (r < 0) break;
-                        readTotal += r;
+                    try {
+                        bodyBytes = new byte[len];
+                        int readTotal = 0;
+                        while (readTotal < len) {
+                            int r = is.read(bodyBytes, readTotal, len - readTotal);
+                            if (r < 0) break;
+                            readTotal += r;
+                        }
+                    } catch (OutOfMemoryError oom) {
+                        Log.e(TAG, "OOM while allocating " + len + " bytes for request body", oom);
+                        sendJsonResponse(os, 500, new JSONObject().put("error", "Server Out of Memory"));
+                        socket.close();
+                        return;
                     }
                 }
             }
@@ -384,7 +416,18 @@ public class HttpControlServer {
 
     private void sendJsonResponse(OutputStream os, int statusCode, JSONObject json) throws Exception {
         byte[] payload = json.toString().getBytes(StandardCharsets.UTF_8);
-        String statusText = (statusCode == 200) ? "OK" : ((statusCode == 404) ? "Not Found" : "Internal Error");
+        String statusText;
+        switch (statusCode) {
+            case 200: statusText = "OK"; break;
+            case 202: statusText = "Accepted"; break;
+            case 204: statusText = "No Content"; break;
+            case 400: statusText = "Bad Request"; break;
+            case 401: statusText = "Unauthorized"; break;
+            case 404: statusText = "Not Found"; break;
+            case 413: statusText = "Payload Too Large"; break;
+            case 431: statusText = "Request Header Fields Too Large"; break;
+            default: statusText = (statusCode >= 500) ? "Internal Server Error" : "Error"; break;
+        }
         String headers = "HTTP/1.1 " + statusCode + " " + statusText + "\r\n" +
             "Content-Type: application/json; charset=utf-8\r\n" +
             "Content-Length: " + payload.length + "\r\n" +
@@ -439,7 +482,7 @@ public class HttpControlServer {
         String sessionId = "mcp_session_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 100000);
         SseSession session = new SseSession(sessionId, os, socket);
         mSseSessions.put(sessionId, session);
-        mController.emitLog("[MCP] SSE Client connected (session: " + sessionId + ")");
+        emitLog("[MCP] SSE Client connected (session: " + sessionId + ")");
 
         String sseHeaders = "HTTP/1.1 200 OK\r\n" +
             "Content-Type: text/event-stream; charset=utf-8\r\n" +
@@ -466,7 +509,7 @@ public class HttpControlServer {
             try { socket.close(); } catch (Exception e) {
                 Log.w(TAG, "Failed to close SSE socket for session " + sessionId, e);
             }
-            mController.emitLog("[MCP] SSE Client disconnected (session: " + sessionId + ")");
+            emitLog("[MCP] SSE Client disconnected (session: " + sessionId + ")");
         }
     }
 
