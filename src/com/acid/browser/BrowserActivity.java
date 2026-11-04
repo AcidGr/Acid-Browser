@@ -117,6 +117,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private boolean mIsFullscreenMode = false;
     private FrameLayout mBtnExitFullscreen;
     private boolean mSyncingHotReload = false;
+    private volatile String mLastAgentActivitySummary = "";
 
     private BroadcastReceiver mDownloadReceiver;
 
@@ -239,7 +240,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     }
                 }
                 mWasRunning = running;
+                if (!running) {
+                    mLastAgentActivitySummary = "";
+                }
                 updateTopAgentButton(running, pausedForTakeover);
+                if (mController != null) {
+                    onModeChanged(mController.isDesktopMode(), mController.getControlMode(), mController.isSomEnabled());
+                }
             }
 
             @Override
@@ -254,12 +261,22 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (mAgentFloatingView != null) {
                     mAgentFloatingView.appendUiMessageItemView(item, true);
                 }
+                String s = formatAgentActivitySummary(item);
+                if (!s.isEmpty()) {
+                    mLastAgentActivitySummary = s;
+                    updateTakeoverBannerLive();
+                }
             }
 
             @Override
             public void onUiItemUpdated(AcidSessionStore.UiMessageItem item) {
                 if (mAgentFloatingView != null) {
                     mAgentFloatingView.updateUiMessageItem(item);
+                }
+                String s = formatAgentActivitySummary(item);
+                if (!s.isEmpty()) {
+                    mLastAgentActivitySummary = s;
+                    updateTakeoverBannerLive();
                 }
             }
 
@@ -1028,6 +1045,18 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mAgentLoop.resumeFromTakeover();
                     return;
                 }
+                if (cur == AgentOverlayView.MODE_AGENT) {
+                    boolean isDrivingCurrent = mController.isAgentDrivingCurrentTab();
+                    if (!isDrivingCurrent) {
+                        int boundTabId = mController.getAgentBoundTabId();
+                        if (boundTabId > 0) {
+                            mController.switchToTab(boundTabId);
+                        }
+                        return;
+                    }
+                    mController.setControlMode(AgentOverlayView.MODE_HUMAN, "");
+                    return;
+                }
                 int next = (cur == AgentOverlayView.MODE_AGENT) ? AgentOverlayView.MODE_HUMAN : AgentOverlayView.MODE_AGENT;
                 mController.setControlMode(next, "");
             }
@@ -1518,6 +1547,59 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
     }
 
+    private static String cleanSingleLine(String text) {
+        if (text == null) return "";
+        String s = text.replace('\r', ' ').replace('\n', ' ').trim();
+        return s.replaceAll("\\s+", " ");
+    }
+
+    private String formatAgentActivitySummary(AcidSessionStore.UiMessageItem item) {
+        if (item == null) return "";
+        if (AcidSessionStore.TYPE_TOOL.equals(item.type)) {
+            String s = item.toolSummary;
+            if (s == null || s.trim().isEmpty()) s = item.toolName;
+            return "[工具] " + (s != null ? s.trim() : "");
+        }
+        if (AcidSessionStore.TYPE_THINKING.equals(item.type)) {
+            String t = cleanSingleLine(item.text);
+            if (t.isEmpty()) return "思考中...";
+            if (t.length() > 34) t = t.substring(0, 32) + "...";
+            return "思考: " + t;
+        }
+        if (AcidSessionStore.TYPE_ASSISTANT.equals(item.type)) {
+            String t = cleanSingleLine(item.text);
+            if (t.isEmpty()) return "正在回答...";
+            if (t.length() > 34) t = t.substring(0, 32) + "...";
+            return "回答: " + t;
+        }
+        if (AcidSessionStore.TYPE_ERROR.equals(item.type)) {
+            String t = cleanSingleLine(item.text);
+            if (t.length() > 34) t = t.substring(0, 32) + "...";
+            return "异常: " + t;
+        }
+        return "";
+    }
+
+    private void updateTakeoverBannerLive() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mController == null || mTakeoverBar == null || mTvTakeoverStatus == null) return;
+                int controlMode = mController.getControlMode();
+                if (controlMode == AgentOverlayView.MODE_AGENT) {
+                    boolean isDrivingCurrent = mController.isAgentDrivingCurrentTab();
+                    if (!isDrivingCurrent) {
+                        String summary = mLastAgentActivitySummary;
+                        if (summary == null || summary.trim().isEmpty()) {
+                            summary = "后台自动化进行中 · 当前页可自由浏览";
+                        }
+                        mTvTakeoverStatus.setText(summary);
+                    }
+                }
+            }
+        });
+    }
+
     @Override
     public void onModeChanged(final boolean isDesktopMode, final int controlMode, final boolean somEnabled) {
         runOnUiThread(new Runnable() {
@@ -1536,11 +1618,19 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mTakeoverIcon.setIcon(AcidIcons.ICON_AGENT);
                     mTakeoverIcon.setColor(accent);
                     boolean isDrivingCurrent = mController.isAgentDrivingCurrentTab();
-                    mTvTakeoverStatus.setText(isDrivingCurrent
-                        ? ("AI 自动驾驶中 (当前页已锁) | 拦跳: " + blocked)
-                        : "AI 正在后台标签页执行自动化 (当前页可自由浏览)");
-                    mTvTakeoverStatus.setTextColor(accent);
-                    mBtnTakeoverAction.update(AcidIcons.ICON_HUMAN, "点此接管", AcidTheme.COLOR_AMBER);
+                    if (isDrivingCurrent) {
+                        mTvTakeoverStatus.setText("AI 自动驾驶中 (当前页已锁) | 拦跳: " + blocked);
+                        mTvTakeoverStatus.setTextColor(accent);
+                        mBtnTakeoverAction.update(AcidIcons.ICON_HUMAN, "点此接管", AcidTheme.COLOR_AMBER);
+                    } else {
+                        String summary = mLastAgentActivitySummary;
+                        if (summary == null || summary.trim().isEmpty()) {
+                            summary = "后台自动化进行中 · 当前页可自由浏览";
+                        }
+                        mTvTakeoverStatus.setText(summary);
+                        mTvTakeoverStatus.setTextColor(accent);
+                        mBtnTakeoverAction.update(AcidIcons.ICON_GLOBE, "点击查看", accent);
+                    }
                 } else if (controlMode == AgentOverlayView.MODE_TAKEOVER_REQUESTED) {
                     mTakeoverBar.setVisibility(View.VISIBLE);
                     String reason = mController.getTakeoverReason();

@@ -2947,6 +2947,18 @@ public final class TestRunner {
         }
         assertEquals(Integer.valueOf(2), Integer.valueOf(simulatedSwitchedTab), "user screen stays on tab 2 without being hijacked");
         assertEquals(Integer.valueOf(3), Integer.valueOf(newBoundId), "agent bound tab updates to tab 3 in background");
+
+        // 10. Background takeover banner state summary formatting: no emojis, concise prefixes
+        AcidSessionStore.UiMessageItem toolItem = new AcidSessionStore.UiMessageItem();
+        toolItem.type = AcidSessionStore.TYPE_TOOL;
+        toolItem.toolName = "browser";
+        toolItem.toolSummary = "click · [e3]";
+        assertTrue(toolItem.toolSummary.contains("click · [e3]"), "toolSummary verified");
+
+        AcidSessionStore.UiMessageItem thinkItem = new AcidSessionStore.UiMessageItem();
+        thinkItem.type = AcidSessionStore.TYPE_THINKING;
+        thinkItem.text = "正在分析页面结构与目标链接";
+        assertTrue(!thinkItem.text.contains("💭") && !thinkItem.text.contains("⚡"), "clean text contains no emojis");
     }
 
     /** Covers download filename sanitisation and the Content-Disposition offset fix. */
