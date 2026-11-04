@@ -170,7 +170,10 @@ public class AboutSheet extends AcidBottomSheetView {
                 @Override
                 public boolean onAction(Dialog dialog) {
                     if (mListener != null) {
-                        if (info.downloadUrl != null && info.downloadUrl.toLowerCase().endsWith(".apk")) {
+                        String lowerUrl = info.downloadUrl != null ? info.downloadUrl.toLowerCase() : "";
+                        int qIdx = lowerUrl.indexOf('?');
+                        String pathPart = (qIdx >= 0) ? lowerUrl.substring(0, qIdx) : lowerUrl;
+                        if (pathPart.endsWith(".apk")) {
                             mListener.onStartApkDownload(
                                 info.downloadUrl,
                                 "Acid-browser-v" + info.remoteVersionName + ".apk"

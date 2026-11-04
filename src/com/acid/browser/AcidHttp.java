@@ -163,6 +163,10 @@ public final class AcidHttp {
                     throw new IOException("Redirect without Location header (HTTP " + code + ")");
                 }
                 URL nextUrl = new URL(new URL(currentUrl), loc.trim());
+                String proto = nextUrl.getProtocol() != null ? nextUrl.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
+                if (!"http".equals(proto) && !"https".equals(proto)) {
+                    throw new IOException("Disallowed redirect protocol in AcidHttp: " + proto);
+                }
                 currentUrl = nextUrl.toString();
                 redirects++;
                 continue;
@@ -182,6 +186,10 @@ public final class AcidHttp {
             url = URI.create(urlStr.trim()).toURL();
         } catch (Exception e) {
             url = new URL(urlStr.trim());
+        }
+        String proto = url.getProtocol() != null ? url.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
+        if (!"http".equals(proto) && !"https".equals(proto)) {
+            throw new IOException("Disallowed protocol in AcidHttp: " + proto);
         }
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setConnectTimeout(connectTimeoutMs);

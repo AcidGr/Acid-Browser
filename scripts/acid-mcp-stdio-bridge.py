@@ -44,9 +44,10 @@ def main():
                 sys.stdout.write(resp_text + "\n")
                 sys.stdout.flush()
         except Exception as e:
+            req_id = req_data.get("id") if (isinstance(req_data, dict) and "id" in req_data) else None
             err_resp = {
                 "jsonrpc": "2.0",
-                "id": None,
+                "id": req_id,
                 "error": {"code": -32603, "message": str(e)}
             }
             sys.stdout.write(json.dumps(err_resp) + "\n")
