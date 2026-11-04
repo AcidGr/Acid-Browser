@@ -970,7 +970,7 @@ public class AcidSandboxTools {
             if (replaceAll) {
                 updated = content.replace(oldStr, newStr);
             } else {
-                int secondIdx = content.indexOf(oldStr, firstIdx + oldStr.length());
+                int secondIdx = content.indexOf(oldStr, firstIdx + 1);
                 if (secondIdx >= 0) {
                     return "Error: old_string appears multiple times in " + f.getName() + "; set replace_all=true or provide more context.";
                 }

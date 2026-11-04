@@ -1131,7 +1131,7 @@ public class DownloadCoordinator {
     public void openDownloadedFile(DownloadItem it, boolean forceChooser) {
         if (it == null) return;
         try {
-            File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File dir = getDownloadDestinationDir();
             File file = new File(dir, it.fileName);
             if (!file.exists()) {
                 File fallbackDir = new File(mContext.getExternalFilesDir(null), "Download");
@@ -1228,7 +1228,10 @@ public class DownloadCoordinator {
     public boolean deleteDownload(long downloadId, boolean deletePhysicalFile) {
         boolean removed = false;
         DownloadItem target = null;
-        mDownloader.cancel(downloadId, deletePhysicalFile);
+        // Never let AcidDownloader directly delete physical files: file lifecycle and reference-count
+        // verification must strictly be governed below by DownloadCoordinator to prevent deleting files
+        // still referenced by other surviving download entries or deleting files not owned by failed tasks.
+        mDownloader.cancel(downloadId, false);
 
         synchronized (mDownloads) {
             for (int i = 0; i < mDownloads.size(); i++) {
@@ -1244,11 +1247,15 @@ public class DownloadCoordinator {
 
         if (deletePhysicalFile && target != null) {
             try {
-                File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                File dir = getDownloadDestinationDir();
                 File file = new File(dir, target.fileName);
                 if (!file.exists()) {
                     File fallbackDir = new File(mContext != null ? mContext.getExternalFilesDir(null) : null, "Download");
                     file = new File(fallbackDir, target.fileName);
+                    if (!file.exists() && mContext != null && mContext.getFilesDir() != null) {
+                        File internalDir = new File(mContext.getFilesDir(), "Download");
+                        file = new File(internalDir, target.fileName);
+                    }
                 }
 
                 // Check if any other surviving record in mDownloads still references target.fileName

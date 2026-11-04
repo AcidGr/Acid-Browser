@@ -442,7 +442,10 @@ public class AdBlockManager {
 
     public boolean isWhitelisted(String host) {
         if (host == null) return false;
-        String cur = host.toLowerCase();
+        String cur = host.toLowerCase(Locale.ROOT).trim();
+        while (cur.endsWith(".")) {
+            cur = cur.substring(0, cur.length() - 1).trim();
+        }
         if (cur.contains("accounts.google.") || cur.contains("myaccount.google.") || cur.contains("apis.google.com") || cur.contains("gstatic.com") || cur.contains("googleusercontent.com")) {
             return true;
         }
@@ -453,7 +456,10 @@ public class AdBlockManager {
         if (!mEnabled || uri == null) return false;
         String host = uri.getHost();
         if (host == null) return false;
-        host = host.toLowerCase();
+        host = host.toLowerCase(Locale.ROOT).trim();
+        while (host.endsWith(".")) {
+            host = host.substring(0, host.length() - 1).trim();
+        }
 
         if (isWhitelisted(host)) {
             return false;

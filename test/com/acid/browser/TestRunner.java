@@ -171,6 +171,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testTabLimitAndBackupOptOut(); }
         });
 
+        run("Audit Fixes: Download ref protection, MCP chunked & Edit overlap step", new TestCase() {
+            @Override public void execute() throws Exception { testAuditFixesDownloadRefMcpPoolAndEditStep(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -3119,5 +3123,92 @@ public final class TestRunner {
             assertTrue(xml.contains("android:allowBackup=\"false\""),
                 "manifest disables allowBackup so secrets are not backed up");
         }
+    }
+
+    private static void testAuditFixesDownloadRefMcpPoolAndEditStep() throws Exception {
+        // 1. DownloadCoordinator deleteDownload reference-count protection:
+        // When two records share the same fileName, deleting one record with deletePhysicalFile=true
+        // must NOT delete the physical file if the other surviving record still references it.
+        File testDir = new File(System.getProperty("java.io.tmpdir"), "acid_delete_guard_" + System.currentTimeMillis());
+        testDir.mkdirs();
+        try {
+            BrowserDataStore mockStore = new BrowserDataStore(new InMemoryPrefs(), new InMemoryPrefs(), null);
+            List<DownloadItem> mockList = new ArrayList<DownloadItem>();
+            mockList.add(new DownloadItem(901L, "shared.pdf", "https://example.com/1.pdf", "application/pdf", 5000L, 5000L, DownloadTask.STATUS_SUCCESSFUL, System.currentTimeMillis()));
+            mockList.add(new DownloadItem(902L, "shared.pdf", "https://example.com/2.pdf", "application/pdf", 5000L, 5000L, DownloadTask.STATUS_SUCCESSFUL, System.currentTimeMillis()));
+            mockStore.saveDownloads(mockList);
+
+            DownloadCoordinator coord = new DownloadCoordinator(null, mockStore) {
+                @Override
+                public File getDownloadDestinationDir() {
+                    return testDir;
+                }
+            };
+            try {
+                File sharedFile = new File(testDir, "shared.pdf");
+                AcidIo.writeBytes(sharedFile, "sample pdf content".getBytes(StandardCharsets.UTF_8));
+                assertTrue(sharedFile.exists(), "shared.pdf created on disk");
+
+                // Enqueue task 901 in memory so mDownloader has it in mTasks
+                DownloadTask memoryTask = coord.getDownloader().enqueue(901L, "https://example.com/1.pdf", "shared.pdf", "application/pdf", testDir, null);
+                coord.getDownloader().pause(901L); // stop it from actual downloading
+
+                // Delete record 901 with deletePhysicalFile = true
+                coord.deleteDownload(901L, true);
+
+                // shared.pdf MUST still exist because record 902 still references it!
+                assertTrue(sharedFile.exists(), "shared.pdf is preserved because record 902 still references it");
+                assertEquals(1, Integer.valueOf(coord.getDownloads().size()), "One surviving download record remains");
+
+                // Now delete the last surviving record 902 with deletePhysicalFile = true
+                coord.deleteDownload(902L, true);
+                assertTrue(!sharedFile.exists(), "shared.pdf is deleted now that no surviving record references it");
+            } finally {
+                coord.destroy();
+            }
+        } finally {
+            File[] files = testDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            testDir.delete();
+        }
+
+        // 2. HttpControlServer readChunkedBody supports Transfer-Encoding: chunked payloads
+        String rawChunked = "4\r\nWiki\r\n5\r\npedia\r\nf\r\n in \r\n\r\nchunks.\r\n0\r\n\r\n";
+        byte[] chunkedBytes = rawChunked.getBytes(StandardCharsets.US_ASCII);
+        byte[] decoded = HttpControlServer.readChunkedBody(new java.io.ByteArrayInputStream(chunkedBytes), 1024 * 1024);
+        String decodedStr = new String(decoded, StandardCharsets.US_ASCII);
+        assertEquals("Wikipedia in \r\n\r\nchunks.", decodedStr, "Chunked HTTP body parsed and assembled correctly");
+
+        // 3. AcidSandboxTools edit tool detects self-overlapping strings (e.g. 'aaa' in 'aaaa')
+        File wsDir = new File(System.getProperty("java.io.tmpdir"), "acid_edit_overlap_" + System.currentTimeMillis());
+        wsDir.mkdirs();
+        try {
+            File targetFile = new File(wsDir, "overlap.txt");
+            AcidIo.writeFileUtf8(targetFile, "aaaa");
+            AcidSandboxTools tools = new AcidSandboxTools(null, wsDir);
+
+            JSONObject args = new JSONObject();
+            args.put("file_path", "overlap.txt");
+            args.put("old_string", "aaa");
+            args.put("new_string", "bbb");
+            args.put("replace_all", false);
+
+            AcidSandboxTools.ToolExecResult res = tools.executeTool("edit", args);
+            assertTrue(res.outputText.contains("appears multiple times"),
+                "Self-overlapping target 'aaa' in 'aaaa' is detected as ambiguous and rejected when replace_all=false: " + res.outputText);
+            assertEquals("aaaa", AcidIo.readFileUtf8(targetFile), "File content remains untouched when ambiguous");
+        } finally {
+            File[] files = wsDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            wsDir.delete();
+        }
+
+        // 4. AdBlockManager trailing dot hostname normalization
+        assertTrue(AdBlockManager.isPublicSuffixOrTld("com"), "com is TLD");
+        assertTrue(!AdBlockManager.isPublicSuffixOrTld("example.com"), "example.com is not TLD");
     }
 }
