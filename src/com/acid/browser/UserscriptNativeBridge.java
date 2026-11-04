@@ -84,6 +84,39 @@ public class UserscriptNativeBridge {
         mSecret = (secret == null || secret.isEmpty()) ? null : secret;
     }
 
+    /**
+     * Supplies the per-script token that {@link #call} validates against.
+     *
+     * <p>Set by {@link UserscriptManager} so tokens can be derived per script id. When absent
+     * (unit tests and tooling that construct a bridge directly), validation falls back to the
+     * single token passed to the constructor, preserving the older contract.
+     */
+    public interface TokenProvider {
+        String tokenFor(String scriptId);
+    }
+
+    private TokenProvider mTokenProvider;
+
+    public UserscriptNativeBridge setTokenProvider(TokenProvider provider) {
+        mTokenProvider = provider;
+        return this;
+    }
+
+    /**
+     * Resolves the token a call for {@code scriptId} must present.
+     *
+     * @return the expected token, or {@code null} when no token is enforced at all
+     */
+    private String expectedTokenFor(String scriptId, UserscriptMeta meta) {
+        if (mTokenProvider != null) {
+            // An unknown script id has no token, so a call naming one can never authenticate.
+            // Returning null here would mean "no check"; return an unmatchable value instead.
+            String derived = mTokenProvider.tokenFor(scriptId);
+            return derived != null ? derived : "";
+        }
+        return mSecret;
+    }
+
     public UserscriptNativeBridge configure(
         ScriptResolver resolver,
         UserscriptDependencyResolver deps,
@@ -132,13 +165,22 @@ public class UserscriptNativeBridge {
                 : new JSONObject();
 
             boolean isPublicAction = "requestInjection".equals(action) || "isInstalled".equals(action);
-            if (!isPublicAction && mSecret != null && !mSecret.equals(args.optString("secret", ""))) {
-                Log.w(TAG, "Rejected bridge call '" + action + "': bad or missing token");
-                return "";
-            }
 
             String scriptId = args.optString("scriptId", "default");
             UserscriptMeta meta = (mResolver != null) ? mResolver.findScript(scriptId) : null;
+
+            // Token check runs against the token minted for THIS script id, never a shared one.
+            // Checking before resolving the id (the previous order) let any script that could
+            // read its own embedded token impersonate a more privileged script by passing that
+            // script's id, since every script used to share a single process-wide token.
+            if (!isPublicAction) {
+                String expected = expectedTokenFor(scriptId, meta);
+                if (expected != null && !expected.equals(args.optString("secret", ""))) {
+                    Log.w(TAG, "Rejected bridge call '" + action + "': bad or missing token for " + scriptId);
+                    return "";
+                }
+            }
+
             String[] needed = grantsFor(action);
             if (needed.length > 0) {
                 if (mResolver != null && (meta == null || !meta.isGranted(needed))) {
