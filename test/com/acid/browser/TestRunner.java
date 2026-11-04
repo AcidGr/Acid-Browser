@@ -96,6 +96,9 @@ public final class TestRunner {
         run("Userscript @unwrap, version compare, bootstrap & TM facade", new TestCase() {
             @Override public void execute() throws Exception { testUserscriptUnwrapAndUpdates(); }
         });
+        run("Cookie flush throttle: page-load coalescing vs lifecycle flush", new TestCase() {
+            @Override public void execute() throws Exception { testCookieFlushThrottle(); }
+        });
 
         run("Skill builtin sync: version upgrade vs user edits", new TestCase() {
             @Override public void execute() throws Exception { testSkillBuiltinSync(); }
@@ -508,6 +511,19 @@ public final class TestRunner {
         // Public actions stay callable without any token (bootstrap depends on this).
         assertEquals("true", tokenBridge.call("requestInjection", "{\"runAt\":4}"),
             "public requestInjection needs no token");
+    }
+
+    private static void testCookieFlushThrottle() throws Exception {
+        // The page-load path calls flushCookies(); onPause/onDestroy call flushCookiesNow().
+        // Only the throttle predicate is host-testable (the flush itself needs a real WebView).
+        final long T = BrowserController.COOKIE_FLUSH_THROTTLE_MS;
+        assertTrue(BrowserController.shouldFlushCookies(0L, 1000L, T), "never-flushed always flushes");
+        assertTrue(BrowserController.shouldFlushCookies(1000L, 1000L + T, T), "exactly at the boundary flushes");
+        assertTrue(!BrowserController.shouldFlushCookies(1000L, 1000L + T - 1, T), "just inside the window skips");
+        assertTrue(BrowserController.shouldFlushCookies(1000L, 1000L + T * 10, T), "long idle flushes");
+        assertTrue(BrowserController.shouldFlushCookies(5000L, 100L, T),
+            "clock moving backwards fails open rather than suppressing forever");
+        assertTrue(!BrowserController.shouldFlushCookies(1000L, 1000L, T), "same instant skips");
     }
 
     private static void testUserscriptUnwrapAndUpdates() throws Exception {

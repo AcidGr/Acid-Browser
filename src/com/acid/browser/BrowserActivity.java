@@ -1813,6 +1813,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 mController.getUserscriptManager().getStorage().flushSync();
             } catch (Exception ignored) {}
         }
+        // Unconditional: the throttled page-load flush may have skipped recent cookies, and
+        // this is the last reliable point before the process can be killed in the background.
+        if (mController != null) {
+            mController.flushCookiesNow();
+        }
     }
 
     @Override
@@ -1821,6 +1826,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             try {
                 mController.getUserscriptManager().getStorage().flushSync();
             } catch (Exception ignored) {}
+        }
+        if (mController != null) {
+            mController.flushCookiesNow();
         }
         if (isFinishing() && mDataStore != null && mDataStore.isClearOnExit()) {
             mDataStore.clearBrowsingData(mController, true, true, false, true, false);

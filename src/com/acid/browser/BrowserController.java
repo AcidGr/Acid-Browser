@@ -131,6 +131,17 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private WebChromeClient.CustomViewCallback mCustomViewCallback = null;
     private BrowserDataStore mDataStore = null;
     private boolean mApplyingHotReload = false;
+    /**
+     * Minimum spacing between cookie flushes triggered by page loads.
+     *
+     * <p>{@code CookieManager.flush()} writes the whole cookie jar synchronously and is called
+     * on the UI thread from {@code onPageFinished}. Flushing on every single page load stalls
+     * the main thread on the storage write for no benefit, so page loads coalesce onto one
+     * flush per window; {@link #flushCookies()} is also called from {@code onPause} and at
+     * teardown so a process death cannot lose cookies that were never flushed.
+     */
+    public static final long COOKIE_FLUSH_THROTTLE_MS = 30000L;
+    private long mLastCookieFlushMs = 0L;
 
     public void setDataStore(BrowserDataStore dataStore) {
         mDataStore = dataStore;
@@ -767,9 +778,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     DesktopViewportManager.applyDesktopViewport(view, true);
                 }
 
-                if (Build.VERSION.SDK_INT >= 21) {
-                    CookieManager.getInstance().flush();
-                }
+                flushCookies();
 
                 if (mDarkMode) {
                     injectDarkModeCss(view);
@@ -1159,6 +1168,53 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public boolean isIncognitoMode() {
         return mIncognitoMode;
+    }
+
+    /**
+     * Flushes pending cookies to disk, at most once per {@link #COOKIE_FLUSH_THROTTLE_MS}.
+     *
+     * <p>Safe to call from the UI thread: the throttle keeps the synchronous disk write off the
+     * hot page-load path, while explicit callers ({@code onPause}, teardown) can use
+     * {@link #flushCookiesNow()} when the write must happen immediately.
+     */
+    public void flushCookies() {
+        if (Build.VERSION.SDK_INT < 21) return;
+        long now = System.currentTimeMillis();
+        if (!shouldFlushCookies(mLastCookieFlushMs, now, COOKIE_FLUSH_THROTTLE_MS)) {
+            return;
+        }
+        mLastCookieFlushMs = now;
+        try {
+            CookieManager.getInstance().flush();
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to flush cookies", e);
+        }
+    }
+
+    /**
+     * Pure throttle predicate behind {@link #flushCookies()}, extracted so the window logic is
+     * testable on the host JVM (a real BrowserController needs a WebView).
+     *
+     * @param lastFlushMs    timestamp of the previous flush, or {@code 0} for "never flushed"
+     * @param nowMs          current time
+     * @param throttleMs     minimum spacing between flushes
+     * @return true when a flush should happen now
+     */
+    public static boolean shouldFlushCookies(long lastFlushMs, long nowMs, long throttleMs) {
+        if (lastFlushMs == 0L) return true;                 // never flushed: always allow
+        if (nowMs < lastFlushMs) return true;               // clock went backwards: fail open
+        return (nowMs - lastFlushMs) >= throttleMs;
+    }
+
+    /** Flushes cookies unconditionally; use when the write must not be skipped. */
+    public void flushCookiesNow() {
+        if (Build.VERSION.SDK_INT < 21) return;
+        mLastCookieFlushMs = System.currentTimeMillis();
+        try {
+            CookieManager.getInstance().flush();
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to flush cookies", e);
+        }
     }
 
     public void setIncognitoMode(boolean incognito) {
