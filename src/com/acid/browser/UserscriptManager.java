@@ -41,8 +41,20 @@ public class UserscriptManager {
     /** One bridge per WebView so HTTP callbacks return to the tab that asked. */
     private final java.util.Map<WebView, UserscriptNativeBridge> mBridges =
         java.util.Collections.synchronizedMap(new java.util.WeakHashMap<WebView, UserscriptNativeBridge>());
-    /** Per-process token; embedded only inside injected closures. */
-    private final String mSecret = newSecret();
+    /**
+     * Per-process seed used to derive a distinct bridge token for every script.
+     *
+     * <p>Previously this WAS the token, shared by every script. Since
+     * {@link UserscriptShaper#shape} embeds the token inside the same closure as the script
+     * body, any installed script could read {@code _secret} and then impersonate another
+     * script by passing that script's id — defeating {@code @grant} isolation entirely
+     * (e.g. a script with no grant could borrow another script's {@code GM_xmlhttpRequest}
+     * and make credentialed cross-origin requests).
+     *
+     * <p>Tokens are now derived per script id, so a token is only ever valid for the script
+     * it was minted for.
+     */
+    private final String mSecretSeed = newSecret();
     private UserscriptNativeBridge.Host mHost;
     private final UserscriptDependencyResolver mDepResolver;
     private String mBridgeJs = "";
@@ -158,6 +170,50 @@ public class UserscriptManager {
         return sb.toString();
     }
 
+    /**
+     * Bridge token for one script, derived from the per-process seed.
+     *
+     * <p>Derivation (rather than a stored field) keeps the token stable across
+     * {@link #invalidateCache()} reloads: every script is re-parsed from disk on install,
+     * delete, or enable-toggle, and a freshly generated random token would invalidate the
+     * tokens already living inside pages that are still open. Deriving from an immutable
+     * seed means the token for a given script id never changes until the process restarts.
+     *
+     * @param scriptId the script's file name, as used by {@code ScriptResolver}
+     * @return a 32-hex-char token unique to this script id
+     */
+    public String secretFor(String scriptId) {
+        return deriveScriptSecret(mSecretSeed, scriptId);
+    }
+
+    /**
+     * Derives one script's bridge token from the process seed. Pure and static so the
+     * derivation contract can be tested without an Android {@code Context}.
+     *
+     * <p>The {@code 0x00} separator prevents ambiguity between seed/id concatenations.
+     *
+     * @param seed     per-process random seed
+     * @param scriptId the script's file name; {@code null} is treated as the empty id
+     * @return 32 lowercase hex chars, deterministic for a given seed and id
+     */
+    public static String deriveScriptSecret(String seed, String scriptId) {
+        String id = scriptId != null ? scriptId : "";
+        String base = seed != null ? seed : "";
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            md.update(base.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            md.update((byte) 0);
+            md.update(id.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            byte[] digest = md.digest();
+            StringBuilder sb = new StringBuilder(32);
+            for (int i = 0; i < 16; i++) sb.append(String.format("%02x", digest[i] & 0xff));
+            return sb.toString();
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to derive a bridge token for " + id, e);
+            return "";
+        }
+    }
+
     private UserscriptNativeBridge.ScriptResolver resolver() {
         return new UserscriptNativeBridge.ScriptResolver() {
             @Override
@@ -217,7 +273,13 @@ public class UserscriptManager {
         try {
             UserscriptNativeBridge bridge = mBridges.get(wv);
             if (bridge == null) {
-                bridge = new UserscriptNativeBridge(mContext, mStorage, mHttpHandler, mSecret);
+                bridge = new UserscriptNativeBridge(mContext, mStorage, mHttpHandler, null);
+                bridge.setTokenProvider(new UserscriptNativeBridge.TokenProvider() {
+                    @Override
+                    public String tokenFor(String scriptId) {
+                        return secretFor(scriptId);
+                    }
+                });
                 configureBridge(bridge);
                 mBridges.put(wv, bridge);
                 bridge.attachWebView(wv);
@@ -395,7 +457,7 @@ public class UserscriptManager {
     }
 
     private void evaluate(WebView wv, UserscriptMeta meta, List<String> requires) {
-        String shapedJs = UserscriptShaper.shape(meta, requires, mSecret);
+        String shapedJs = UserscriptShaper.shape(meta, requires, secretFor(meta.fileName));
         try {
             wv.evaluateJavascript(shapedJs, null);
         } catch (Exception e) {

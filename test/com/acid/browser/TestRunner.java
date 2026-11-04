@@ -425,6 +425,89 @@ public final class TestRunner {
         for (String api : mustHave) {
             assertTrue(shaped.contains(api), "shaper defines " + api);
         }
+
+        // Per-script tokens: a token must only authenticate the script it was minted for.
+        // Previously every script shared one process-wide token embedded in its own closure,
+        // so any script could read _secret and impersonate a more privileged script by id.
+        final String seed = "seed-0123456789abcdef";
+        String tokenA = UserscriptManager.deriveScriptSecret(seed, "a.user.js");
+        String tokenB = UserscriptManager.deriveScriptSecret(seed, "b.user.js");
+        assertEquals(Integer.valueOf(32), Integer.valueOf(tokenA.length()), "derived token is 32 hex chars");
+        assertTrue(!tokenA.equals(tokenB), "different scripts get different tokens");
+        assertEquals(tokenA, UserscriptManager.deriveScriptSecret(seed, "a.user.js"),
+            "token is stable across derivations (survives invalidateCache)");
+        assertTrue(!tokenA.equals(UserscriptManager.deriveScriptSecret(seed, null)),
+            "null id does not collide with a real script");
+        assertTrue(!tokenA.equals(UserscriptManager.deriveScriptSecret(seed, "a.user.js ")),
+            "id is matched exactly, not trimmed");
+        assertTrue(!tokenA.equals(UserscriptManager.deriveScriptSecret("other-seed", "a.user.js")),
+            "different seeds yield different tokens");
+        assertTrue(!UserscriptManager.deriveScriptSecret(seed, "a.user.js")
+            .equals(UserscriptManager.deriveScriptSecret(seed, "b.user.js")),
+            "ids do not collide via concatenation ambiguity");
+
+        final UserscriptMeta scriptA = UserscriptMeta.parse("a.user.js",
+            "// ==UserScript==\n// @name a\n// @match *://*/*\n// @grant GM_xmlhttpRequest\n// @grant GM_getValue\n// ==/UserScript\nvar a=1;");
+        final UserscriptMeta scriptB = UserscriptMeta.parse("b.user.js",
+            "// ==UserScript==\n// @name b\n// @match *://*/*\n// @grant GM_setValue\n// ==/UserScript\nvar b=1;");
+
+        UserscriptNativeBridge tokenBridge = new UserscriptNativeBridge(null, null, null, null)
+            .setTokenProvider(new UserscriptNativeBridge.TokenProvider() {
+                @Override public String tokenFor(String scriptId) {
+                    if ("a.user.js".equals(scriptId)) return UserscriptManager.deriveScriptSecret(seed, "a.user.js");
+                    if ("b.user.js".equals(scriptId)) return UserscriptManager.deriveScriptSecret(seed, "b.user.js");
+                    return null;
+                }
+            })
+            .configure(new UserscriptNativeBridge.ScriptResolver() {
+                @Override public UserscriptMeta findScript(String id) {
+                    if ("a.user.js".equals(id)) return scriptA;
+                    if ("b.user.js".equals(id)) return scriptB;
+                    return null;
+                }
+            }, null, new UserscriptNativeBridge.Host() {
+                @Override public void openInTab(String url, boolean active) {}
+                @Override public void download(String url, String name) {}
+                @Override public void notify(String title, String text) {}
+                @Override public void onInjectionRequested(UserscriptNativeBridge bridge, int phase) {}
+                @Override public String isScriptInstalled(String name, String ns) { return null; }
+            }, null);
+
+        // B's own token authenticates B.
+        assertEquals("true", tokenBridge.call("setValue",
+            "{\"secret\":\"" + tokenB + "\",\"scriptId\":\"b.user.js\",\"name\":\"k\",\"value\":\"v\"}"),
+            "a script authenticates with its own token");
+
+        // The escalation this change closes: B's token must NOT unlock A's GM_xmlhttpRequest.
+        assertEquals("", tokenBridge.call("xmlhttpRequest",
+            "{\"secret\":\"" + tokenB + "\",\"scriptId\":\"a.user.js\",\"url\":\"https://evil.example/\"}"),
+            "B's token cannot impersonate A (the cross-script escalation)");
+
+        // And A's token is not valid for B either.
+        assertEquals("", tokenBridge.call("setValue",
+            "{\"secret\":\"" + tokenA + "\",\"scriptId\":\"b.user.js\",\"name\":\"k\",\"value\":\"v\"}"),
+            "A's token cannot authenticate as B");
+
+        // Unknown script ids never authenticate. This uses 'log' deliberately: grantsFor()
+        // returns an empty array for it, so it is guarded by the TOKEN layer alone. Asserting
+        // with setValue here would pass even if the token check were bypassed, because the
+        // @grant layer rejects the unknown id anyway and masks the hole.
+        assertEquals("", tokenBridge.call("log",
+            "{\"secret\":\"" + tokenA + "\",\"scriptId\":\"ghost.user.js\",\"message\":\"x\"}"),
+            "unknown script id cannot authenticate (token layer alone)");
+
+        // A's own token still authenticates A. (GM_xmlhttpRequest itself needs a live WebView
+        // and an HttpHandler, neither of which exists here, so use A's storage API instead:
+        // it exercises the same token + grant gate without those Android dependencies.)
+        // getValue answers with a JSON envelope; reaching that envelope (rather than "")
+        // proves the call passed both the token gate and A's @grant gate.
+        assertTrue(tokenBridge.call("getValue",
+            "{\"secret\":\"" + tokenA + "\",\"scriptId\":\"a.user.js\",\"name\":\"k\"}").contains("value"),
+            "A's own token authenticates A's own granted call");
+
+        // Public actions stay callable without any token (bootstrap depends on this).
+        assertEquals("true", tokenBridge.call("requestInjection", "{\"runAt\":4}"),
+            "public requestInjection needs no token");
     }
 
     private static void testUserscriptUnwrapAndUpdates() throws Exception {
