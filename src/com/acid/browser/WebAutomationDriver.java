@@ -44,6 +44,45 @@ public class WebAutomationDriver {
         String getLastBlockedDeepLink();
         int getTriggeredDownloadsCount();
         String getLastTriggeredDownloadInfo();
+
+        /** Normalises a user/LLM-supplied URL (adds https://, resolves acid:// aliases).
+         *  Default keeps the raw value so existing test hosts stay valid. */
+        default String normalizeUrl(String url) { return url; }
+    }
+
+    /** Outcome of {@link #resolveNavigationTarget}. */
+    public static final int NAV_ACTIVE_TAB = 0;
+    public static final int NAV_BOUND_TAB = 1;
+    public static final int NAV_NO_TARGET = 2;
+
+    /**
+     * Pure decision function for where a navigation should land.
+     *
+     * <p>Extracted so the contract is testable on the host JVM, mirroring
+     * {@code BrowserController.resolveAgentTargetState}. Returning {@link #NAV_NO_TARGET}
+     * instead of silently falling back to the active tab is the whole point: when the agent's
+     * tab is gone the user's current page must not be hijacked.
+     *
+     * <p>Only one input is needed because {@code BrowserController.getTargetTab()} already
+     * resolves the three-state contract and never returns a tab with a null WebView.
+     *
+     * @param targetResolved whether {@code getTargetTab()} returned a tab at all
+     */
+    public static int resolveNavigationTarget(boolean targetResolved) {
+        return targetResolved ? NAV_BOUND_TAB : NAV_NO_TARGET;
+    }
+
+    /**
+     * Performs the actual navigation on a resolved tab.
+     *
+     * <p>A {@code WebView} cannot be instantiated on the host JVM ({@code android.jar} stubs throw
+     * {@code RuntimeException: Stub!}), so calling {@code target.webView.loadUrl} directly would
+     * leave the only behaviour that matters permanently untested. This seam lets the regression
+     * suite observe exactly which tab received which URL without a device.
+     */
+    void performNavigation(BrowserController.TabSession target, String url) {
+        target.url = url;
+        target.webView.loadUrl(url);
     }
 
     private final Context mContext;
@@ -736,61 +775,87 @@ public class WebAutomationDriver {
     }
 
     public JSONObject navigateSync(final String url, long waitSettleMs) {
-        if (isMainLooper() || mMainHandler == null) {
-            Log.w(TAG, "navigateSync called without async Looper wait; dispatching target loadUrl directly");
-            BrowserController.TabSession target = mHost.getTargetTab();
-            if (target != null && target.webView != null) {
-                target.url = url;
-                target.webView.loadUrl(url);
-            } else if (target != null) {
-                target.url = url;
-            } else {
-                mHost.loadUrl(url);
-            }
-            mHost.emitLog("[NAV] Navigated -> " + url);
-            return observeSync(mHost.isSomEnabled(), true, false);
-        }
+        // Normalise once, before any branch, so every navigation path (background tab or
+        // foreground) gets the same "example.com" -> "https://example.com" treatment the
+        // address bar already gets from BrowserController.normalizeUrl.
+        final String targetUrl = mHost.normalizeUrl(url);
 
-        final CountDownLatch latch = new CountDownLatch(1);
-        mMainHandler.post(new Runnable() {
+        // Single implementation used by both the blocking and the non-blocking entry path.
+        // Keeping one copy is what makes the host-JVM test meaningful: the code the test
+        // exercises is byte-for-byte the code the device runs.
+        final java.util.concurrent.atomic.AtomicInteger navState =
+            new java.util.concurrent.atomic.AtomicInteger(NAV_NO_TARGET);
+        Runnable navigateTask = new Runnable() {
             @Override
             public void run() {
                 BrowserController.TabSession target = mHost.getTargetTab();
-                if (target != null && target.webView != null) {
-                    target.url = url;
-                    target.webView.loadUrl(url);
-                } else {
-                    mHost.loadUrl(url);
+                navState.set(resolveNavigationTarget(target != null));
+                if (navState.get() == NAV_BOUND_TAB) {
+                    performNavigation(target, targetUrl);
                 }
-                latch.countDown();
+                // NAV_NO_TARGET: deliberately do NOT touch mActiveTab. The agent's tab was
+                // closed; silently driving the page the user is reading would be a hijack.
             }
-        });
-        try {
-            latch.await(2000, TimeUnit.MILLISECONDS);
-            long deadline = SystemClock.uptimeMillis() + Math.max(1200, waitSettleMs);
-            Thread.sleep(450);
-            while (SystemClock.uptimeMillis() < deadline) {
-                final AtomicReference<Boolean> loadingRef = new AtomicReference<Boolean>(false);
-                final CountDownLatch stepLatch = new CountDownLatch(1);
-                mMainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        BrowserController.TabSession activeTab = mHost.getTargetTab();
-                        loadingRef.set(activeTab != null && activeTab.isLoading);
-                        stepLatch.countDown();
+        };
+
+        if (isMainLooper() || mMainHandler == null) {
+            Log.w(TAG, "navigateSync called without async Looper wait; dispatching target loadUrl directly");
+            navigateTask.run();
+        } else {
+            final CountDownLatch latch = new CountDownLatch(1);
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        navigateTask.run();
+                    } finally {
+                        latch.countDown();
                     }
-                });
-                stepLatch.await(500, TimeUnit.MILLISECONDS);
-                if (!loadingRef.get()) {
-                    Thread.sleep(300);
-                    break;
                 }
-                Thread.sleep(250);
+            });
+            try {
+                latch.await(2000, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } catch (Exception e) {
-            Log.w(TAG, "Navigate settle-wait interrupted; continuing with current page state", e);
         }
-        mHost.emitLog("[NAV] Navigated -> " + url);
+
+        if (navState.get() == NAV_NO_TARGET) {
+            mHost.emitLog("[NAV] Refused -> " + targetUrl + " (no bound tab)");
+            return buildFallbackObservation("NO_TARGET_TAB",
+                "\u667a\u80fd\u4f53\u5f53\u524d\u6ca1\u6709\u7ed1\u5b9a\u7684\u6807\u7b7e\u9875\uff08\u539f\u6807\u7b7e\u9875\u5df2\u88ab\u5173\u95ed\uff09\u3002"
+                + "\u8bf7\u5148\u8c03\u7528 browser(action='tabs', tab_action='list') \u67e5\u770b\u73b0\u6709\u6807\u7b7e\u9875\uff0c"
+                + "\u518d\u7528 tab_action='switch' \u6216 'new' \u6307\u5b9a\u76ee\u6807\u540e\u7ee7\u7eed\u3002");
+        }
+
+        if (!isMainLooper() && mMainHandler != null) {
+            try {
+                long deadline = SystemClock.uptimeMillis() + Math.max(1200, waitSettleMs);
+                Thread.sleep(450);
+                while (SystemClock.uptimeMillis() < deadline) {
+                    final AtomicReference<Boolean> loadingRef = new AtomicReference<Boolean>(false);
+                    final CountDownLatch stepLatch = new CountDownLatch(1);
+                    mMainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            BrowserController.TabSession t = mHost.getTargetTab();
+                            loadingRef.set(t != null && t.isLoading);
+                            stepLatch.countDown();
+                        }
+                    });
+                    stepLatch.await(500, TimeUnit.MILLISECONDS);
+                    if (!loadingRef.get()) {
+                        Thread.sleep(300);
+                        break;
+                    }
+                    Thread.sleep(250);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Navigate settle-wait interrupted; continuing with current page state", e);
+            }
+        }
+
+        mHost.emitLog("[NAV] Navigated -> " + targetUrl);
         return observeSync(mHost.isSomEnabled(), true, false);
     }
 

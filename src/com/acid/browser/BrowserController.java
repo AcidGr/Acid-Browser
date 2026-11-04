@@ -1257,6 +1257,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return cleanUrl.endsWith(".user.js");
     }
 
+    @Override
     public String normalizeUrl(String raw) {
         if (raw == null) return getHomeUrl();
         String trimmed = raw.trim();

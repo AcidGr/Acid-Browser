@@ -2981,15 +2981,24 @@ public final class TestRunner {
             Integer.valueOf(BrowserController.resolveAgentTargetState(boundTabId, targetLost, false)),
             "closing other tabs containing the bound tab marks target lost");
 
-        // 8. navigateSync target tab isolation: navigating must direct to the bound target tab, not the active tab.
+        // 8. navigateSync target tab isolation.
+        //
+        // NOTE: a WebView cannot be constructed on the host JVM (android.jar stubs throw
+        // "Stub!") and mMainHandler is always null here, so the old version of this test only
+        // asserted `target.url = url` on a tab whose webView was null — i.e. it never executed
+        // the branch the device actually runs. These cases now drive the real navigation through
+        // WebAutomationDriver.performNavigation, which is the seam the production code calls.
         final BrowserController.TabSession activeTab = new BrowserController.TabSession(1, null);
         final BrowserController.TabSession boundTab = new BrowserController.TabSession(2, null);
         activeTab.url = "https://active.example.com";
         boundTab.url = "https://bound.example.com";
 
+        final List<String> navigatedUrls = new ArrayList<String>();
+        final BrowserController.TabSession[] navTarget = new BrowserController.TabSession[]{boundTab};
+
         WebAutomationDriver navDriver = new WebAutomationDriver(null, new WebAutomationDriver.AutomationHost() {
             @Override public BrowserController.TabSession getActiveTab() { return activeTab; }
-            @Override public BrowserController.TabSession getTargetTab() { return boundTab; }
+            @Override public BrowserController.TabSession getTargetTab() { return navTarget[0]; }
             @Override public boolean isTargetTabActive() { return false; }
             @Override public AgentOverlayView getOverlayView() { return null; }
             @Override public UserscriptManager getUserscriptManager() { return null; }
@@ -3001,10 +3010,43 @@ public final class TestRunner {
             @Override public String getLastBlockedDeepLink() { return null; }
             @Override public int getTriggeredDownloadsCount() { return 0; }
             @Override public String getLastTriggeredDownloadInfo() { return null; }
-        });
+            @Override public String normalizeUrl(String url) {
+                return url.startsWith("http") ? url : "https://" + url;
+            }
+        }) {
+            @Override void performNavigation(BrowserController.TabSession target, String url) {
+                navigatedUrls.add(target.id + "|" + url);
+            }
+        };
+
+        // 8a. Bound tab alive: navigation must land on the bound tab, never the active one.
         navDriver.navigateSync("https://newtarget.example.com", 0);
         assertEquals("https://active.example.com", activeTab.url, "active tab URL must NOT be touched by navigateSync");
-        assertEquals("https://newtarget.example.com", boundTab.url, "bound target tab URL must receive the new navigation URL");
+        assertEquals(Integer.valueOf(1), Integer.valueOf(navigatedUrls.size()), "exactly one navigation performed");
+        assertEquals("2|https://newtarget.example.com", navigatedUrls.get(0),
+            "navigation must go to the BOUND tab (id 2) with the requested URL");
+
+        // 8b. Bare hostname must be normalised before reaching the WebView.
+        navigatedUrls.clear();
+        navDriver.navigateSync("example.com", 0);
+        assertEquals("2|https://example.com", navigatedUrls.get(0),
+            "bare hostname must be normalised to https:// before navigation");
+
+        // 8c. Bound tab gone: navigation must be REFUSED, not silently redirected to the active tab.
+        navigatedUrls.clear();
+        navTarget[0] = null;
+        String refusal = navDriver.navigateSync("https://must-not-happen.example.com", 0).toString();
+        assertEquals(Integer.valueOf(0), Integer.valueOf(navigatedUrls.size()),
+            "no navigation may be performed when the bound tab is gone");
+        assertEquals("https://active.example.com", activeTab.url,
+            "active tab must NOT be hijacked when the agent target is lost");
+        assertTrue(refusal.contains("NO_TARGET_TAB"), "refusal must report NO_TARGET_TAB");
+
+        // 8d. Pure decision contract behind the above.
+        assertEquals(Integer.valueOf(WebAutomationDriver.NAV_BOUND_TAB),
+            Integer.valueOf(WebAutomationDriver.resolveNavigationTarget(true)), "resolved target navigates");
+        assertEquals(Integer.valueOf(WebAutomationDriver.NAV_NO_TARGET),
+            Integer.valueOf(WebAutomationDriver.resolveNavigationTarget(false)), "no target refuses");
 
         // 9. tabs(new/switch) foreground screen hijack isolation:
         //    When activeTab != boundTab, isWatching must evaluate to false so the user's active tab is never switched away.
