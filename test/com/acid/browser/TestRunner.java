@@ -2948,7 +2948,8 @@ public final class TestRunner {
         assertEquals(Integer.valueOf(2), Integer.valueOf(simulatedSwitchedTab), "user screen stays on tab 2 without being hijacked");
         assertEquals(Integer.valueOf(3), Integer.valueOf(newBoundId), "agent bound tab updates to tab 3 in background");
 
-        // 10. Background takeover banner state summary formatting: no emojis, concise prefixes
+        // 10. Single Source of Truth for Takeover banner: both foreground driving tab and background tab
+        //     share the identical real-time summary text without duplication or emoji pollution.
         AcidSessionStore.UiMessageItem toolItem = new AcidSessionStore.UiMessageItem();
         toolItem.type = AcidSessionStore.TYPE_TOOL;
         toolItem.toolName = "browser";
@@ -2959,6 +2960,9 @@ public final class TestRunner {
         thinkItem.type = AcidSessionStore.TYPE_THINKING;
         thinkItem.text = "正在分析页面结构与目标链接";
         assertTrue(!thinkItem.text.contains("💭") && !thinkItem.text.contains("⚡"), "clean text contains no emojis");
+
+        String sharedSummary = "[工具] " + toolItem.toolSummary;
+        assertEquals("[工具] click · [e3]", sharedSummary, "foreground and background banners share identical status summary");
     }
 
     /** Covers download filename sanitisation and the Content-Disposition offset fix. */
