@@ -597,18 +597,28 @@ public class AcidSandboxTools {
             runOnMain(new Runnable() {
                 @Override
                 public void run() {
+                    boolean isWatching = (mController != null
+                        && mController.getActiveTab() != null
+                        && mController.getActiveTab().id == mController.getAgentBoundTabId());
+
                     if ("new".equals(sub)) {
-                        BrowserController.TabSession created = mController.createNewTab(args.optString("url", BrowserController.HOME_URL), true);
+                        BrowserController.TabSession created = mController.createNewTab(
+                            args.optString("url", BrowserController.HOME_URL),
+                            isWatching
+                        );
                         if (created != null) {
                             mController.setAgentBoundTabId(created.id);
                         }
                     } else if ("switch".equals(sub)) {
                         int targetId = args.optInt("tab_id", 1);
-                        // Only bind when the switch actually happened. Binding a non-existent id
-                        // used to leave the agent pointed at a phantom tab; now it keeps the
-                        // previous binding (or the lost state) so the failure stays visible.
-                        if (mController.switchToTab(targetId)) {
-                            mController.setAgentBoundTabId(targetId);
+                        if (isWatching) {
+                            if (mController.switchToTab(targetId)) {
+                                mController.setAgentBoundTabId(targetId);
+                            }
+                        } else {
+                            if (mController.getTabById(targetId) != null) {
+                                mController.setAgentBoundTabId(targetId);
+                            }
                         }
                     } else if ("close".equals(sub)) {
                         mController.closeTab(args.optInt("tab_id", 1));

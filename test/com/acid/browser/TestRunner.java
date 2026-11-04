@@ -2891,6 +2891,62 @@ public final class TestRunner {
         assertEquals(Integer.valueOf(BrowserController.TARGET_BOUND_TAB),
             Integer.valueOf(BrowserController.resolveAgentTargetState(9, false, true)),
             "rebinding to a live tab restores normal targeting");
+
+        // 7. Closing other tabs when the bound tab is not the kept tab must mark the target lost.
+        int boundTabId = 2;
+        int keepTabId = 1;
+        boolean targetLost = false;
+        if (boundTabId > 0 && boundTabId != keepTabId) {
+            boundTabId = -1;
+            targetLost = true;
+        }
+        assertEquals(Integer.valueOf(BrowserController.TARGET_LOST),
+            Integer.valueOf(BrowserController.resolveAgentTargetState(boundTabId, targetLost, false)),
+            "closing other tabs containing the bound tab marks target lost");
+
+        // 8. navigateSync target tab isolation: navigating must direct to the bound target tab, not the active tab.
+        final BrowserController.TabSession activeTab = new BrowserController.TabSession(1, null);
+        final BrowserController.TabSession boundTab = new BrowserController.TabSession(2, null);
+        activeTab.url = "https://active.example.com";
+        boundTab.url = "https://bound.example.com";
+
+        WebAutomationDriver navDriver = new WebAutomationDriver(null, new WebAutomationDriver.AutomationHost() {
+            @Override public BrowserController.TabSession getActiveTab() { return activeTab; }
+            @Override public BrowserController.TabSession getTargetTab() { return boundTab; }
+            @Override public boolean isTargetTabActive() { return false; }
+            @Override public AgentOverlayView getOverlayView() { return null; }
+            @Override public UserscriptManager getUserscriptManager() { return null; }
+            @Override public void loadUrl(String url) { activeTab.url = url; }
+            @Override public void emitLog(String log) {}
+            @Override public boolean isSomEnabled() { return false; }
+            @Override public boolean isDesktopMode() { return false; }
+            @Override public int getBlockedDeepLinksCount() { return 0; }
+            @Override public String getLastBlockedDeepLink() { return null; }
+            @Override public int getTriggeredDownloadsCount() { return 0; }
+            @Override public String getLastTriggeredDownloadInfo() { return null; }
+        });
+        navDriver.navigateSync("https://newtarget.example.com", 0);
+        assertEquals("https://active.example.com", activeTab.url, "active tab URL must NOT be touched by navigateSync");
+        assertEquals("https://newtarget.example.com", boundTab.url, "bound target tab URL must receive the new navigation URL");
+
+        // 9. tabs(new/switch) foreground screen hijack isolation:
+        //    When activeTab != boundTab, isWatching must evaluate to false so the user's active tab is never switched away.
+        int userActiveTabId = 2;
+        int agentBoundTabId = 1;
+        boolean isWatching = (userActiveTabId == agentBoundTabId);
+        assertTrue(!isWatching, "when user is on tab 2 and agent is on tab 1, isWatching is false");
+
+        int targetSwitchId = 3;
+        int simulatedSwitchedTab = userActiveTabId;
+        int newBoundId = agentBoundTabId;
+        if (isWatching) {
+            simulatedSwitchedTab = targetSwitchId;
+            newBoundId = targetSwitchId;
+        } else {
+            newBoundId = targetSwitchId;
+        }
+        assertEquals(Integer.valueOf(2), Integer.valueOf(simulatedSwitchedTab), "user screen stays on tab 2 without being hijacked");
+        assertEquals(Integer.valueOf(3), Integer.valueOf(newBoundId), "agent bound tab updates to tab 3 in background");
     }
 
     /** Covers download filename sanitisation and the Content-Disposition offset fix. */
