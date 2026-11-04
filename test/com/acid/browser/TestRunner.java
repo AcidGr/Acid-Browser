@@ -1887,6 +1887,38 @@ public final class TestRunner {
         assertTrue(pr.supportsRange, "206 probe marks supportsRange true");
         assertEquals(Long.valueOf(-1L), Long.valueOf(pr.contentLength), "unknown total length (*) stays -1 instead of 1 byte");
 
+        // 2b. HttpProbe 200 OK with Accept-Ranges: bytes MUST NOT override actual 200 response to true
+        final ServerSocket probeServer200 = new ServerSocket(0);
+        final int port200 = probeServer200.getLocalPort();
+        Thread serverThread200 = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Socket sock = probeServer200.accept();
+                    BufferedReader br = new BufferedReader(new InputStreamReader(sock.getInputStream(), StandardCharsets.US_ASCII));
+                    String line;
+                    while ((line = br.readLine()) != null && !line.isEmpty()) {}
+                    OutputStream os = sock.getOutputStream();
+                    String resp = "HTTP/1.1 200 OK\r\n" +
+                        "Content-Length: 104857600\r\n" +
+                        "Content-Type: application/zip\r\n" +
+                        "Accept-Ranges: bytes\r\n" +
+                        "Connection: close\r\n\r\nPK_DUMMY_ZIP_HEADER";
+                    os.write(resp.getBytes(StandardCharsets.US_ASCII));
+                    os.flush();
+                    sock.close();
+                } catch (Exception ignored) {
+                } finally {
+                    try { probeServer200.close(); } catch (Exception ignored) {}
+                }
+            }
+        });
+        serverThread200.start();
+        HttpProbe.ProbeResult pr200 = HttpProbe.probe("http://127.0.0.1:" + port200 + "/stream.zip", null);
+        serverThread200.join(2000);
+        assertTrue(!pr200.supportsRange, "200 OK probe marks supportsRange false even when Accept-Ranges bytes header is present");
+        assertEquals(Long.valueOf(104857600L), Long.valueOf(pr200.contentLength), "total length resolved correctly from Content-Length");
+
         // 3. agent_bridge.js exports setSomEnabled alias and preserves refMetaMap fingerprint fields
         String bridgeSrc = AcidIo.readFileUtf8(new File("assets/agent_bridge.js"));
         assertTrue(bridgeSrc.contains("setSomEnabled: setSomHighlight"), "agent_bridge exports setSomEnabled alias");
@@ -2699,6 +2731,41 @@ public final class TestRunner {
         } finally {
             serverThread.join(2000);
             ss.close();
+        }
+
+        // 1b. Test AcidHttp non-http redirect defense (ClassCastException guard)
+        final ServerSocket ssBadRedirect = new ServerSocket(0);
+        final int badPort = ssBadRedirect.getLocalPort();
+        Thread badServerThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Socket s = ssBadRedirect.accept();
+                    BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.US_ASCII));
+                    String l;
+                    while ((l = r.readLine()) != null && !l.isEmpty()) {}
+                    OutputStream o = s.getOutputStream();
+                    String r302 = "HTTP/1.1 302 Found\r\n"
+                        + "Location: file:///etc/hosts\r\n"
+                        + "Content-Length: 0\r\n\r\n";
+                    o.write(r302.getBytes(StandardCharsets.US_ASCII));
+                    o.flush();
+                    s.close();
+                } catch (Exception ignored) {}
+            }
+        });
+        badServerThread.start();
+        try {
+            boolean caughtExpected = false;
+            try {
+                AcidHttp.fetchText("http://127.0.0.1:" + badPort + "/bad_redirect", 3000, 3000, 1024 * 1024);
+            } catch (java.io.IOException e) {
+                caughtExpected = e.getMessage() != null && e.getMessage().contains("Disallowed redirect protocol");
+            }
+            assertTrue(caughtExpected, "AcidHttp throws IOException rejecting redirect to file:// protocol");
+        } finally {
+            badServerThread.join(2000);
+            ssBadRedirect.close();
         }
 
         // 2. Test AcidHttp.downloadToFile atomic replace and failure rollback

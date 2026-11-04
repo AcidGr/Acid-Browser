@@ -118,13 +118,9 @@ public final class HttpProbe {
                     }
                 }
             } else if (code == 200) {
-                // Server ignored Range header and returned full stream
+                // Server ignored Range header and returned full stream (ground truth overrides any Accept-Ranges header)
                 supportsRange = false;
                 totalLength = conn.getContentLengthLong();
-                String acceptRanges = conn.getHeaderField("Accept-Ranges");
-                if ("bytes".equalsIgnoreCase(acceptRanges)) {
-                    supportsRange = true;
-                }
             }
 
             String mimeType = (code >= 200 && code < 300) ? conn.getContentType() : null;
