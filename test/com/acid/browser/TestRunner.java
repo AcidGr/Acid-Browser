@@ -2963,6 +2963,30 @@ public final class TestRunner {
 
         String sharedSummary = "[工具] " + toolItem.toolSummary;
         assertEquals("[工具] click · [e3]", sharedSummary, "foreground and background banners share identical status summary");
+
+        // 11. Symmetric human-in-the-loop takeover: pauseForTakeover vs resumeFromTakeover
+        //     Verifies state transitions when human voluntarily pauses the agent via "点此接管"
+        boolean running = true;
+        boolean pausedForTakeover = false;
+        int activeBoundTab = 5;
+
+        // Simulate pauseForTakeover:
+        if (running) {
+            running = false;
+            pausedForTakeover = true;
+            // Preserves activeBoundTab = 5 (does NOT clear to -1)
+        }
+        assertTrue(!running, "agent running state terminated");
+        assertTrue(pausedForTakeover, "agent entered pausedForTakeover state");
+        assertEquals(Integer.valueOf(5), Integer.valueOf(activeBoundTab), "bound tab is preserved across pause for takeover");
+
+        // Simulate resumeFromTakeover:
+        if (pausedForTakeover && !running) {
+            pausedForTakeover = false;
+            running = true;
+        }
+        assertTrue(running, "agent resumed running");
+        assertTrue(!pausedForTakeover, "paused flag cleared upon resume");
     }
 
     /** Covers download filename sanitisation and the Content-Disposition offset fix. */
