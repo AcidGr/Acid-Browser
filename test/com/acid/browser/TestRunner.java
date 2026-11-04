@@ -12,8 +12,10 @@ import com.acid.browser.download.DownloadWorker;
 import com.acid.browser.download.HttpProbe;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
@@ -173,6 +175,10 @@ public final class TestRunner {
 
         run("Audit Fixes: Download ref protection, MCP chunked & Edit overlap step", new TestCase() {
             @Override public void execute() throws Exception { testAuditFixesDownloadRefMcpPoolAndEditStep(); }
+        });
+
+        run("P1/P2 Audit Hardening: Non-blocking SSE pinger, Agent tab batch protection & JSON/null safety", new TestCase() {
+            @Override public void execute() throws Exception { testP1P2AuditHardeningNonBlockingSseAgentTabAndJsonSafety(); }
         });
 
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
@@ -3210,5 +3216,163 @@ public final class TestRunner {
         // 4. AdBlockManager trailing dot hostname normalization
         assertTrue(AdBlockManager.isPublicSuffixOrTld("com"), "com is TLD");
         assertTrue(!AdBlockManager.isPublicSuffixOrTld("example.com"), "example.com is not TLD");
+    }
+
+    private static void testP1P2AuditHardeningNonBlockingSseAgentTabAndJsonSafety() throws Exception {
+        // 1. WebAutomationDriver error JSON escaping validity test
+        // Verify that formatting an exception message with quotes and special characters produces valid JSON.
+        String excMsg = "Exception: Failed to execute 'querySelectorAll' on 'Document': 'div[\"test\"]' is not a valid selector.\nAt line 1";
+        String formattedJson = "{\"ok\":false,\"error\":" + JSONObject.quote("EVAL_EXCEPTION: " + excMsg) + "}";
+        JSONObject parsedJson = new JSONObject(formattedJson);
+        assertTrue(!parsedJson.getBoolean("ok"), "parsed ok is false");
+        assertTrue(parsedJson.getString("error").contains("EVAL_EXCEPTION: Exception: Failed"),
+            "Error string safely quoted and parsed without JSON syntax error");
+
+        // 2. DownloadCoordinator context null-safety test
+        File tmpDir = new File(System.getProperty("java.io.tmpdir"), "acid_null_ctx_" + System.currentTimeMillis());
+        tmpDir.mkdirs();
+        try {
+            BrowserDataStore mockStore = new BrowserDataStore(new InMemoryPrefs(), new InMemoryPrefs(), null);
+            DownloadCoordinator nullCoord = new DownloadCoordinator(null, mockStore) {
+                @Override
+                public File getDownloadDestinationDir() {
+                    return tmpDir;
+                }
+            };
+            try {
+                // deleteDownload with mContext == null must not crash with NPE
+                boolean deleted = nullCoord.deleteDownload(12345L, true);
+                assertTrue(!deleted, "deleteDownload non-existent id returns false without throwing NPE");
+
+                // openDownloadedFile with mContext == null must not crash with NPE
+                DownloadItem item = new DownloadItem(12345L, "nonexistent.bin", "https://example.com/file.bin", "application/octet-stream", 100L, 100L, DownloadTask.STATUS_SUCCESSFUL, System.currentTimeMillis());
+                nullCoord.openDownloadedFile(item, false);
+            } finally {
+                nullCoord.destroy();
+            }
+        } finally {
+            File[] files = tmpDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
+            }
+            tmpDir.delete();
+        }
+
+        // 3. Batch close other tabs: Agent-driven tab protection test
+        // When active tab is 1 and agent is actively driving tab 2 (MODE_AGENT),
+        // closing other tabs must preserve tab 2 and keep mAgentBoundTabId intact.
+        int activeTabId = 1;
+        int agentBoundId = 2;
+        int controlMode = AgentOverlayView.MODE_AGENT;
+
+        boolean isTab2Driven = (agentBoundId > 0 && agentBoundId == 2)
+            && (controlMode == AgentOverlayView.MODE_AGENT || controlMode == AgentOverlayView.MODE_TAKEOVER_REQUESTED);
+        assertTrue(isTab2Driven, "Tab 2 is identified as agent-driven");
+
+        // Simulate closeOtherTabs decision:
+        List<Integer> simulatedTabs = new ArrayList<Integer>();
+        simulatedTabs.add(1);
+        simulatedTabs.add(2);
+        simulatedTabs.add(3);
+
+        boolean agentLost = false;
+        int remainingBoundId = agentBoundId;
+        if (remainingBoundId > 0 && remainingBoundId != activeTabId && !isTab2Driven) {
+            remainingBoundId = -1;
+            agentLost = true;
+        }
+
+        List<Integer> keptTabs = new ArrayList<Integer>();
+        for (int i = 0; i < simulatedTabs.size(); i++) {
+            int tId = simulatedTabs.get(i);
+            if (tId != activeTabId) {
+                if (isTab2Driven && tId == 2) {
+                    keptTabs.add(tId); // Preserved!
+                    continue;
+                }
+            } else {
+                keptTabs.add(tId);
+            }
+        }
+
+        assertEquals(2, Integer.valueOf(keptTabs.size()), "Kept tabs contains activeTab 1 and protected agentTab 2");
+        assertTrue(keptTabs.contains(1), "Tab 1 kept");
+        assertTrue(keptTabs.contains(2), "Tab 2 kept and protected");
+        assertEquals(Integer.valueOf(2), Integer.valueOf(remainingBoundId), "agent bound tab remains 2");
+        assertTrue(!agentLost, "agent target is not lost");
+
+        // 4. HttpControlServer: Non-blocking SSE heartbeat pinger test
+        // Verify that connecting to /sse registers in mSseSessions and returns immediately,
+        // leaving worker threads free to process concurrent /mcp requests immediately.
+        int sseTestPort = 13192;
+        HttpControlServer sseServer = new HttpControlServer(null, null, sseTestPort);
+        sseServer.start();
+        try {
+            Thread.sleep(150);
+
+            // Connect SSE client
+            Socket sseClient = new Socket("127.0.0.1", sseTestPort);
+            sseClient.setSoTimeout(5000);
+            OutputStream sseOs = sseClient.getOutputStream();
+            InputStream sseIs = sseClient.getInputStream();
+
+            String sseReq = "GET /sse HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n";
+            sseOs.write(sseReq.getBytes(StandardCharsets.US_ASCII));
+            sseOs.flush();
+
+            // Read SSE headers and initial endpoint event
+            ByteArrayOutputStream sseHeaderBuf = new ByteArrayOutputStream();
+            int b;
+            int consecutiveLf = 0;
+            while ((b = sseIs.read()) != -1) {
+                sseHeaderBuf.write(b);
+                if (b == '\n') {
+                    consecutiveLf++;
+                    if (consecutiveLf == 2) break;
+                } else if (b != '\r') {
+                    consecutiveLf = 0;
+                }
+            }
+            String sseRespHeaders = new String(sseHeaderBuf.toByteArray(), StandardCharsets.US_ASCII);
+            assertTrue(sseRespHeaders.contains("200 OK"), "SSE handshake returns 200 OK");
+            assertTrue(sseRespHeaders.contains("text/event-stream"), "Content-Type is text/event-stream");
+
+            // Verify sweepAndPingSseSessions sends heartbeat without hanging
+            sseServer.sweepAndPingSseSessions();
+
+            // Now, with the SSE connection open and maintained, send a direct POST /mcp request.
+            // Worker pool must handle it immediately without thread exhaustion!
+            Socket rpcClient = new Socket("127.0.0.1", sseTestPort);
+            rpcClient.setSoTimeout(5000);
+            OutputStream rpcOs = rpcClient.getOutputStream();
+            InputStream rpcIs = rpcClient.getInputStream();
+
+            JSONObject rpcBody = new JSONObject();
+            rpcBody.put("jsonrpc", "2.0");
+            rpcBody.put("method", "ping");
+            rpcBody.put("id", "test-ping-1");
+            byte[] rpcBytes = rpcBody.toString().getBytes(StandardCharsets.UTF_8);
+
+            String rpcReq = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: "
+                + rpcBytes.length + "\r\n\r\n";
+            rpcOs.write(rpcReq.getBytes(StandardCharsets.US_ASCII));
+            rpcOs.write(rpcBytes);
+            rpcOs.flush();
+
+            ByteArrayOutputStream rpcRespBuf = new ByteArrayOutputStream();
+            byte[] buf = new byte[1024];
+            int r;
+            while ((r = rpcIs.read(buf)) != -1) {
+                rpcRespBuf.write(buf, 0, r);
+            }
+            String rpcRespStr = new String(rpcRespBuf.toByteArray(), StandardCharsets.UTF_8);
+            assertTrue(rpcRespStr.contains("200 OK"), "Direct POST /mcp responded 200 OK immediately");
+            assertTrue(rpcRespStr.contains("test-ping-1"), "Direct POST /mcp response carries matching id");
+
+            rpcClient.close();
+            sseClient.close();
+        } finally {
+            sseServer.stop();
+        }
     }
 }

@@ -421,7 +421,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void closeOtherTabs(int keepTabId) {
-        if (mAgentBoundTabId > 0 && mAgentBoundTabId != keepTabId) {
+        if (mAgentBoundTabId > 0 && mAgentBoundTabId != keepTabId && !isTabDrivenByAgent(mAgentBoundTabId)) {
             mAgentBoundTabId = -1;
             mAgentTargetLost = true;
         }
@@ -431,6 +431,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         for (int i = mTabs.size() - 1; i >= 0; i--) {
             TabSession t = mTabs.get(i);
             if (t.id != keepTabId) {
+                if (isTabDrivenByAgent(t.id)) {
+                    continue; // Preserve and protect the active agent-driven tab
+                }
                 if (t.snapshot != null && !t.snapshot.isRecycled()) {
                     try { t.snapshot.recycle(); } catch (Throwable ignored) {}
                     t.snapshot = null;
