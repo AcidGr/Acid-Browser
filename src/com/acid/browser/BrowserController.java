@@ -395,6 +395,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             mActiveTab = null;
         }
 
+        if (toRemove.snapshot != null && !toRemove.snapshot.isRecycled()) {
+            try { toRemove.snapshot.recycle(); } catch (Throwable ignored) {}
+            toRemove.snapshot = null;
+        }
         mWebViewContainer.removeView(toRemove.webView);
         toRemove.webView.stopLoading();
         toRemove.webView.destroy();
@@ -417,12 +421,20 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void closeOtherTabs(int keepTabId) {
+        if (mAgentBoundTabId > 0 && mAgentBoundTabId != keepTabId) {
+            mAgentBoundTabId = -1;
+            mAgentTargetLost = true;
+        }
         if (isCustomViewShowing() && mActiveTab != null && mActiveTab.id != keepTabId) {
             hideCustomView();
         }
         for (int i = mTabs.size() - 1; i >= 0; i--) {
             TabSession t = mTabs.get(i);
             if (t.id != keepTabId) {
+                if (t.snapshot != null && !t.snapshot.isRecycled()) {
+                    try { t.snapshot.recycle(); } catch (Throwable ignored) {}
+                    t.snapshot = null;
+                }
                 mWebViewContainer.removeView(t.webView);
                 t.webView.stopLoading();
                 t.webView.destroy();

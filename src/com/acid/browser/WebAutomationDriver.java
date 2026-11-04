@@ -736,9 +736,17 @@ public class WebAutomationDriver {
     }
 
     public JSONObject navigateSync(final String url, long waitSettleMs) {
-        if (isMainLooper()) {
-            Log.w(TAG, "navigateSync called directly on MainLooper; dispatching loadUrl without blocking wait to prevent UI deadlock");
-            mHost.loadUrl(url);
+        if (isMainLooper() || mMainHandler == null) {
+            Log.w(TAG, "navigateSync called without async Looper wait; dispatching target loadUrl directly");
+            BrowserController.TabSession target = mHost.getTargetTab();
+            if (target != null && target.webView != null) {
+                target.url = url;
+                target.webView.loadUrl(url);
+            } else if (target != null) {
+                target.url = url;
+            } else {
+                mHost.loadUrl(url);
+            }
             mHost.emitLog("[NAV] Navigated -> " + url);
             return observeSync(mHost.isSomEnabled(), true, false);
         }
@@ -747,7 +755,13 @@ public class WebAutomationDriver {
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
-                mHost.loadUrl(url);
+                BrowserController.TabSession target = mHost.getTargetTab();
+                if (target != null && target.webView != null) {
+                    target.url = url;
+                    target.webView.loadUrl(url);
+                } else {
+                    mHost.loadUrl(url);
+                }
                 latch.countDown();
             }
         });
