@@ -215,6 +215,53 @@ public class AcidAgentLoop {
         });
     }
 
+    /**
+     * Pauses the active Agent loop immediately for user takeover (symmetric with AI-requested takeover).
+     * Brakes active network/worker threads, preserves tab binding, aligns tool messages, and flips
+     * the system state into MODE_TAKEOVER_REQUESTED so the user can freely interact with the page
+     * and tap "交还AI" to resume seamlessly.
+     */
+    public void pauseForTakeover(final String reason) {
+        if (!mRunning) return;
+        mStopRequested = false;
+        mPausedForTakeover = true;
+        mRunning = false;
+        mRunGeneration.incrementAndGet();
+
+        final HttpURLConnection conn = mActiveConnection;
+        if (conn != null) {
+            try {
+                conn.disconnect();
+            } catch (Exception ignored) {}
+        }
+        mActiveConnection = null;
+
+        if (mWorkerThread != null) {
+            try {
+                mWorkerThread.interrupt();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to interrupt the agent worker thread on takeover pause", e);
+            }
+        }
+
+        AcidSessionStore.AgentSession active = mSessionStore != null ? mSessionStore.getActiveSession() : null;
+        if (active != null) {
+            closePendingRunningUiItems(active, "[用户接管，任务等待]");
+            sanitizeAndAlignApiMessages(active, mSessionStore);
+        }
+
+        final String finalReason = (reason != null && !reason.trim().isEmpty()) ? reason.trim() : "用户主动接管";
+        mMainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                mController.setControlMode(AgentOverlayView.MODE_TAKEOVER_REQUESTED, finalReason);
+                if (mListener != null) {
+                    mListener.onLoopStateChanged(false, true, 0);
+                }
+            }
+        });
+    }
+
     public int getRunGeneration() {
         return mRunGeneration.get();
     }

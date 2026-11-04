@@ -1054,7 +1054,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         }
                         return;
                     }
-                    mController.setControlMode(AgentOverlayView.MODE_HUMAN, "");
+                    if (mAgentLoop != null && mAgentLoop.isRunning()) {
+                        mAgentLoop.pauseForTakeover("用户主动接管");
+                    } else {
+                        mController.setControlMode(AgentOverlayView.MODE_HUMAN, "");
+                    }
                     return;
                 }
                 int next = (cur == AgentOverlayView.MODE_AGENT) ? AgentOverlayView.MODE_HUMAN : AgentOverlayView.MODE_AGENT;
