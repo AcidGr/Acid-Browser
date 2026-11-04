@@ -23,7 +23,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Pure Model Context Protocol (MCP) Server on 127.0.0.1:3090.
@@ -50,10 +55,31 @@ public class HttpControlServer {
     public static final int MAX_HEADER_BYTES = 64 * 1024; // 64 KB header limit
     public static final int MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB body limit
 
+    public static final int MAX_WORKER_THREADS = 24;
     private final BrowserController mController;
     private final AcidSandboxTools mSandboxTools;
     private final int mPort;
-    private final ExecutorService mPool = Executors.newCachedThreadPool();
+    private ExecutorService mPool = null;
+
+    private synchronized ExecutorService getOrCreatePool() {
+        if (mPool == null || mPool.isShutdown() || mPool.isTerminated()) {
+            final AtomicInteger threadIdx = new AtomicInteger(1);
+            mPool = new ThreadPoolExecutor(
+                2, MAX_WORKER_THREADS,
+                60L, TimeUnit.SECONDS,
+                new SynchronousQueue<Runnable>(),
+                new ThreadFactory() {
+                    @Override
+                    public Thread newThread(Runnable r) {
+                        Thread t = new Thread(r, "AcidMcpWorker-" + threadIdx.getAndIncrement());
+                        t.setDaemon(true);
+                        return t;
+                    }
+                }
+            );
+        }
+        return mPool;
+    }
 
     private ServerSocket mServerSocket;
     private volatile boolean mRunning = false;
@@ -178,7 +204,8 @@ public class HttpControlServer {
         if (mRunning) return;
         mRunning = true;
         final int gen = mServerGeneration.incrementAndGet();
-        mPool.execute(new Runnable() {
+        final ExecutorService pool = getOrCreatePool();
+        pool.execute(new Runnable() {
             @Override
             public void run() {
                 try {
@@ -194,12 +221,17 @@ public class HttpControlServer {
                         + (lanEnabled ? " (LAN enabled)" : " (Localhost only)"));
                     while (mRunning && mServerGeneration.get() == gen) {
                         final Socket client = mServerSocket.accept();
-                        mPool.execute(new Runnable() {
-                            @Override
-                            public void run() {
-                                handleClient(client);
-                            }
-                        });
+                        try {
+                            pool.execute(new Runnable() {
+                                @Override
+                                public void run() {
+                                    handleClient(client);
+                                }
+                            });
+                        } catch (RejectedExecutionException ree) {
+                            Log.w(TAG, "MCP worker pool saturated (max " + MAX_WORKER_THREADS + "); dropping connection");
+                            try { client.close(); } catch (Exception ignored) {}
+                        }
                     }
                 } catch (Exception e) {
                     if (mRunning && mServerGeneration.get() == gen) {
@@ -234,6 +266,12 @@ public class HttpControlServer {
             }
         }
         mSseSessions.clear();
+        if (mPool != null) {
+            try {
+                mPool.shutdownNow();
+            } catch (Exception ignored) {}
+            mPool = null;
+        }
         emitLog("[MCP] Acid MCP Server stopped (port " + mPort + " released)");
     }
 
@@ -357,7 +395,7 @@ public class HttpControlServer {
                 }
             }
 
-            // Read request body if Content-Length present
+            // Read request body if Content-Length or Transfer-Encoding: chunked present
             byte[] bodyBytes = new byte[0];
             if (headers.containsKey("content-length")) {
                 int len = 0;
@@ -396,6 +434,15 @@ public class HttpControlServer {
                         socket.close();
                         return;
                     }
+                }
+            } else if ("chunked".equalsIgnoreCase(headers.get("transfer-encoding"))) {
+                try {
+                    bodyBytes = readChunkedBody(is, MAX_BODY_BYTES);
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to read chunked request body: " + e.getMessage());
+                    sendJsonResponse(os, 400, new JSONObject().put("error", "Malformed chunked body: " + e.getMessage()));
+                    socket.close();
+                    return;
                 }
             }
 
@@ -728,5 +775,50 @@ public class HttpControlServer {
             }
             return resp;
         }
+    }
+
+    public static byte[] readChunkedBody(InputStream is, int maxBytes) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        while (true) {
+            StringBuilder hexSb = new StringBuilder();
+            int b;
+            while ((b = is.read()) != -1) {
+                if (b == '\n') break;
+                if (b != '\r') hexSb.append((char) b);
+            }
+            String line = hexSb.toString().trim();
+            int semi = line.indexOf(';');
+            if (semi >= 0) line = line.substring(0, semi).trim();
+            if (line.isEmpty()) break;
+
+            int chunkSize;
+            try {
+                chunkSize = Integer.parseInt(line, 16);
+            } catch (NumberFormatException nfe) {
+                throw new java.io.IOException("Invalid chunk-size line: " + line);
+            }
+            if (chunkSize <= 0) {
+                while ((b = is.read()) != -1) {
+                    if (b == '\n') break;
+                }
+                break;
+            }
+            if (baos.size() + chunkSize > maxBytes) {
+                throw new java.io.IOException("Payload Too Large: chunked transfer exceeds limit (" + maxBytes + " bytes)");
+            }
+            byte[] chunk = new byte[chunkSize];
+            int read = 0;
+            while (read < chunkSize) {
+                int r = is.read(chunk, read, chunkSize - read);
+                if (r < 0) throw new java.io.IOException("Premature EOF inside chunk data");
+                read += r;
+            }
+            baos.write(chunk, 0, read);
+            int cr = is.read();
+            if (cr == '\r') {
+                is.read();
+            }
+        }
+        return baos.toByteArray();
     }
 }

@@ -1149,21 +1149,24 @@ public class AcidAgentLoop {
                 streamParser.feedContentDelta(cChunk);
 
                 if (streamParser.thinkUpdated) {
-                    if (currentThinkItem == null) {
-                        currentThinkItem = new AcidSessionStore.UiMessageItem();
-                        currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
-                        currentThinkItem.isRunning = true;
-                        currentThinkItem.timestamp = System.currentTimeMillis();
-                        synchronized (mSessionStore) {
-                            session.uiItems.add(currentThinkItem);
+                    String currentReasoning = reasoningSb.toString();
+                    if (!currentReasoning.trim().isEmpty() && !"null".equals(currentReasoning.trim())) {
+                        if (currentThinkItem == null) {
+                            currentThinkItem = new AcidSessionStore.UiMessageItem();
+                            currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
+                            currentThinkItem.isRunning = true;
+                            currentThinkItem.timestamp = System.currentTimeMillis();
+                            synchronized (mSessionStore) {
+                                session.uiItems.add(currentThinkItem);
+                            }
+                            notifyItemAdded(currentThinkItem);
                         }
-                        notifyItemAdded(currentThinkItem);
-                    }
-                    long now = System.currentTimeMillis();
-                    if (now - lastUiUpdate >= THROTTLE_MS) {
-                        lastUiUpdate = now;
-                        currentThinkItem.text = reasoningSb.toString();
-                        notifyItemUpdated(currentThinkItem);
+                        long now = System.currentTimeMillis();
+                        if (now - lastUiUpdate >= THROTTLE_MS) {
+                            lastUiUpdate = now;
+                            currentThinkItem.text = currentReasoning;
+                            notifyItemUpdated(currentThinkItem);
+                        }
                     }
                 }
 
