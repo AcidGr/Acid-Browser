@@ -127,7 +127,7 @@ public class WebAutomationDriver {
                     });
                 } catch (Throwable t) {
                     Log.w(TAG, "evaluateJavascript crashed on UI thread: " + t.getMessage());
-                    ref.set("{\"ok\":false,\"error\":\"EVAL_EXCEPTION: " + JSONObject.quote(String.valueOf(t.getMessage())) + "\"}");
+                    ref.set("{\"ok\":false,\"error\":" + JSONObject.quote("EVAL_EXCEPTION: " + t.getMessage()) + "}");
                     latch.countDown();
                 }
             }

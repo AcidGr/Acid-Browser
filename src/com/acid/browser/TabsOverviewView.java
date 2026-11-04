@@ -144,23 +144,47 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
     private void confirmCloseOtherTabs() {
         if (mController == null || mController.getActiveTab() == null) return;
-        int others = mController.getTabs().size() - 1;
-        if (others <= 0) {
-            AcidFeedback.info(getContext(), "当前没有其他标签页可关闭");
+        int activeId = mController.getActiveTab().id;
+        int closableCount = 0;
+        int agentTabCount = 0;
+        for (BrowserController.TabSession t : mController.getTabs()) {
+            if (t.id != activeId) {
+                if (mController.isTabDrivenByAgent(t.id)) {
+                    agentTabCount++;
+                } else {
+                    closableCount++;
+                }
+            }
+        }
+        if (closableCount <= 0) {
+            if (agentTabCount > 0) {
+                AcidFeedback.info(getContext(), "其余标签页正在执行 AI 自动化任务，已受保护");
+            } else {
+                AcidFeedback.info(getContext(), "当前没有其他标签页可关闭");
+            }
             return;
         }
+
+        String message = (agentTabCount > 0)
+            ? ("确定关闭除当前页及运行中的 AI 标签页以外的其余 " + closableCount + " 个标签页吗？")
+            : ("确定关闭除当前页以外的其余 " + closableCount + " 个标签页吗？");
+
+        final int finalAgentTabCount = agentTabCount;
         AcidDialogs.confirmDanger(
             getContext(), mIsDarkMode,
             "关闭其他标签页",
-            "确定关闭除当前页以外的其余 " + others + " 个标签页吗？",
+            message,
             "全部关闭",
             new Runnable() {
                 @Override
                 public void run() {
-                    if (mController.getActiveTab() != null) {
+                    if (mController != null && mController.getActiveTab() != null) {
                         mController.closeOtherTabs(mController.getActiveTab().id);
                         renderTabsGrid();
-                        AcidFeedback.info(getContext(), "已关闭其余标签页");
+                        String toast = (finalAgentTabCount > 0)
+                            ? "已关闭其余闲置标签页（AI 标签页已保留）"
+                            : "已关闭其余标签页";
+                        AcidFeedback.info(getContext(), toast);
                     }
                 }
             }

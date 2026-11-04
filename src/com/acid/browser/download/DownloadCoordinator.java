@@ -1133,7 +1133,7 @@ public class DownloadCoordinator {
         try {
             File dir = getDownloadDestinationDir();
             File file = new File(dir, it.fileName);
-            if (!file.exists()) {
+            if (!file.exists() && mContext != null) {
                 File fallbackDir = new File(mContext.getExternalFilesDir(null), "Download");
                 File fallbackFile = new File(fallbackDir, it.fileName);
                 if (fallbackFile.exists()) {
@@ -1151,7 +1151,7 @@ public class DownloadCoordinator {
             if (file.exists()) {
                 uri = AcidFileProvider.getUriForFile(file);
             }
-            if (uri == null) {
+            if (uri == null && mContext != null) {
                 DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
                 if (dm != null && it.downloadId > 0) {
                     uri = dm.getUriForDownloadedFile(it.downloadId);
@@ -1286,9 +1286,11 @@ public class DownloadCoordinator {
                     }
                 }
 
-                DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null && downloadId > 0) {
-                    dm.remove(downloadId);
+                if (mContext != null) {
+                    DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+                    if (dm != null && downloadId > 0) {
+                        dm.remove(downloadId);
+                    }
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Failed to delete downloaded file for id " + downloadId, e);

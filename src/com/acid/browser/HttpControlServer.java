@@ -23,7 +23,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -60,6 +62,7 @@ public class HttpControlServer {
     private final AcidSandboxTools mSandboxTools;
     private final int mPort;
     private ExecutorService mPool = null;
+    private ScheduledExecutorService mHeartbeatExecutor = null;
 
     private synchronized ExecutorService getOrCreatePool() {
         if (mPool == null || mPool.isShutdown() || mPool.isTerminated()) {
@@ -79,6 +82,26 @@ public class HttpControlServer {
             );
         }
         return mPool;
+    }
+
+    private synchronized ScheduledExecutorService getOrCreateHeartbeatExecutor() {
+        if (mHeartbeatExecutor == null || mHeartbeatExecutor.isShutdown() || mHeartbeatExecutor.isTerminated()) {
+            mHeartbeatExecutor = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "AcidMcpSsePinger");
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+            mHeartbeatExecutor.scheduleWithFixedDelay(new Runnable() {
+                @Override
+                public void run() {
+                    sweepAndPingSseSessions();
+                }
+            }, 15L, 15L, TimeUnit.SECONDS);
+        }
+        return mHeartbeatExecutor;
     }
 
     private ServerSocket mServerSocket;
@@ -266,6 +289,12 @@ public class HttpControlServer {
             }
         }
         mSseSessions.clear();
+        if (mHeartbeatExecutor != null) {
+            try {
+                mHeartbeatExecutor.shutdownNow();
+            } catch (Exception ignored) {}
+            mHeartbeatExecutor = null;
+        }
         if (mPool != null) {
             try {
                 mPool.shutdownNow();
@@ -587,8 +616,6 @@ public class HttpControlServer {
 
         String sessionId = "mcp_session_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 100000);
         SseSession session = new SseSession(sessionId, os, socket);
-        mSseSessions.put(sessionId, session);
-        emitLog("[MCP] SSE Client connected (session: " + sessionId + ")");
 
         String sseHeaders = "HTTP/1.1 200 OK\r\n" +
             "Content-Type: text/event-stream; charset=utf-8\r\n" +
@@ -598,24 +625,36 @@ public class HttpControlServer {
         os.write(sseHeaders.getBytes(StandardCharsets.US_ASCII));
         os.flush();
 
-        session.sendEvent("endpoint", "/message?sessionId=" + sessionId);
+        boolean ok = session.sendEvent("endpoint", "/message?sessionId=" + sessionId);
+        if (!ok) {
+            throw new java.io.IOException("Failed to write initial SSE endpoint event");
+        }
 
-        try {
-            InputStream is = socket.getInputStream();
-            while (mRunning && !socket.isClosed()) {
-                if (socket.isInputShutdown() || socket.isOutputShutdown()) break;
-                Thread.sleep(15000);
-                boolean ok = session.sendEvent("ping", "{}");
-                if (!ok) break;
+        mSseSessions.put(sessionId, session);
+        emitLog("[MCP] SSE Client connected (session: " + sessionId + ")");
+        getOrCreateHeartbeatExecutor();
+        // Return immediately: this frees the worker thread back to mPool instantly!
+        // The SSE stream stays active on its socket, and dead connections / periodic pings
+        // are pruned and dispatched by mHeartbeatExecutor without tying up worker threads.
+    }
+
+    public void sweepAndPingSseSessions() {
+        if (!mRunning || mSseSessions.isEmpty()) return;
+        for (Map.Entry<String, SseSession> entry : mSseSessions.entrySet()) {
+            String sid = entry.getKey();
+            SseSession session = entry.getValue();
+            if (session.socket.isClosed() || session.socket.isInputShutdown() || session.socket.isOutputShutdown()) {
+                mSseSessions.remove(sid);
+                try { session.socket.close(); } catch (Exception ignored) {}
+                emitLog("[MCP] SSE Client disconnected (session: " + sid + ")");
+                continue;
             }
-        } catch (Exception e) {
-            Log.w(TAG, "SSE stream ended for session " + sessionId, e);
-        } finally {
-            mSseSessions.remove(sessionId);
-            try { socket.close(); } catch (Exception e) {
-                Log.w(TAG, "Failed to close SSE socket for session " + sessionId, e);
+            boolean ok = session.sendEvent("ping", "{}");
+            if (!ok) {
+                mSseSessions.remove(sid);
+                try { session.socket.close(); } catch (Exception ignored) {}
+                emitLog("[MCP] SSE Client disconnected (session: " + sid + ")");
             }
-            emitLog("[MCP] SSE Client disconnected (session: " + sessionId + ")");
         }
     }
 
@@ -639,7 +678,12 @@ public class HttpControlServer {
 
         SseSession sse = (sessionId != null) ? mSseSessions.get(sessionId) : null;
         if (sse != null && rpcResponse != null) {
-            sse.sendEvent("message", rpcResponse.toString());
+            boolean sent = sse.sendEvent("message", rpcResponse.toString());
+            if (!sent) {
+                mSseSessions.remove(sessionId);
+                try { sse.socket.close(); } catch (Exception ignored) {}
+                emitLog("[MCP] SSE Client disconnected on send failure (session: " + sessionId + ")");
+            }
             JSONObject ack = new JSONObject();
             ack.put("status", "accepted");
             ack.put("sessionId", sessionId);
