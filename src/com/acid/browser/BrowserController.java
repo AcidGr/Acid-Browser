@@ -734,6 +734,19 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     }
                     return true;
                 }
+                if (url != null && (url.startsWith("http://") || url.startsWith("https://"))
+                        && (isLocalHomeUrl(view != null ? view.getUrl() : null) || isLocalHomeUrl(tab.url))) {
+                    final String targetUrl = url;
+                    mMainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (tab != null && tab.webView != null) {
+                                loadUrlWithTab(tab, targetUrl, true);
+                            }
+                        }
+                    });
+                    return true;
+                }
                 return handleUrlIntercept(url);
             }
 
@@ -745,6 +758,19 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         if (mListener != null) {
                             mListener.onUserscriptInstallRequested(u, guessName);
                         }
+                        return true;
+                    }
+                    if ((u.startsWith("http://") || u.startsWith("https://"))
+                            && (isLocalHomeUrl(view != null ? view.getUrl() : null) || isLocalHomeUrl(tab.url))) {
+                        final String targetUrl = u;
+                        mMainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (tab != null && tab.webView != null) {
+                                    loadUrlWithTab(tab, targetUrl, true);
+                                }
+                            }
+                        });
                         return true;
                     }
                     return handleUrlIntercept(u);
@@ -1458,20 +1484,31 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return false;
     }
 
-    public boolean isHomeUrl(String url) {
+    public static boolean isLocalHomeUrl(String url) {
         if (url == null) return false;
         String trimmed = url.trim();
-        if (trimmed.isEmpty() || "acid://home".equalsIgnoreCase(trimmed) || "about:home".equalsIgnoreCase(trimmed)) {
+        if (trimmed.isEmpty() || "acid://home".equalsIgnoreCase(trimmed) || "about:home".equalsIgnoreCase(trimmed)
+                || "about:blank".equalsIgnoreCase(trimmed)) {
             return true;
         }
         if (HOME_URL.equals(trimmed)) {
             return true;
         }
-        String effectiveHome = getHomeUrl();
-        if (trimmed.equals(effectiveHome)) {
+        if (trimmed.startsWith("file://") && trimmed.contains("/homepage/index.html")) {
             return true;
         }
-        if (trimmed.contains("/acid_workspace/homepage/index.html") || trimmed.startsWith("workspace://homepage/index.html")) {
+        if (trimmed.startsWith("workspace://homepage/index.html")) {
+            return true;
+        }
+        return false;
+    }
+
+    public boolean isHomeUrl(String url) {
+        if (isLocalHomeUrl(url)) {
+            return true;
+        }
+        String effectiveHome = getHomeUrl();
+        if (effectiveHome != null && effectiveHome.equals(url != null ? url.trim() : null)) {
             return true;
         }
         return false;
