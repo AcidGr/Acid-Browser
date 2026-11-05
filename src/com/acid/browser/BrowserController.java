@@ -1819,6 +1819,29 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     /**
+     * Resumes the active WebView timers and rendering pipeline upon app returning to foreground.
+     */
+    public void onResume() {
+        if (mActiveTab != null && mActiveTab.webView != null) {
+            try {
+                mActiveTab.webView.onResume();
+                mActiveTab.webView.resumeTimers();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Pauses active WebView execution when app transitions to background.
+     */
+    public void onPause() {
+        if (mActiveTab != null && mActiveTab.webView != null) {
+            try {
+                mActiveTab.webView.onPause();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
      * Cascading lifecycle teardown for all browser subsystems, WebViews, and native Chromium contexts.
      */
     public void destroy() {

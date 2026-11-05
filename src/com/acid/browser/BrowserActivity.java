@@ -1806,8 +1806,35 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (mController != null) {
+            mController.onResume();
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (mIsFullscreenMode) {
+            applyFullscreenWindowFlags(true);
+        }
+        if (mAgentFloatingView != null && mAgentFloatingView.isShowing()) {
+            mAgentFloatingView.post(new Runnable() {
+                @Override
+                public void run() {
+                    mAgentFloatingView.requestLayout();
+                }
+            });
+        }
+    }
+
+    @Override
     protected void onPause() {
         super.onPause();
+        if (mController != null) {
+            mController.onPause();
+        }
         if (mController != null && mController.getUserscriptManager() != null) {
             try {
                 mController.getUserscriptManager().getStorage().flushSync();

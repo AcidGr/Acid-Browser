@@ -139,7 +139,7 @@
         'button', 'link', 'textbox', 'searchbox', 'combobox', 'listbox',
         'option', 'checkbox', 'radio', 'switch', 'tab', 'menuitem',
         'menuitemcheckbox', 'menuitemradio', 'slider', 'spinbutton',
-        'row', 'gridcell', 'listitem', 'treeitem', 'article'
+        'treeitem'
     ]);
     const IGNORED_TAGS = new Set([
         'script', 'style', 'noscript', 'meta', 'link', 'head', 'svg', 'path', 'defs', 'symbol'
@@ -393,26 +393,69 @@
     // 7. Main Observation Function
     function observe(options) {
         options = options || {};
-        const viewportOnly = options.viewportOnly !== false;
+        const offset = typeof options.offset === 'number' && options.offset >= 0 ? Math.floor(options.offset) : 0;
+        const limit = typeof options.limit === 'number' && options.limit > 0 ? Math.floor(options.limit) :
+                      (typeof options.maxElements === 'number' ? Math.floor(options.maxElements) : 180);
+        // Default viewportOnly: false for observation snapshots so total candidates and pagination
+        // stay 100% deterministic and constant regardless of offset or scroll position.
+        const viewportOnly = options.viewportOnly !== undefined
+            ? !!options.viewportOnly
+            : false;
         const marginPx = typeof options.marginPx === 'number' ? options.marginPx : 240;
-        const maxElements = options.maxElements || 180;
         const showSom = options.includeSom !== undefined ? !!options.includeSom : somEnabled;
 
         refMap = {};
         refMetaMap = {};
         const items = [];
         let counter = 0;
+        let totalCandidates = 0;
 
-        function isRedundantNestedChild(el, label, rect) {
-            if (!label) return false;
-            for (let k = items.length - 1; k >= 0 && k >= items.length - 4; k--) {
-                const prev = items[k];
-                if (prev.label && (prev.label === label || prev.label.includes(label))) {
-                    const pb = prev.box;
-                    if (rect.left >= pb.x - 4 && rect.top >= pb.y - 4 &&
-                        rect.right <= pb.x + pb.width + 4 && rect.bottom <= pb.y + pb.height + 4) {
-                        const t = (el.tagName || '').toLowerCase();
-                        if (t === 'input' || t === 'select' || t === 'textarea') return false;
+        function isRedundantChildOf(el, label, rect, parent) {
+            if (!parent || !label) return false;
+            const tag = (el.tagName || '').toLowerCase();
+            const role = (el.getAttribute('role') || '').toLowerCase().trim();
+
+            // Distinct action widgets are never redundant text children
+            if (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'button') return false;
+            if (tag === 'a' && el.hasAttribute('href')) return false;
+            if (role && (role === 'button' || role === 'link' || role === 'checkbox' ||
+                         role === 'radio' || role === 'switch' || role === 'tab' ||
+                         role === 'menuitem' || role === 'option')) {
+                return false;
+            }
+            if (el.hasAttribute('onclick') || el.hasAttribute('ng-click') ||
+                el.hasAttribute('@click') || el.hasAttribute('v-on:click') ||
+                el.hasAttribute('data-action')) {
+                return false;
+            }
+
+            // Check if child text is contained inside parent container's text and child rect is within parent rect
+            const pb = parent.box;
+            if (parent.label && (parent.label === label || parent.label.includes(label))) {
+                if (rect.left >= pb.x - 4 && rect.top >= pb.y - 4 &&
+                    rect.right <= pb.x + pb.width + 4 && rect.bottom <= pb.y + pb.height + 4) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Geometric sibling duplicate collision check (e.g. Gmail sidebar span right over a)
+        const recentPlaced = [];
+        function isGeometricSiblingDuplicate(el, rect) {
+            const tag = (el.tagName || '').toLowerCase();
+            const role = (el.getAttribute('role') || '').toLowerCase().trim();
+            for (let k = recentPlaced.length - 1; k >= 0; k--) {
+                const prev = recentPlaced[k];
+                const pb = prev.box;
+                const samePos = Math.abs(rect.left - pb.x) <= 4 &&
+                                Math.abs(rect.top - pb.y) <= 4 &&
+                                Math.abs(rect.width - pb.width) <= 6 &&
+                                Math.abs(rect.height - pb.height) <= 6;
+                if (samePos) {
+                    const isCurAction = tag === 'a' || tag === 'button' || tag === 'input' || role === 'button' || role === 'link';
+                    const isPrevAction = prev.tag === 'a' || prev.tag === 'button' || prev.tag === 'input' || prev.role === 'button' || prev.role === 'link';
+                    if (isPrevAction && !isCurAction) {
                         return true;
                     }
                 }
@@ -420,8 +463,8 @@
             return false;
         }
 
-        function walk(node) {
-            if (!node || counter >= maxElements) return;
+        function walk(node, activeParent) {
+            if (!node) return;
             if (node.nodeType !== Node.ELEMENT_NODE) return;
             if (node.id === SOM_OVERLAY_ID) return;
 
@@ -431,6 +474,7 @@
 
             const style = window.getComputedStyle(el);
             const rect = el.getBoundingClientRect();
+            let nextParent = activeParent;
 
             if (isElementVisible(el, rect, style)) {
                 const inVp = isInViewport(rect, 0);
@@ -441,83 +485,16 @@
                         const role = (el.getAttribute('role') || '').toLowerCase().trim() || tag;
                         const label = extractElementLabel(el);
 
-                        // Skip pure redundant nested duplicates (e.g. <span> inside <button> with same text)
-                        // and unlabeled generic wrappers
-                        if (!isRedundantNestedChild(el, label, rect) &&
-                            (label || tag !== 'div' && tag !== 'span' || role !== tag)) {
-                            counter++;
-                            const ref = 'e' + counter;
-                            refMap[ref] = el;
-                            refMetaMap[ref] = {
+                        const isRedundant = isRedundantChildOf(el, label, rect, activeParent) ||
+                                            isGeometricSiblingDuplicate(el, rect);
+
+                        if (!isRedundant && (label || tag !== 'div' && tag !== 'span' || role !== tag)) {
+                            totalCandidates++;
+
+                            const currentCandidate = {
                                 tag: tag,
                                 role: role,
                                 label: cleanText(label, 80),
-                                id: el.id || '',
-                                className: (el.className || '').toString().trim(),
-                                name: el.getAttribute('name') || '',
-                                href: el.getAttribute('href') || ''
-                            };
-                            const inputType = tag === 'input' ? (el.type || 'text').toLowerCase() : undefined;
-                            const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
-                            const readonly = !!el.readOnly || el.getAttribute('aria-readonly') === 'true';
-                            const checked = (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) ? !!el.checked : undefined;
-                            const ariaExp = el.getAttribute('aria-expanded');
-                            const ariaSel = el.getAttribute('aria-selected');
-                            const expanded = ariaExp !== null ? ariaExp === 'true' : undefined;
-                            const selected = ariaSel !== null ? ariaSel === 'true' : undefined;
-                            const badge = extractBadge(el);
-
-                            let val = undefined;
-                            if (tag === 'input' || tag === 'textarea' || tag === 'select') {
-                                val = isSensitiveInput(el) ? '***' : cleanText(el.value, 60);
-                            } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
-                                val = cleanText(el.innerText || el.textContent, 60);
-                            } else if (el.hasAttribute('aria-valuenow')) {
-                                val = el.getAttribute('aria-valuenow');
-                            }
-
-                            let href = undefined;
-                            if (tag === 'a' && el.href) {
-                                let rawHref = el.getAttribute('href') || el.href;
-                                if (rawHref && rawHref !== '#' && !rawHref.startsWith('javascript:')) {
-                                    if (rawHref.includes('?') && rawHref.length > 45) {
-                                        try {
-                                            const u = new URL(rawHref, location.href);
-                                            const q = u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('wd');
-                                            rawHref = q ? (u.pathname + '?q=' + encodeURIComponent(q)) : u.pathname;
-                                        } catch (e) {
-                                            rawHref = rawHref.split('?')[0];
-                                        }
-                                    }
-                                    href = cleanText(rawHref, 75);
-                                }
-                            }
-
-                            let optionsList = undefined;
-                            if (tag === 'select' && el.options) {
-                                optionsList = [];
-                                for (let k = 0; k < Math.min(el.options.length, 15); k++) {
-                                    const opt = el.options[k];
-                                    optionsList.push(cleanText(opt.value + ':' + opt.text, 40));
-                                }
-                            }
-
-                            const meta = {
-                                ref: ref,
-                                tag: tag,
-                                role: role,
-                                type: inputType,
-                                label: label,
-                                value: val,
-                                badge: badge,
-                                href: href,
-                                options: optionsList,
-                                disabled: disabled,
-                                readonly: readonly ? true : undefined,
-                                checked: checked,
-                                expanded: expanded,
-                                selected: selected,
-                                inViewport: inVp,
                                 box: {
                                     x: Math.round(rect.left),
                                     y: Math.round(rect.top),
@@ -525,9 +502,96 @@
                                     height: Math.round(rect.height)
                                 }
                             };
-                            refMetaMap[ref].inViewport = inVp;
-                            refMetaMap[ref].box = meta.box;
-                            items.push(meta);
+                            recentPlaced.push(currentCandidate);
+                            if (recentPlaced.length > 8) recentPlaced.shift();
+                            nextParent = currentCandidate;
+
+                            // Only record item if within the requested [offset, offset + limit) slice
+                            if (totalCandidates > offset && items.length < limit) {
+                                counter++;
+                                const ref = 'e' + counter;
+                                refMap[ref] = el;
+                                refMetaMap[ref] = {
+                                    tag: tag,
+                                    role: role,
+                                    label: cleanText(label, 80),
+                                    id: el.id || '',
+                                    className: (el.className || '').toString().trim(),
+                                    name: el.getAttribute('name') || '',
+                                    href: el.getAttribute('href') || ''
+                                };
+                                const inputType = tag === 'input' ? (el.type || 'text').toLowerCase() : undefined;
+                                const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
+                                const readonly = !!el.readOnly || el.getAttribute('aria-readonly') === 'true';
+                                const checked = (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) ? !!el.checked : undefined;
+                                const ariaExp = el.getAttribute('aria-expanded');
+                                const ariaSel = el.getAttribute('aria-selected');
+                                const expanded = ariaExp !== null ? ariaExp === 'true' : undefined;
+                                const selected = ariaSel !== null ? ariaSel === 'true' : undefined;
+                                const badge = extractBadge(el);
+
+                                let val = undefined;
+                                if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+                                    val = isSensitiveInput(el) ? '***' : cleanText(el.value, 60);
+                                } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+                                    val = cleanText(el.innerText || el.textContent, 60);
+                                } else if (el.hasAttribute('aria-valuenow')) {
+                                    val = el.getAttribute('aria-valuenow');
+                                }
+
+                                let href = undefined;
+                                if (tag === 'a' && el.href) {
+                                    let rawHref = el.getAttribute('href') || el.href;
+                                    if (rawHref && rawHref !== '#' && !rawHref.startsWith('javascript:')) {
+                                        if (rawHref.includes('?') && rawHref.length > 45) {
+                                            try {
+                                                const u = new URL(rawHref, location.href);
+                                                const q = u.searchParams.get('q') || u.searchParams.get('query') || u.searchParams.get('wd');
+                                                rawHref = q ? (u.pathname + '?q=' + encodeURIComponent(q)) : u.pathname;
+                                            } catch (e) {
+                                                rawHref = rawHref.split('?')[0];
+                                            }
+                                        }
+                                        href = cleanText(rawHref, 75);
+                                    }
+                                }
+
+                                let optionsList = undefined;
+                                if (tag === 'select' && el.options) {
+                                    optionsList = [];
+                                    for (let k = 0; k < Math.min(el.options.length, 15); k++) {
+                                        const opt = el.options[k];
+                                        optionsList.push(cleanText(opt.value + ':' + opt.text, 40));
+                                    }
+                                }
+
+                                const meta = {
+                                    ref: ref,
+                                    tag: tag,
+                                    role: role,
+                                    type: inputType,
+                                    label: label,
+                                    value: val,
+                                    badge: badge,
+                                    href: href,
+                                    options: optionsList,
+                                    disabled: disabled,
+                                    readonly: readonly ? true : undefined,
+                                    checked: checked,
+                                    expanded: expanded,
+                                    selected: selected,
+                                    inViewport: inVp,
+                                    box: {
+                                        x: Math.round(rect.left),
+                                        y: Math.round(rect.top),
+                                        width: Math.round(rect.width),
+                                        height: Math.round(rect.height)
+                                    }
+                                };
+                                refMetaMap[ref].inViewport = inVp;
+                                refMetaMap[ref].box = meta.box;
+                                items.push(meta);
+                            }
                         }
                     }
                 }
@@ -537,7 +601,7 @@
             const shadow = el.shadowRoot || el.__acidShadowRoot;
             if (shadow && shadow.children) {
                 for (let s = 0; s < shadow.children.length; s++) {
-                    walk(shadow.children[s]);
+                    walk(shadow.children[s], nextParent);
                 }
             }
 
@@ -546,7 +610,7 @@
                 try {
                     const doc = el.contentDocument;
                     if (doc && doc.body) {
-                        walk(doc.body);
+                        walk(doc.body, nextParent);
                     }
                 } catch (e) {}
             }
@@ -554,13 +618,26 @@
             const children = el.children;
             if (children) {
                 for (let i = 0; i < children.length; i++) {
-                    walk(children[i]);
+                    walk(children[i], nextParent);
                 }
             }
         }
 
-        if (document.body) {
-            walk(document.body);
+        let rootNode = document.body;
+        let scopedSelector = null;
+        if (options.selector || options.scope) {
+            try {
+                const sel = (options.selector || options.scope).trim();
+                const matched = document.querySelector(sel);
+                if (matched) {
+                    rootNode = matched;
+                    scopedSelector = sel;
+                }
+            } catch (e) {}
+        }
+
+        if (rootNode) {
+            walk(rootNode, null);
         }
 
         // Expose self-healing window.__refs for direct access via eval
@@ -579,7 +656,11 @@
 
         // Clear overlay before extracting body text so SoM badge numbers are not included in page excerpt
         clearSomOverlay();
-        const bodyText = cleanText(document.body ? document.body.innerText : '', 1200);
+        const fullBodyText = document.body ? (document.body.innerText || '') : '';
+        const totalTextChars = fullBodyText.length;
+        const textOffset = typeof options.textOffset === 'number' && options.textOffset >= 0 ? Math.floor(options.textOffset) : 0;
+        const textLimit = typeof options.textLimit === 'number' && options.textLimit > 0 ? Math.floor(options.textLimit) : 1200;
+        const slicedText = cleanText(fullBodyText.slice(textOffset, textOffset + textLimit), textLimit);
 
         if (showSom) {
             renderSomOverlay(items);
@@ -600,11 +681,25 @@
         const lines = [];
         lines.push('Page: ' + cleanText(document.title, 100));
         lines.push('URL: ' + location.href);
+        if (scopedSelector) {
+            lines.push('Scope: ' + scopedSelector);
+        }
         lines.push('Mode: ' + (desktopSpoofEnabled ? 'Desktop(1280px)' : 'Mobile') +
             ' | Viewport: ' + vw + 'x' + vh +
             ' | Scroll: ' + scrollY + '/' + scrollHeight + ' (' + scrollPct + '%)' +
             ' | Rev: ' + documentRevision);
-        lines.push('Interactive Elements (' + items.length + '):');
+
+        const endIdx = offset + items.length;
+        let elementsHeader = 'Interactive Elements (' + items.length;
+        if (items.length === 0) {
+            if (offset > 0 || totalCandidates > 0) {
+                elementsHeader += ' | offset=' + offset + ', total=' + totalCandidates;
+            }
+        } else if (totalCandidates > items.length || offset > 0) {
+            elementsHeader += ' | showing ' + (offset + 1) + '-' + endIdx + ' of ' + totalCandidates;
+        }
+        elementsHeader += '):';
+        lines.push(elementsHeader);
 
         for (let i = 0; i < items.length; i++) {
             const it = items[i];
@@ -628,15 +723,40 @@
             lines.push('  ' + desc);
         }
 
-        if (bodyText) {
-            lines.push('Page Text Excerpt:');
-            lines.push('  ' + bodyText);
+        if (totalCandidates <= offset) {
+            const isMobile = !desktopSpoofEnabled && vw < 600;
+            let outNotice = 'Notice: [OFFSET_OUT_OF_BOUNDS] offset=' + offset + ' exceeds total elements (' + totalCandidates + '). ';
+            if (isMobile) {
+                outNotice += 'Current page is in Mobile mode (' + vw + 'x' + vh + ') with only ' + totalCandidates + ' elements. If you need the full PC layout/table, use browser(action="set_mode", mode="desktop") first.';
+            } else {
+                outNotice += 'End of element stream reached (total=' + totalCandidates + '). Use observe(offset=' + Math.max(0, totalCandidates - limit) + ') to see the final slice.';
+            }
+            lines.push(outNotice);
+        } else if (totalCandidates > endIdx) {
+            const remaining = totalCandidates - endIdx;
+            lines.push('Notice: [COLLAPSED_ELEMENTS] ' + remaining + ' elements omitted (offset=' + offset + ', limit=' + limit + ', total=' + totalCandidates + '). Use observe(offset=' + endIdx + ') to view next slice, or observe(selector="...") to inspect a specific sub-tree.');
+        }
+
+        if (slicedText) {
+            let textHeader = 'Page Text Excerpt';
+            if (totalTextChars > textLimit || textOffset > 0) {
+                textHeader += ' (chars ' + textOffset + '-' + Math.min(totalTextChars, textOffset + slicedText.length) + ' of ' + totalTextChars + ')';
+            }
+            textHeader += ':';
+            lines.push(textHeader);
+            lines.push('  ' + slicedText);
+
+            if (textOffset + slicedText.length < totalTextChars) {
+                const remChars = totalTextChars - (textOffset + slicedText.length);
+                lines.push('  [... ' + remChars + ' chars remaining. Use observe(text_offset=' + (textOffset + slicedText.length) + ') to read more]');
+            }
         }
 
         return {
             ok: true,
             url: location.href,
             title: document.title || '',
+            scope: scopedSelector,
             mode: desktopSpoofEnabled ? 'desktop' : 'mobile',
             revision: documentRevision,
             msSinceLastMutation: Date.now() - lastMutationTime,
@@ -650,6 +770,20 @@
             },
             elementCount: items.length,
             elements: items,
+            collapsed: {
+                total: totalCandidates,
+                offset: offset,
+                limit: limit,
+                shown: items.length,
+                remaining: Math.max(0, totalCandidates - endIdx),
+                hasMore: totalCandidates > endIdx
+            },
+            textExcerpt: {
+                totalChars: totalTextChars,
+                offset: textOffset,
+                limit: textLimit,
+                hasMore: textOffset + slicedText.length < totalTextChars
+            },
             compactText: lines.join('\n')
         };
     }

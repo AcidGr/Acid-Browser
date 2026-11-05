@@ -114,7 +114,7 @@ public class AcidSandboxTools {
                 browserProps.put("action", propEnum(
                     "string",
                     "Action to perform on the browser:\n" +
-                    "- 'observe': Inspect current webpage semantic tree ([e1..eN] handles) and text excerpt.\n" +
+                    "- 'observe': Inspect current webpage semantic tree ([e1..eN] handles) and text excerpt. Supports optional 'selector' (container scope), 'offset'/'limit' (pagination), and 'text_offset' (body text paging).\n" +
                     "- 'navigate': Load URL in current tab (supports http/https or file:/// inside workspace).\n" +
                     "- 'click': Tap element by 'ref' (e.g. 'e3'), visible text ('text', e.g. '消息'/'发送'), CSS selector ('selector'), or pixel coordinates ('x', 'y'). Includes auto-healing if the DOM re-rendered.\n" +
                     "- 'fill': Fill text into input/textarea/contenteditable ('ref' or 'selector'). React/Vue safe. Optional 'submit'=true.\n" +
@@ -138,7 +138,7 @@ public class AcidSandboxTools {
                 browserProps.put("user_agent", prop("string", "Optional custom User-Agent header for 'download' (auto-populated for Baidu/Quark/UC/115 if omitted)."));
                 browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'fill', 'select', or container 'scroll'. Supports auto-healing if the DOM refreshed."));
                 browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', visible element text for semantic 'click' (e.g. '消息'/'发送'), or expected text for 'wait'."));
-                browserProps.put("selector", prop("string", "CSS selector for 'click', 'fill', or 'wait' (e.g. 'a[href*=\"/user/self\"]', 'input[name=\"q\"]')."));
+                browserProps.put("selector", prop("string", "CSS selector for 'click', 'fill', 'wait', or container scope for 'observe' (e.g. '[role=\"dialog\"]', 'table')."));
                 browserProps.put("exact", prop("boolean", "Whether semantic text matching requires exact full equality (default false)."));
                 browserProps.put("condition", prop("string", "Wait condition for 'wait': 'stable' (DOM quiet), 'selector' (element exists), 'text' (text present), 'gone' (element/text disappeared), 'networkidle' (page loaded), 'ms' (fixed sleep)."));
                 browserProps.put("quiet_ms", prop("integer", "Quiet threshold in ms without DOM mutations for 'stable' wait (default 300)."));
@@ -156,6 +156,9 @@ public class AcidSandboxTools {
                 browserProps.put("x", prop("number", "Raw X coordinate in view pixels for coordinate 'click'."));
                 browserProps.put("y", prop("number", "Raw Y coordinate in view pixels for coordinate 'click'."));
                 browserProps.put("reason", prop("string", "Explanation shown to the human user when calling 'request_takeover'."));
+                browserProps.put("offset", prop("integer", "0-based element offset for pagination in 'observe' (default 0)."));
+                browserProps.put("limit", prop("integer", "Maximum number of interactive elements to return in 'observe' (default 180)."));
+                browserProps.put("text_offset", prop("integer", "0-based character offset for reading page body text excerpt in 'observe' (default 0)."));
 
                 return makeTool(
                     "browser",
@@ -434,12 +437,27 @@ public class AcidSandboxTools {
 
     private ToolExecResult executeBrowserTool(final JSONObject args) throws Exception {
         String action = args.optString("action", "observe").toLowerCase().trim();
-        final WebAutomationDriver driver = mController.getAutomationDriver();
+        final WebAutomationDriver driver = mController != null ? mController.getAutomationDriver() : null;
         final int dlBefore = mController != null ? mController.getTriggeredDownloadsCount() : 0;
 
         if ("observe".equals(action)) {
+            if (driver == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             boolean som = args.has("som") ? args.optBoolean("som", mController.isSomEnabled()) : mController.isSomEnabled();
-            JSONObject obs = driver.observeSync(som, true, false);
+            JSONObject extraOpts = new JSONObject();
+            if (args.has("selector")) extraOpts.put("selector", args.optString("selector").trim());
+            if (args.has("scope")) extraOpts.put("scope", args.optString("scope").trim());
+            int offsetVal = args.optInt("offset", 0);
+            if (args.has("offset")) extraOpts.put("offset", offsetVal);
+            if (args.has("limit")) extraOpts.put("limit", args.optInt("limit", 180));
+            if (args.has("text_offset")) extraOpts.put("textOffset", args.optInt("text_offset", 0));
+            if (args.has("text_limit")) extraOpts.put("textLimit", args.optInt("text_limit", 1200));
+
+            boolean viewportOnly = args.optBoolean("viewport_only", false);
+            extraOpts.put("viewportOnly", viewportOnly);
+
+            JSONObject obs = driver.observeSync(som, viewportOnly, false, extraOpts);
             return new ToolExecResult(formatObservationWithActionHeader("OBSERVE", null, obs), false, null);
         }
 
@@ -451,12 +469,31 @@ public class AcidSandboxTools {
                     return new ToolExecResult("Error: Access denied: path escapes sandbox workspace (" + url + ")", false, null);
                 }
                 url = "file://" + f.getAbsolutePath();
+            } else if (url.startsWith("file://")) {
+                if (!url.startsWith("file:///android_asset/")) {
+                    String localPath = url.substring("file://".length());
+                    int qIdx = localPath.indexOf('?');
+                    if (qIdx >= 0) localPath = localPath.substring(0, qIdx);
+                    int hIdx = localPath.indexOf('#');
+                    if (hIdx >= 0) localPath = localPath.substring(0, hIdx);
+                    try {
+                        localPath = java.net.URLDecoder.decode(localPath, "UTF-8");
+                    } catch (Exception ignored) {}
+                    File f = resolveSandboxFile(localPath);
+                    if (f == null) {
+                        return new ToolExecResult("Error: Access denied: file:// URL escapes sandbox workspace (" + url + ")", false, null);
+                    }
+                    url = "file://" + f.getAbsolutePath();
+                }
             } else if (!url.contains("://") && !url.startsWith("about:") && !url.startsWith("javascript:")) {
                 // Check if it refers to a local HTML file inside workspace
                 File possibleLocal = resolveSandboxFile(url);
                 if (possibleLocal != null && possibleLocal.exists() && possibleLocal.isFile()) {
                     url = "file://" + possibleLocal.getAbsolutePath();
                 }
+            }
+            if (driver == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
             }
             JSONObject obs = driver.navigateSync(url, 3800);
             String dlNotice = awaitAndFormatDownloadNotice(dlBefore, 400);
