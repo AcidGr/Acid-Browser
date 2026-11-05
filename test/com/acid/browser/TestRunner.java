@@ -184,6 +184,10 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testP1P2AuditHardeningNonBlockingSseAgentTabAndJsonSafety(); }
         });
 
+        run("URL normalization: IP, localhost, dev ports HTTP fallback & SameSite navigation", new TestCase() {
+            @Override public void execute() throws Exception { testUrlNormalizationAndHttpFallback(); }
+        });
+
         System.out.println("[AcidTests] Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -3582,5 +3586,39 @@ public final class TestRunner {
         } finally {
             sseServer.stop();
         }
+    }
+
+    private static void testUrlNormalizationAndHttpFallback() throws Exception {
+        // 1. Loopback IPs & Localhost
+        assertTrue(BrowserController.isPrivateOrLocalIp("127.0.0.1"), "127.0.0.1 is local");
+        assertTrue(BrowserController.isPrivateOrLocalIp("127.0.0.2"), "127.0.0.2 is local");
+        assertTrue(BrowserController.isPrivateOrLocalIp("localhost"), "localhost is local");
+        assertTrue(BrowserController.isPrivateOrLocalIp("0.0.0.0"), "0.0.0.0 is local");
+        assertTrue(BrowserController.isPrivateOrLocalIp("::1"), "::1 is local");
+
+        // 2. Private RFC 1918 LAN & Tailscale CGNAT
+        assertTrue(BrowserController.isPrivateOrLocalIp("192.168.1.1"), "192.168.1.1 is private LAN");
+        assertTrue(BrowserController.isPrivateOrLocalIp("10.0.0.5"), "10.0.0.5 is private LAN");
+        assertTrue(BrowserController.isPrivateOrLocalIp("172.16.0.1"), "172.16.0.1 is private LAN");
+        assertTrue(BrowserController.isPrivateOrLocalIp("172.31.255.255"), "172.31.255.255 is private LAN");
+        assertTrue(BrowserController.isPrivateOrLocalIp("100.78.28.76"), "100.78.28.76 is Tailscale/CGNAT");
+        assertTrue(BrowserController.isPrivateOrLocalIp("169.254.1.1"), "169.254.1.1 is link-local");
+
+        // Public IPs & domains are not private
+        assertTrue(!BrowserController.isPrivateOrLocalIp("8.8.8.8"), "8.8.8.8 is public");
+        assertTrue(!BrowserController.isPrivateOrLocalIp("google.com"), "google.com is public");
+        assertTrue(!BrowserController.isPrivateOrLocalIp(null), "null is not private");
+
+        // 3. shouldDefaultToHttp tests
+        assertTrue(BrowserController.shouldDefaultToHttp("127.0.0.1:3080"), "127.0.0.1:3080 defaults to HTTP");
+        assertTrue(BrowserController.shouldDefaultToHttp("127.0.0.1"), "127.0.0.1 defaults to HTTP");
+        assertTrue(BrowserController.shouldDefaultToHttp("localhost:3080"), "localhost:3080 defaults to HTTP");
+        assertTrue(BrowserController.shouldDefaultToHttp("localhost"), "localhost defaults to HTTP");
+        assertTrue(BrowserController.shouldDefaultToHttp("192.168.1.1"), "192.168.1.1 defaults to HTTP");
+        assertTrue(BrowserController.shouldDefaultToHttp("192.168.1.1:8080/path"), "192.168.1.1:8080/path defaults to HTTP");
+        assertTrue(BrowserController.shouldDefaultToHttp("mydevserver.org:3000"), "explicit dev port 3000 defaults to HTTP");
+        assertTrue(!BrowserController.shouldDefaultToHttp("127.0.0.1:443"), "port 443 defaults to HTTPS");
+        assertTrue(!BrowserController.shouldDefaultToHttp("google.com"), "standard public domain defaults to HTTPS");
+        assertTrue(!BrowserController.shouldDefaultToHttp("google.com/search?q=test"), "standard domain with path defaults to HTTPS");
     }
 }

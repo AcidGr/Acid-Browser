@@ -31,7 +31,9 @@ import com.acid.browser.download.DownloadCoordinator;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -140,7 +142,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
      * flush per window; {@link #flushCookies()} is also called from {@code onPause} and at
      * teardown so a process death cannot lose cookies that were never flushed.
      */
-    public static final long COOKIE_FLUSH_THROTTLE_MS = 30000L;
+    public static final long COOKIE_FLUSH_THROTTLE_MS = 5000L;
     private long mLastCookieFlushMs = 0L;
 
     public void setDataStore(BrowserDataStore dataStore) {
@@ -287,7 +289,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
         String targetUrl = (initialUrl != null && !initialUrl.isEmpty()) ? initialUrl : getHomeUrl();
         tab.url = targetUrl;
-        wv.loadUrl(targetUrl);
+        if (initialUrl != null && !initialUrl.isEmpty()) {
+            loadUrlWithTab(tab, targetUrl, true);
+        } else {
+            wv.loadUrl(targetUrl);
+        }
 
         if (mListener != null) {
             mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
@@ -728,6 +734,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     }
                     return true;
                 }
+                if (url != null && (url.startsWith("http://") || url.startsWith("https://"))
+                        && (isHomeUrl(view != null ? view.getUrl() : null) || isHomeUrl(tab.url))) {
+                    loadUrl(url, true);
+                    return true;
+                }
                 return handleUrlIntercept(url);
             }
 
@@ -739,6 +750,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         if (mListener != null) {
                             mListener.onUserscriptInstallRequested(u, guessName);
                         }
+                        return true;
+                    }
+                    if ((u.startsWith("http://") || u.startsWith("https://"))
+                            && (isHomeUrl(view != null ? view.getUrl() : null) || isHomeUrl(tab.url))) {
+                        loadUrl(u, true);
                         return true;
                     }
                     return handleUrlIntercept(u);
@@ -1355,6 +1371,12 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("file://") || trimmed.startsWith("javascript:") || trimmed.startsWith("data:") || trimmed.startsWith("about:")) {
             return trimmed;
         }
+
+        String lower = trimmed.toLowerCase();
+        if (lower.equals("localhost") || lower.startsWith("localhost:") || lower.startsWith("localhost/")) {
+            return shouldDefaultToHttp(trimmed) ? "http://" + trimmed : "https://" + trimmed;
+        }
+
         if (trimmed.contains(" ") || !trimmed.contains(".")) {
             if (mDataStore != null) {
                 return mDataStore.buildSearchUrl(trimmed);
@@ -1365,7 +1387,85 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 return "https://www.google.com/search?q=" + trimmed;
             }
         }
+
+        if (shouldDefaultToHttp(trimmed)) {
+            return "http://" + trimmed;
+        }
         return "https://" + trimmed;
+    }
+
+    /**
+     * Determines whether an input hostname or host:port without an explicit scheme should default
+     * to HTTP rather than HTTPS (e.g. localhost, loopback, private RFC 1918 LAN IPs, or non-SSL dev ports).
+     */
+    public static boolean shouldDefaultToHttp(String input) {
+        if (input == null) return false;
+        String trimmed = input.trim();
+        String lower = trimmed.toLowerCase();
+        int slashIdx = lower.indexOf('/');
+        String hostPort = slashIdx >= 0 ? lower.substring(0, slashIdx) : lower;
+        String host = hostPort;
+        int port = -1;
+
+        if (hostPort.startsWith("[")) {
+            int closeBracket = hostPort.indexOf(']');
+            if (closeBracket > 0) {
+                host = hostPort.substring(1, closeBracket);
+                if (closeBracket + 1 < hostPort.length() && hostPort.charAt(closeBracket + 1) == ':') {
+                    try {
+                        port = Integer.parseInt(hostPort.substring(closeBracket + 2));
+                    } catch (Exception ignored) {}
+                }
+            }
+        } else {
+            int colonIdx = hostPort.lastIndexOf(':');
+            if (colonIdx >= 0) {
+                host = hostPort.substring(0, colonIdx);
+                try {
+                    port = Integer.parseInt(hostPort.substring(colonIdx + 1));
+                } catch (Exception ignored) {}
+            }
+        }
+
+        if ("localhost".equals(host) || "127.0.0.1".equals(host) || "0.0.0.0".equals(host) || "::1".equals(host)) {
+            return port != 443;
+        }
+        if (isPrivateOrLocalIp(host)) {
+            return port != 443;
+        }
+        // Explicit development ports (e.g., 3000, 3080, 5000, 8000, 8080, 8317, 9090) default to HTTP unless 443 or 8443
+        if (port > 0 && port != 443 && port != 8443) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Checks if a host is an IPv4 loopback, private LAN (RFC 1918), carrier-grade NAT, or link-local address.
+     */
+    public static boolean isPrivateOrLocalIp(String host) {
+        if (host == null) return false;
+        if ("127.0.0.1".equals(host) || "localhost".equals(host) || "0.0.0.0".equals(host) || "::1".equals(host)) {
+            return true;
+        }
+        String[] parts = host.split("\\.");
+        if (parts.length != 4) return false;
+        try {
+            int a = Integer.parseInt(parts[0]);
+            int b = Integer.parseInt(parts[1]);
+            int c = Integer.parseInt(parts[2]);
+            int d = Integer.parseInt(parts[3]);
+            if (a < 0 || a > 255 || b < 0 || b > 255 || c < 0 || c > 255 || d < 0 || d > 255) return false;
+            if (a == 127) return true; // 127.0.0.0/8 loopback
+            if (a == 10) return true; // 10.0.0.0/8 private
+            if (a == 192 && b == 168) return true; // 192.168.0.0/16 private
+            if (a == 172 && (b >= 16 && b <= 31)) return true; // 172.16.0.0/12 private
+            if (a == 100 && (b >= 64 && b <= 127)) return true; // 100.64.0.0/10 CGNAT / Tailscale
+            if (a == 169 && b == 254) return true; // 169.254.0.0/16 Link-local
+        } catch (Exception e) {
+            return false;
+        }
+        return false;
     }
 
     public boolean isHomeUrl(String url) {
@@ -1531,10 +1631,33 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     @Override
     public void loadUrl(String url) {
+        loadUrl(url, true);
+    }
+
+    public void loadUrl(String url, boolean userInitiated) {
         final String finalUrl = normalizeUrl(url);
-        if (mActiveTab != null) {
-            mActiveTab.webView.loadUrl(finalUrl);
+        if (mActiveTab != null && mActiveTab.webView != null) {
+            loadUrlWithTab(mActiveTab, finalUrl, userInitiated);
         }
+    }
+
+    public void loadUrlWithTab(TabSession tab, String url, boolean userInitiated) {
+        if (tab == null || tab.webView == null || url == null) return;
+        if (userInitiated && (url.startsWith("http://") || url.startsWith("https://"))) {
+            try {
+                CookieManager cm = CookieManager.getInstance();
+                String cookie = cm.getCookie(url);
+                if (cookie != null && !cookie.isEmpty()) {
+                    Map<String, String> headers = new HashMap<String, String>();
+                    headers.put("Cookie", cookie);
+                    tab.webView.loadUrl(url, headers);
+                    return;
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to inject cookie headers for user-initiated loadUrl", e);
+            }
+        }
+        tab.webView.loadUrl(url);
     }
 
     public void applySettingsHotReload() {

@@ -1821,6 +1821,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+        if (mController != null) {
+            mController.flushCookiesNow();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         if (mController != null && mController.getUserscriptManager() != null) {
             try {
