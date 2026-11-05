@@ -1643,20 +1643,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void loadUrlWithTab(TabSession tab, String url, boolean userInitiated) {
         if (tab == null || tab.webView == null || url == null) return;
-        if (userInitiated && (url.startsWith("http://") || url.startsWith("https://"))) {
-            try {
-                CookieManager cm = CookieManager.getInstance();
-                String cookie = cm.getCookie(url);
-                if (cookie != null && !cookie.isEmpty()) {
-                    Map<String, String> headers = new HashMap<String, String>();
-                    headers.put("Cookie", cookie);
-                    tab.webView.loadUrl(url, headers);
-                    return;
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to inject cookie headers for user-initiated loadUrl", e);
-            }
-        }
         tab.webView.loadUrl(url);
     }
 
