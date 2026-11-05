@@ -734,11 +734,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     }
                     return true;
                 }
-                if (url != null && (url.startsWith("http://") || url.startsWith("https://"))
-                        && (isHomeUrl(view != null ? view.getUrl() : null) || isHomeUrl(tab.url))) {
-                    loadUrl(url, true);
-                    return true;
-                }
                 return handleUrlIntercept(url);
             }
 
@@ -750,11 +745,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         if (mListener != null) {
                             mListener.onUserscriptInstallRequested(u, guessName);
                         }
-                        return true;
-                    }
-                    if ((u.startsWith("http://") || u.startsWith("https://"))
-                            && (isHomeUrl(view != null ? view.getUrl() : null) || isHomeUrl(tab.url))) {
-                        loadUrl(u, true);
                         return true;
                     }
                     return handleUrlIntercept(u);
