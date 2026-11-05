@@ -16,9 +16,11 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -763,6 +765,57 @@ public class AcidAgentLoop {
         }
     }
 
+    public static List<JSONObject> pruneHistoryForRequest(List<JSONObject> apiMessages) {
+        if (apiMessages == null || apiMessages.isEmpty()) {
+            return new ArrayList<JSONObject>();
+        }
+
+        // 1. Identify indices of messages that actually contain active DOM observations (with Interactive Elements)
+        List<Integer> domObsIndices = new ArrayList<Integer>();
+        for (int i = 0; i < apiMessages.size(); i++) {
+            JSONObject m = apiMessages.get(i);
+            if (m != null && "tool".equals(m.optString("role"))) {
+                String content = m.optString("content", "");
+                if (content.contains("Interactive Elements (")) {
+                    domObsIndices.add(i);
+                }
+            }
+        }
+
+        // 2. Ironclad Rules:
+        // - The latest DOM observation (last in domObsIndices) MUST NEVER be pruned under any circumstances!
+        // - Keep at least the last 3 DOM observations intact so pagination slices (offset=0, offset=180, offset=360) co-exist.
+        // - Non-DOM tools (eval, download, tabs, bash, read, write) NEVER count as DOM observations and cannot evict DOM history.
+        int domKeepThreshold = domObsIndices.size() > 3
+            ? domObsIndices.get(domObsIndices.size() - 3)
+            : -1;
+
+        Set<Integer> domIndicesSet = new HashSet<Integer>(domObsIndices);
+        int latestDomIndex = !domObsIndices.isEmpty() ? domObsIndices.get(domObsIndices.size() - 1) : -1;
+
+        List<JSONObject> result = new ArrayList<JSONObject>(apiMessages.size());
+        for (int i = 0; i < apiMessages.size(); i++) {
+            JSONObject orig = apiMessages.get(i);
+            if (orig == null) continue;
+            // Prune only if:
+            // a) It is an old DOM observation strictly before domKeepThreshold
+            // b) It is definitely not the latest DOM observation
+            if (domKeepThreshold >= 0 && i < domKeepThreshold && domIndicesSet.contains(i) && i != latestDomIndex) {
+                try {
+                    JSONObject pruned = new JSONObject(orig.toString());
+                    String full = orig.optString("content", "");
+                    pruned.put("content", compactOldObservation(full));
+                    result.add(pruned);
+                } catch (Exception e) {
+                    result.add(orig);
+                }
+            } else {
+                result.add(orig);
+            }
+        }
+        return result;
+    }
+
     private JSONArray buildPrunedMessagesForRequest(AcidSessionStore.AgentSession session) throws Exception {
         sanitizeAndAlignApiMessages(session, mSessionStore);
 
@@ -773,34 +826,16 @@ public class AcidAgentLoop {
         arr.put(sys);
 
         synchronized (mSessionStore) {
-            List<Integer> browserToolIndices = new ArrayList<Integer>();
-            for (int i = 0; i < session.apiMessages.size(); i++) {
-                JSONObject m = session.apiMessages.get(i);
-                if ("tool".equals(m.optString("role")) && "browser".equals(m.optString("name"))) {
-                    browserToolIndices.add(i);
-                }
-            }
-            int keepThreshold = browserToolIndices.size() > 2
-                ? browserToolIndices.get(browserToolIndices.size() - 2)
-                : -1;
-
-            for (int i = 0; i < session.apiMessages.size(); i++) {
-                JSONObject orig = session.apiMessages.get(i);
-                if (i < keepThreshold && "tool".equals(orig.optString("role")) && "browser".equals(orig.optString("name"))) {
-                    JSONObject pruned = new JSONObject(orig.toString());
-                    String full = orig.optString("content", "");
-                    pruned.put("content", compactOldObservation(full));
-                    arr.put(pruned);
-                } else {
-                    arr.put(orig);
-                }
+            List<JSONObject> prunedList = pruneHistoryForRequest(session.apiMessages);
+            for (JSONObject m : prunedList) {
+                arr.put(m);
             }
         }
         return arr;
     }
 
-    private String compactOldObservation(String full) {
-        if (full == null || full.length() < 300) return full;
+    public static String compactOldObservation(String full) {
+        if (full == null || full.length() < 100) return full;
 
         // 1. If it is an eval result, tabs list, or general text/error, DO NOT treat it as a DOM snapshot
         if (!full.contains("Interactive Elements (")) {
@@ -839,7 +874,7 @@ public class AcidAgentLoop {
                     Log.w(TAG, "Could not parse expired element count from history line", e);
                 }
                 sb.append("Interactive Elements: [").append(elementCount > 0 ? elementCount : "historical")
-                  .append(" elements expired from earlier step; refer to latest observation]\n");
+                  .append(" elements superseded by later step; see latest observation below]\n");
                 continue;
             }
             if (insideElements) {

@@ -321,6 +321,78 @@ public final class TestRunner {
         // 3. Token estimation heuristic
         int estimated = AcidAgentLoop.estimateTokens(session);
         assertTrue(estimated > 10, "Token estimation heuristic returns positive count: " + estimated);
+
+        // 4. Observation Compaction & Pruning Ironclad Rules
+        List<JSONObject> history = new ArrayList<JSONObject>();
+
+        JSONObject uMsg = new JSONObject();
+        uMsg.put("role", "user");
+        uMsg.put("content", "Search and email");
+        history.add(uMsg);
+
+        // Step 2: Observe slice 0
+        StringBuilder obs0Content = new StringBuilder("=== [BROWSER ACTION: OBSERVE] ===\nPage: Mail\nURL: https://mail.test\nInteractive Elements (180 | showing 1-180 of 441):\n");
+        for (int i = 1; i <= 20; i++) {
+            obs0Content.append("  [e").append(i).append("] a \"Inbox item ").append(i).append("\"\n");
+        }
+        obs0Content.append("Page Text Excerpt:\nMail body text long excerpt to simulate real page content in testing...");
+        JSONObject obs0 = new JSONObject();
+        obs0.put("role", "tool");
+        obs0.put("name", "browser");
+        obs0.put("content", obs0Content.toString());
+        history.add(obs0);
+
+        // Step 3 & 4: Two EVAL tool calls (non-DOM tools)
+        JSONObject eval1 = new JSONObject();
+        eval1.put("role", "tool");
+        eval1.put("name", "browser");
+        eval1.put("content", "=== [BROWSER ACTION: EVAL] ===\n\"evaluated\"");
+        history.add(eval1);
+
+        JSONObject eval2 = new JSONObject();
+        eval2.put("role", "tool");
+        eval2.put("name", "browser");
+        eval2.put("content", "=== [BROWSER ACTION: EVAL] ===\n\"evaluated2\"");
+        history.add(eval2);
+
+        // Pruning test: obs0 MUST NOT be pruned despite subsequent eval calls!
+        List<JSONObject> pruned1 = AcidAgentLoop.pruneHistoryForRequest(history);
+        assertTrue(pruned1.get(1).optString("content").contains("  [e1] a \"Inbox item 1\""), "DOM observation must NOT be pruned by subsequent eval calls!");
+        assertTrue(!pruned1.get(1).optString("content").contains("superseded"), "Must not mark latest DOM as superseded");
+
+        // Now test pagination: add obs1 (slice 181-360) and obs2 (slice 361-441)
+        JSONObject obs1 = new JSONObject();
+        obs1.put("role", "tool");
+        obs1.put("name", "browser");
+        obs1.put("content", "=== [BROWSER ACTION: OBSERVE] ===\nPage: Mail\nURL: https://mail.test\nInteractive Elements (180 | showing 181-360 of 441):\n  [e181] a \"Email 181\"\nPage Text Excerpt:\nMore text");
+        history.add(obs1);
+
+        JSONObject obs2 = new JSONObject();
+        obs2.put("role", "tool");
+        obs2.put("name", "browser");
+        obs2.put("content", "=== [BROWSER ACTION: OBSERVE] ===\nPage: Mail\nURL: https://mail.test\nInteractive Elements (81 | showing 361-441 of 441):\n  [e361] a \"Email 361\"\nPage Text Excerpt:\nEnd of page");
+        history.add(obs2);
+
+        // With 3 DOM observations (obs0, obs1, obs2), all 3 must co-exist completely unpruned!
+        List<JSONObject> pruned2 = AcidAgentLoop.pruneHistoryForRequest(history);
+        assertTrue(pruned2.get(1).optString("content").contains("  [e1] a \"Inbox item 1\""), "Slice 0 elements must be preserved in 3-slice window");
+        assertTrue(pruned2.get(4).optString("content").contains("  [e181] a \"Email 181\""), "Slice 1 elements must be preserved in 3-slice window");
+        assertTrue(pruned2.get(5).optString("content").contains("  [e361] a \"Email 361\""), "Slice 2 elements must be preserved in 3-slice window");
+
+        // Add 4th DOM observation (new page action / navigation)
+        JSONObject obs3 = new JSONObject();
+        obs3.put("role", "tool");
+        obs3.put("name", "browser");
+        obs3.put("content", "=== [BROWSER ACTION: NAVIGATE] ===\nPage: Compose\nURL: https://mail.test/compose\nInteractive Elements (10 | showing 1-10 of 10):\n  [e1] input \"To\"\nPage Text Excerpt:\nCompose window");
+        history.add(obs3);
+
+        List<JSONObject> pruned3 = AcidAgentLoop.pruneHistoryForRequest(history);
+        // Now obs0 (4th from end) is compacted, but obs1, obs2, obs3 remain intact!
+        String compactedObs0 = pruned3.get(1).optString("content");
+        assertTrue(compactedObs0.contains("Interactive Elements: [180 elements superseded by later step; see latest observation below]"), "Oldest slice compacted with accurate superseded notice");
+        assertTrue(!compactedObs0.contains("  [e1] a \"Inbox item 1\""), "Compacted slice removes stale element handles");
+        // And latest obs3 is 100% intact!
+        assertTrue(pruned3.get(6).optString("content").contains("  [e1] input \"To\""), "Latest DOM observation must NEVER be compacted");
     }
 
     // =========================================================================
