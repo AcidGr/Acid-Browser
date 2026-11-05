@@ -1077,24 +1077,57 @@
             const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
             const previousValue = el.value;
 
-            if (descriptor && descriptor.set) {
-                descriptor.set.call(el, finalText);
-            } else {
-                el.value = finalText;
+            // 1. Dispatch beforeinput (for modern React, Vue, Lexical, and Web components)
+            try {
+                el.dispatchEvent(new InputEvent('beforeinput', {
+                    bubbles: true,
+                    cancelable: true,
+                    inputType: clear === false ? 'insertText' : 'insertReplacementText',
+                    data: finalText
+                }));
+            } catch (e) {}
+
+            // 2. Set value via prototype descriptor or direct assignment
+            try {
+                if (descriptor && descriptor.set) {
+                    descriptor.set.call(el, finalText);
+                } else {
+                    el.value = finalText;
+                }
+            } catch (e) {
+                try {
+                    el.value = finalText;
+                } catch (e2) {}
             }
 
-            // Reset React 16-19 internal _valueTracker so controlled inputs detect the change
+            // 3. Reset React 16-19 internal _valueTracker so controlled inputs detect the change
             if (el._valueTracker) {
                 try {
                     el._valueTracker.setValue(previousValue);
                 } catch (e) {}
             }
 
-            el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+            // 4. Dispatch standard input & change events
+            try {
+                el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+            } catch (e) {}
             return true;
-        } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
-            el.focus();
+        } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
+            try {
+                el.focus();
+            } catch (e) {}
+
+            // 1. Dispatch beforeinput
+            try {
+                el.dispatchEvent(new InputEvent('beforeinput', {
+                    bubbles: true,
+                    cancelable: true,
+                    inputType: clear === false ? 'insertText' : 'insertReplacementText',
+                    data: finalText
+                }));
+            } catch (e) {}
+
             let applied = false;
             try {
                 if (clear !== false) {
@@ -1102,10 +1135,22 @@
                 }
                 applied = document.execCommand('insertText', false, finalText);
             } catch (e) {}
-            if (!applied) {
-                el.innerText = finalText;
+
+            const currentVal = (el.innerText !== undefined ? el.innerText : (el.textContent || '')).trim();
+            if (!applied || (!currentVal.includes(finalText.trim()) && currentVal !== finalText)) {
+                try {
+                    if (clear === false) {
+                        el.innerText = (el.innerText || '') + finalText;
+                    } else {
+                        el.innerText = finalText;
+                    }
+                } catch (e) {}
             }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
+
+            try {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            } catch (e) {}
             return true;
         }
         return false;
@@ -1119,13 +1164,133 @@
         const el = resolved.el;
         const ref = resolved.ref || 'target';
         const revBefore = documentRevision;
+
+        // 1. Pre-check: Reject disabled elements
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true') {
+            return {
+                ok: false,
+                error: 'ELEMENT_DISABLED',
+                ref: ref,
+                message: 'Element ' + ref + ' is disabled and cannot accept input.'
+            };
+        }
+
+        // 2. Pre-check: Reject read-only elements
+        if (el.readOnly || el.getAttribute('aria-readonly') === 'true' || el.getAttribute('readonly') !== null) {
+            return {
+                ok: false,
+                error: 'ELEMENT_READONLY',
+                ref: ref,
+                message: 'Element ' + ref + ' is read-only and cannot be modified.'
+            };
+        }
+
+        // 3. Pre-check: Reject non-fillable input types (file, checkbox, radio, buttons)
+        const tag = (el.tagName || '').toLowerCase();
+        if (tag === 'input') {
+            const inputType = (el.type || 'text').toLowerCase();
+            if (inputType === 'file') {
+                return {
+                    ok: false,
+                    error: 'FILE_INPUT_NOT_SUPPORTED',
+                    ref: ref,
+                    message: 'Element ' + ref + ' is a file input. Direct text fill is blocked by browser security.'
+                };
+            }
+            if (inputType === 'checkbox' || inputType === 'radio') {
+                return {
+                    ok: false,
+                    error: 'INVALID_INPUT_TYPE',
+                    ref: ref,
+                    message: 'Element ' + ref + ' is a ' + inputType + '. Use click instead of fill.'
+                };
+            }
+            if (inputType === 'button' || inputType === 'submit' || inputType === 'reset') {
+                return {
+                    ok: false,
+                    error: 'BUTTON_NOT_EDITABLE',
+                    ref: ref,
+                    message: 'Element ' + ref + ' is a ' + inputType + ' button. Use click instead of fill.'
+                };
+            }
+        }
+
+        // 4. Pre-check: Target must be input, textarea, or contenteditable
+        const isContentEditable = !!(el.isContentEditable || el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox');
+        if (tag !== 'input' && tag !== 'textarea' && !isContentEditable) {
+            return {
+                ok: false,
+                error: 'NOT_EDITABLE',
+                ref: ref,
+                message: 'Element ' + ref + ' (<' + tag + '>) is not an input, textarea, or contenteditable element.'
+            };
+        }
+
         try {
             el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
         } catch (e) {}
 
+        const expectedText = clear === false ? ((el.value || el.innerText || '') + text) : String(text);
         const applied = setSingleFieldValue(el, text, clear !== false);
         if (!applied) {
-            return { ok: false, error: 'NOT_EDITABLE', message: 'Element ' + ref + ' is not an input/textarea/contenteditable.' };
+            return {
+                ok: false,
+                error: 'NOT_EDITABLE',
+                ref: ref,
+                message: 'Element ' + ref + ' failed to accept input setter.'
+            };
+        }
+
+        // 5. Readback Verification: Read actual value from the element and compare with expected input
+        let actualValue = '';
+        if (tag === 'input' || tag === 'textarea') {
+            actualValue = el.value !== undefined ? String(el.value) : '';
+        } else {
+            actualValue = (el.innerText !== undefined ? el.innerText : (el.textContent || '')).trim();
+        }
+
+        const isSensitive = isSensitiveInput(el);
+        let verified = false;
+
+        if (isSensitive) {
+            // Sensitive fields (passwords): verify value is present if non-empty expected, mask in receipt
+            verified = (expectedText === '') ? (actualValue === '') : (actualValue.length > 0);
+        } else if (expectedText === '') {
+            // Clearing field
+            verified = (actualValue === '');
+        } else {
+            // Robust multi-mode matching:
+            // - Exact match: actualValue === expectedText
+            // - Trimmed match: actualValue.trim() === expectedText.trim()
+            // - Whitespace-normalized match (handles rich text editors inserting non-breaking spaces or linebreaks)
+            // - Substring containment (for auto-formatting inputs e.g. phone masks "+86 138-0000" containing "1380000")
+            // - MaxLength truncation match
+            const normActual = actualValue.replace(/\s+/g, ' ').trim();
+            const normExpected = expectedText.replace(/\s+/g, ' ').trim();
+            const compactActual = actualValue.replace(/[\s\-_()+]/g, '');
+            const compactExpected = expectedText.replace(/[\s\-_()+]/g, '');
+
+            if (actualValue === expectedText || normActual === normExpected) {
+                verified = true;
+            } else if (compactActual === compactExpected || compactActual.includes(compactExpected)) {
+                verified = true;
+            } else if (normActual.includes(normExpected) || actualValue.includes(expectedText)) {
+                verified = true;
+            } else if (el.maxLength > 0 && normActual === normExpected.substring(0, el.maxLength)) {
+                verified = true;
+            }
+        }
+
+        if (!verified) {
+            return {
+                ok: false,
+                error: 'VERIFICATION_FAILED',
+                ref: ref,
+                expected: isSensitive ? '***' : (expectedText.length > 80 ? expectedText.substring(0, 77) + '...' : expectedText),
+                actual: isSensitive ? '***' : (actualValue.length > 80 ? actualValue.substring(0, 77) + '...' : actualValue),
+                message: 'Fill verification failed on ' + ref + ': expected "' +
+                    (isSensitive ? '***' : expectedText) + '", but read back "' + (isSensitive ? '***' : actualValue) + '".'
+            };
         }
 
         if (submit) {
@@ -1151,7 +1316,8 @@
         return {
             ok: true,
             ref: ref,
-            value: isSensitiveInput(el) ? '***' : (el.value || el.innerText || ''),
+            value: isSensitive ? '***' : actualValue,
+            verified: true,
             submitted: !!submit,
             revisionBefore: revBefore,
             revisionAfter: documentRevision,

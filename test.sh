@@ -35,3 +35,6 @@ javac -proc:none -encoding UTF-8 -source 1.8 -target 1.8 -Xlint:-options \
 echo "[AcidTests] Running JVM regression test suite..."
 java -cp "build/test-stubs:build/classes:build/test-classes:$ANDROID_JAR" \
     com.acid.browser.TestRunner
+
+echo "[AcidTests] Running JS bridge fill readback regression tests..."
+node test/test_fill_readback.js
