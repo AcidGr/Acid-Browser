@@ -3620,5 +3620,19 @@ public final class TestRunner {
         assertTrue(!BrowserController.shouldDefaultToHttp("127.0.0.1:443"), "port 443 defaults to HTTPS");
         assertTrue(!BrowserController.shouldDefaultToHttp("google.com"), "standard public domain defaults to HTTPS");
         assertTrue(!BrowserController.shouldDefaultToHttp("google.com/search?q=test"), "standard domain with path defaults to HTTPS");
+
+        // 4. isLocalHomeUrl tests
+        assertTrue(BrowserController.isLocalHomeUrl(BrowserController.HOME_URL), "default asset homepage is local home");
+        assertTrue(BrowserController.isLocalHomeUrl("acid://home"), "acid://home is local home");
+        assertTrue(BrowserController.isLocalHomeUrl("about:home"), "about:home is local home");
+        assertTrue(BrowserController.isLocalHomeUrl("about:blank"), "about:blank is local home");
+        assertTrue(BrowserController.isLocalHomeUrl("file:///data/user/0/com.acid.browser/files/acid_workspace/homepage/index.html"), "custom workspace homepage file is local home");
+        assertTrue(BrowserController.isLocalHomeUrl("workspace://homepage/index.html"), "workspace:// homepage is local home");
+        assertTrue(!BrowserController.isLocalHomeUrl("https://www.google.com"), "online custom home url is not local home");
+        assertTrue(!BrowserController.isLocalHomeUrl("https://news.qq.com/rain/a/test"), "external site is not local home");
+        assertTrue(!BrowserController.isLocalHomeUrl("http://localhost:3080/app"), "dev server is not local home");
+        assertTrue(!BrowserController.isLocalHomeUrl(null), "null is not local home");
+        assertTrue(BrowserController.isLocalHomeUrl(""), "empty string defaults to home");
+        assertTrue(BrowserController.isLocalHomeUrl("   "), "whitespace string defaults to home");
     }
 }
