@@ -1064,7 +1064,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private boolean handleUrlIntercept(String url) {
         if (url == null) return false;
         String lower = url.toLowerCase();
-        if (lower.startsWith("acid://") || lower.startsWith("via://")) {
+        if (lower.startsWith("acid://")) {
             loadUrl(normalizeUrl(url));
             return true;
         }
@@ -1354,8 +1354,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             return getHomeUrl();
         }
 
-        // Native search protocol: acid://search?q=..., about:search?q=..., via://search?q=...
-        if (trimmed.startsWith("acid://search") || trimmed.startsWith("about:search") || trimmed.startsWith("via://search")) {
+        // Native search protocol: acid://search?q=..., about:search?q=...
+        if (trimmed.startsWith("acid://search") || trimmed.startsWith("about:search")) {
             String query = "";
             try {
                 int qIdx = trimmed.indexOf("?q=");
