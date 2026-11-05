@@ -828,7 +828,12 @@ public class AcidAgentLoop {
                     int p1 = line.indexOf('(');
                     int p2 = line.indexOf(')');
                     if (p1 >= 0 && p2 > p1) {
-                        elementCount = Integer.parseInt(line.substring(p1 + 1, p2).trim());
+                        String rawInner = line.substring(p1 + 1, p2).trim();
+                        int pipeIdx = rawInner.indexOf('|');
+                        if (pipeIdx >= 0) {
+                            rawInner = rawInner.substring(0, pipeIdx).trim();
+                        }
+                        elementCount = Integer.parseInt(rawInner);
                     }
                 } catch (Exception e) {
                     Log.w(TAG, "Could not parse expired element count from history line", e);
@@ -995,7 +1000,13 @@ public class AcidAgentLoop {
             if (fn != null) {
                 if (fn.has("name") && !fn.isNull("name")) {
                     String name = fn.optString("name", "");
-                    if (!name.isEmpty() && !"null".equals(name)) call.name += name;
+                    if (!name.isEmpty() && !"null".equals(name)) {
+                        if (call.name == null || call.name.isEmpty()) {
+                            call.name = name;
+                        } else if (!call.name.equals(name)) {
+                            call.name += name;
+                        }
+                    }
                 }
                 if (fn.has("arguments") && !fn.isNull("arguments")) {
                     String args = fn.optString("arguments", "");
@@ -1373,10 +1384,14 @@ public class AcidAgentLoop {
     }
 
     public int computeEstimatedTokens(AcidSessionStore.AgentSession session) {
+        return estimateTokens(session);
+    }
+
+    public static int estimateTokens(AcidSessionStore.AgentSession session) {
         if (session == null) return 0;
         if (session.lastTotalTokens > 0) return session.lastTotalTokens;
         int chars = 0;
-        synchronized (mSessionStore) {
+        synchronized (session) {
             for (int i = 0; i < session.apiMessages.size(); i++) {
                 JSONObject m = session.apiMessages.get(i);
                 if (m != null) {

@@ -559,10 +559,24 @@ public class WebAutomationDriver {
     }
 
     public JSONObject observeSync(boolean includeSom, boolean viewportOnly, boolean includeScreenshot) {
+        return observeSync(includeSom, viewportOnly, includeScreenshot, null);
+    }
+
+    public JSONObject observeSync(boolean includeSom, boolean viewportOnly, boolean includeScreenshot, JSONObject extraOpts) {
         ensureBridgeInjectedSync();
         try {
-            String expr = "(function(){ return JSON.stringify(window.__acidBridge.observe({includeSom:" +
-                includeSom + ", viewportOnly:" + viewportOnly + "})); })()";
+            JSONObject jsOpts = new JSONObject();
+            if (extraOpts != null) {
+                java.util.Iterator<String> keys = extraOpts.keys();
+                while (keys.hasNext()) {
+                    String k = keys.next();
+                    jsOpts.put(k, extraOpts.opt(k));
+                }
+            }
+            jsOpts.put("includeSom", includeSom);
+            jsOpts.put("viewportOnly", viewportOnly);
+            String expr = "(function(){ return JSON.stringify(window.__acidBridge.observe(" +
+                jsOpts.toString() + ")); })()";
             String raw = evaluateJsSync(expr, 6000);
             // No target tab at all (the agent's tab was closed and it has not rebound yet).
             // Report it as such instead of falling through to the "degraded" path, which would

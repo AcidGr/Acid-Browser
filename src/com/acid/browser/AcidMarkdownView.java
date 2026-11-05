@@ -475,35 +475,61 @@ public class AcidMarkdownView extends LinearLayout {
         return ssb;
     }
 
-    private static SpannableStringBuilder parseInlineMarkdown(String line, int inlineCodeBg, int inlineCodeFg) {
-        SpannableStringBuilder ssb = new SpannableStringBuilder(line);
-
-        // 1. Inline code `...`
-        Matcher cm = CODE_PATTERN.matcher(ssb.toString());
-        int offset = 0;
+    static String maskCodeSnippets(String line, List<String> snippetsOut) {
+        if (line == null || line.isEmpty()) return "";
+        StringBuilder masked = new StringBuilder();
+        int lastIdx = 0;
+        Matcher cm = CODE_PATTERN.matcher(line);
         while (cm.find()) {
-            int s = cm.start() - offset;
-            int e = cm.end() - offset;
-            String inner = cm.group(1);
-            ssb.replace(s, e, " " + inner + " ");
-            int newEnd = s + inner.length() + 2;
-            ssb.setSpan(new TypefaceSpan("monospace"), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            ssb.setSpan(new BackgroundColorSpan(inlineCodeBg), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            ssb.setSpan(new ForegroundColorSpan(inlineCodeFg), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            offset += (e - s) - (newEnd - s);
+            masked.append(line, lastIdx, cm.start());
+            int placeholderId = snippetsOut.size();
+            snippetsOut.add(cm.group(1));
+            masked.append("\uE000").append(placeholderId).append("\uE001");
+            lastIdx = cm.end();
         }
+        masked.append(line, lastIdx, line.length());
+        return masked.toString();
+    }
 
-        // 2. Bold **...**
-        Matcher bm = BOLD_PATTERN.matcher(ssb.toString());
-        int bOffset = 0;
+    static SpannableStringBuilder parseInlineMarkdown(String line, int inlineCodeBg, int inlineCodeFg) {
+        if (line == null || line.isEmpty()) return new SpannableStringBuilder("");
+
+        // 1. Placeholder protection: extract all `code` snippets so asterisks inside code never trigger bolding
+        List<String> codeSnippets = new ArrayList<String>();
+        String maskedStr = maskCodeSnippets(line, codeSnippets);
+
+        // 2. Parse Bold **...** safely on protected text
+        SpannableStringBuilder ssb = new SpannableStringBuilder();
+        Matcher bm = BOLD_PATTERN.matcher(maskedStr);
+        int bLastIdx = 0;
         while (bm.find()) {
-            int s = bm.start() - bOffset;
-            int e = bm.end() - bOffset;
-            String inner = bm.group(1);
-            ssb.replace(s, e, inner);
-            int newEnd = s + inner.length();
-            ssb.setSpan(new StyleSpan(Typeface.BOLD), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            bOffset += 4;
+            ssb.append(maskedStr, bLastIdx, bm.start());
+            int boldStart = ssb.length();
+            ssb.append(bm.group(1));
+            int boldEnd = ssb.length();
+            ssb.setSpan(new StyleSpan(Typeface.BOLD), boldStart, boldEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            bLastIdx = bm.end();
+        }
+        ssb.append(maskedStr, bLastIdx, maskedStr.length());
+
+        // 3. Restore inline code snippets and apply monospace, background, and foreground spans
+        if (!codeSnippets.isEmpty()) {
+            Pattern placeholderPattern = Pattern.compile("\uE000(\\d+)\uE001");
+            Matcher pm = placeholderPattern.matcher(ssb.toString());
+            int adjust = 0;
+            while (pm.find()) {
+                int s = pm.start() - adjust;
+                int e = pm.end() - adjust;
+                int snippetIdx = Integer.parseInt(pm.group(1));
+                String inner = codeSnippets.get(snippetIdx);
+                String displayStr = " " + inner + " ";
+                ssb.replace(s, e, displayStr);
+                int newEnd = s + displayStr.length();
+                ssb.setSpan(new TypefaceSpan("monospace"), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                ssb.setSpan(new BackgroundColorSpan(inlineCodeBg), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                ssb.setSpan(new ForegroundColorSpan(inlineCodeFg), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                adjust += (e - s) - displayStr.length();
+            }
         }
 
         return ssb;

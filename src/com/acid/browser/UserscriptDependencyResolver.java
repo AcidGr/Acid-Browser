@@ -157,13 +157,7 @@ public class UserscriptDependencyResolver {
         try {
             if (f.exists() && f.length() > 0) return readAll(f);
             if (!safeUrl.startsWith("http://") && !safeUrl.startsWith("https://")) return new byte[0];
-            File tmp = new File(f.getPath() + ".part");
-            AcidHttp.downloadToFile(safeUrl, tmp, 8000, 15000, MAX_RESOURCE_BYTES);
-            if (!tmp.renameTo(f)) {
-                byte[] data = readAll(tmp);
-                tmp.delete();
-                return data;
-            }
+            AcidHttp.downloadToFile(safeUrl, f, 8000, 15000, MAX_RESOURCE_BYTES);
             return readAll(f);
         } catch (Exception e) {
             Log.w(TAG, "Failed to fetch userscript resource: " + safeUrl, e);

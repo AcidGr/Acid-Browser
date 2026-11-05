@@ -482,7 +482,7 @@ public class HttpControlServer {
             }
 
             // 2. MCP Standard SSE Message endpoint: POST /message
-            if ("POST".equals(method) && ("/message".equals(path) || path.startsWith("/message"))) {
+            if ("POST".equals(method) && ("/message".equals(path) || path.startsWith("/message/"))) {
                 handleMcpMessagePost(os, query, bodyBytes);
                 socket.close();
                 return;

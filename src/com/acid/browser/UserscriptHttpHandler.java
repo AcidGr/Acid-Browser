@@ -427,14 +427,28 @@ public class UserscriptHttpHandler {
         }
         String host = url.getHost() != null ? url.getHost().toLowerCase(java.util.Locale.ROOT).trim() : "";
         int port = url.getPort() != -1 ? url.getPort() : url.getDefaultPort();
-        boolean isLoopback = "localhost".equals(host)
-            || "127.0.0.1".equals(host)
-            || "::1".equals(host)
-            || "[::1]".equals(host)
-            || host.startsWith("127.")
-            || "0.0.0.0".equals(host);
-        if (isLoopback && port == HttpControlServer.DEFAULT_PORT) {
-            throw new SecurityException("Blocked SSRF access to local Acid MCP gateway port " + port);
+        if (port == HttpControlServer.DEFAULT_PORT) {
+            boolean isLoopback = "localhost".equals(host)
+                || "127.0.0.1".equals(host)
+                || "::1".equals(host)
+                || "[::1]".equals(host)
+                || host.startsWith("127.")
+                || "0.0.0.0".equals(host);
+            if (isLoopback) {
+                throw new SecurityException("Blocked SSRF access to local Acid MCP gateway port " + port);
+            }
+            try {
+                java.net.InetAddress addr = java.net.InetAddress.getByName(host);
+                if (addr.isLoopbackAddress() || addr.isAnyLocalAddress()) {
+                    throw new SecurityException("Blocked SSRF access to local Acid MCP gateway port " + port);
+                }
+                String lanIp = HttpControlServer.getLocalIpAddress();
+                if (lanIp != null && lanIp.equals(addr.getHostAddress())) {
+                    throw new SecurityException("Blocked SSRF access to local Acid MCP gateway port " + port);
+                }
+            } catch (SecurityException se) {
+                throw se;
+            } catch (Throwable ignored) {}
         }
     }
 

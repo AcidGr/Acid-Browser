@@ -290,37 +290,76 @@ public class UserscriptMeta {
     }
 
     private static String globToRegex(String glob) {
-        // Tampermonkey semantics: "*.example.com" also matches the bare "example.com".
-        glob = glob.replace("://*.", "://\u0000");
+        if (glob == null) return "^$";
+        int schemeIdx = glob.indexOf("://");
+        if (schemeIdx > 0) {
+            String schemePart = glob.substring(0, schemeIdx);
+            String rest = glob.substring(schemeIdx + 3);
+            int slashIdx = rest.indexOf('/');
+            String hostPart = slashIdx >= 0 ? rest.substring(0, slashIdx) : rest;
+            String pathPart = slashIdx >= 0 ? rest.substring(slashIdx) : "";
+
+            StringBuilder sb = new StringBuilder("^");
+            // 1. Scheme part: '*' strictly matches http or https, never colon or path separators
+            if ("*".equals(schemePart)) {
+                sb.append("https?");
+            } else {
+                sb.append(Pattern.quote(schemePart));
+            }
+            sb.append("://");
+
+            // 2. Host part: '*' strictly matches [^/]+ so subdomain globs never cross path boundaries
+            if ("*".equals(hostPart)) {
+                sb.append("[^/]+");
+            } else if (hostPart.startsWith("*.")) {
+                String domain = hostPart.substring(2);
+                sb.append("(?:[^/]+\\.)?").append(Pattern.quote(domain));
+            } else {
+                for (int i = 0; i < hostPart.length(); i++) {
+                    char c = hostPart.charAt(i);
+                    if (c == '*') {
+                        sb.append("[^/]*");
+                    } else if (c == '?') {
+                        sb.append("[^/]");
+                    } else if ("()+[]{}^$|\\.".indexOf(c) >= 0) {
+                        sb.append('\\').append(c);
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+
+            // 3. Path part: '*' matches anything within path and query string
+            if (!pathPart.isEmpty()) {
+                for (int i = 0; i < pathPart.length(); i++) {
+                    char c = pathPart.charAt(i);
+                    if (c == '*') {
+                        sb.append(".*");
+                    } else if (c == '?') {
+                        sb.append('.');
+                    } else if ("()+[]{}^$|\\.".indexOf(c) >= 0) {
+                        sb.append('\\').append(c);
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+            sb.append("$");
+            return sb.toString();
+        }
+
+        // Fallback for non-three-part legacy includes
         StringBuilder sb = new StringBuilder("^");
         for (int i = 0; i < glob.length(); i++) {
             char c = glob.charAt(i);
-            switch (c) {
-                case '\u0000':
-                    sb.append("(?:[^/]*\\.)?");
-                    break;
-                case '*':
-                    sb.append(".*");
-                    break;
-                case '?':
-                    sb.append('.');
-                    break;
-                case '.':
-                case '+':
-                case '(':
-                case ')':
-                case '[':
-                case ']':
-                case '{':
-                case '}':
-                case '^':
-                case '$':
-                case '|':
-                case '\\':
-                    sb.append('\\').append(c);
-                    break;
-                default:
-                    sb.append(c);
+            if (c == '*') {
+                sb.append(".*");
+            } else if (c == '?') {
+                sb.append('.');
+            } else if ("()+[]{}^$|\\.".indexOf(c) >= 0) {
+                sb.append('\\').append(c);
+            } else {
+                sb.append(c);
             }
         }
         sb.append("$");

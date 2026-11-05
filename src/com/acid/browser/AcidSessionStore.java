@@ -133,6 +133,7 @@ public class AcidSessionStore {
 
     private final Context mContext;
     private final File mSessionsDir;
+    private final Object mDiskLock = new Object();
     private AgentSession mActiveSession;
 
     public AcidSessionStore(Context context) {
@@ -192,7 +193,7 @@ public class AcidSessionStore {
         s.createdAt = now;
         s.updatedAt = now;
         mActiveSession = s;
-        saveSessionToDisk(s);
+        saveSession(s);
         setActiveSessionIdPref(s.id);
         return s;
     }
@@ -254,14 +255,25 @@ public class AcidSessionStore {
         return list;
     }
 
-    public synchronized void saveSession(AgentSession s) {
-        if (s != null) {
+    public void saveSession(AgentSession s) {
+        if (s == null) return;
+        final JSONObject root;
+        final File f;
+        synchronized (this) {
             s.updatedAt = System.currentTimeMillis();
-            saveSessionToDisk(s);
+            root = buildSessionSnapshot(s);
+            f = new File(mSessionsDir, s.id + ".json");
+        }
+        synchronized (mDiskLock) {
+            try {
+                AcidIo.writeFileUtf8(f, root.toString());
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to persist session " + (s != null ? s.id : "?"), e);
+            }
         }
     }
 
-    public synchronized void saveActiveSession() {
+    public void saveActiveSession() {
         saveSession(mActiveSession);
     }
 
@@ -275,9 +287,9 @@ public class AcidSessionStore {
         }
     }
 
-    private void saveSessionToDisk(AgentSession s) {
+    private JSONObject buildSessionSnapshot(AgentSession s) {
+        JSONObject root = new JSONObject();
         try {
-            JSONObject root = new JSONObject();
             root.put("id", s.id);
             root.put("title", s.title != null ? s.title : "新对话");
             root.put("createdAt", s.createdAt);
@@ -309,13 +321,10 @@ public class AcidSessionStore {
                 }
             }
             root.put("apiMessages", apiArr);
-
-            File f = new File(mSessionsDir, s.id + ".json");
-            AcidIo.writeFileUtf8(f, root.toString());
         } catch (Exception e) {
-            // Losing a session silently is unrecoverable for the user, so always log it.
-            Log.e(TAG, "Failed to persist session " + (s != null ? s.id : "?"), e);
+            Log.w(TAG, "Failed to encode session snapshot " + (s != null ? s.id : "?"), e);
         }
+        return root;
     }
 
     private AgentSession readSessionFromDisk(String id) {
