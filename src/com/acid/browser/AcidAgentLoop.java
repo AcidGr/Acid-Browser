@@ -513,15 +513,16 @@ public class AcidAgentLoop {
                         String callId = tc.optString("id", "call_" + step + "_" + i);
                         JSONObject fn = tc.optJSONObject("function");
                         String toolName = fn != null ? fn.optString("name", "") : "";
-                        String rawArgs = fn != null ? fn.optString("arguments", "{}") : "{}";
+                        String rawArgs = (fn != null && !fn.isNull("arguments")) ? fn.optString("arguments", "{}") : "{}";
 
-                        JSONObject parsedArgs;
+                        JSONObject parsedArgs = null;
                         String prettyArgs;
+                        String argsParseError = null;
                         try {
-                            parsedArgs = new JSONObject(rawArgs);
+                            parsedArgs = parseToolArgumentsStrict(rawArgs);
                             prettyArgs = parsedArgs.toString(2);
                         } catch (Exception e) {
-                            parsedArgs = new JSONObject();
+                            argsParseError = e.getMessage() != null ? e.getMessage() : "Malformed JSON";
                             prettyArgs = rawArgs;
                         }
 
@@ -530,7 +531,9 @@ public class AcidAgentLoop {
                         toolUiItem.type = AcidSessionStore.TYPE_TOOL;
                         toolUiItem.toolCallId = callId;
                         toolUiItem.toolName = toolName;
-                        toolUiItem.toolSummary = summarizeToolArgs(toolName, parsedArgs);
+                        toolUiItem.toolSummary = parsedArgs != null
+                            ? summarizeToolArgs(toolName, parsedArgs)
+                            : (toolName + " · [invalid JSON args]");
                         toolUiItem.toolArgsJson = prettyArgs;
                         toolUiItem.toolResult = "正在执行...";
                         toolUiItem.isRunning = true;
@@ -540,8 +543,15 @@ public class AcidAgentLoop {
                         }
                         notifyItemAdded(toolUiItem);
 
-                        // Execute tool
-                        AcidSandboxTools.ToolExecResult execRes = mSandboxTools.executeTool(toolName, parsedArgs);
+                        // Execute tool (or reject immediately on malformed JSON arguments instead of running with {})
+                        AcidSandboxTools.ToolExecResult execRes = (parsedArgs != null)
+                            ? mSandboxTools.executeTool(toolName, parsedArgs)
+                            : new AcidSandboxTools.ToolExecResult(
+                                "Error: Invalid JSON arguments for tool '" + toolName + "' (" + argsParseError
+                                    + "). Please re-issue the tool call with valid JSON.",
+                                false,
+                                null
+                            );
 
                         if (mStopRequested || mRunGeneration.get() != runGen) {
                             break;
@@ -931,13 +941,13 @@ public class AcidAgentLoop {
         public boolean contentUpdated = false;
 
         public void feedReasoningDelta(String rChunk) {
-            if (rChunk == null || rChunk.isEmpty() || "null".equals(rChunk)) return;
+            if (rChunk == null || rChunk.isEmpty()) return;
             reasoningSb.append(rChunk);
             thinkUpdated = true;
         }
 
         public void feedContentDelta(String cChunk) {
-            if (cChunk == null || cChunk.isEmpty() || "null".equals(cChunk)) return;
+            if (cChunk == null || cChunk.isEmpty()) return;
             mPending.append(cChunk);
             drainPending(false);
         }
@@ -1045,10 +1055,21 @@ public class AcidAgentLoop {
                 }
                 if (fn.has("arguments") && !fn.isNull("arguments")) {
                     String args = fn.optString("arguments", "");
-                    if (!args.isEmpty() && !"null".equals(args)) call.arguments.append(args);
+                    if (!args.isEmpty()) call.arguments.append(args);
                 }
             }
         }
+    }
+
+    /**
+     * Parses OpenAI tool call arguments strictly: empty/whitespace strings represent zero-arg calls
+     * ({@code {}}), whereas non-empty malformed JSON throws instead of silently becoming {@code {}}.
+     */
+    public static JSONObject parseToolArgumentsStrict(String rawArgs) throws Exception {
+        if (rawArgs == null || rawArgs.trim().isEmpty()) {
+            return new JSONObject();
+        }
+        return new JSONObject(rawArgs);
     }
 
     private JSONObject callChatCompletionsStream(
@@ -1196,7 +1217,7 @@ public class AcidAgentLoop {
 
                 if (streamParser.thinkUpdated) {
                     String currentReasoning = reasoningSb.toString();
-                    if (!currentReasoning.trim().isEmpty() && !"null".equals(currentReasoning.trim())) {
+                    if (!currentReasoning.trim().isEmpty()) {
                         if (currentThinkItem == null) {
                             currentThinkItem = new AcidSessionStore.UiMessageItem();
                             currentThinkItem.type = AcidSessionStore.TYPE_THINKING;
@@ -1281,7 +1302,7 @@ public class AcidAgentLoop {
         // Finalize thinking item
         if (currentThinkItem != null) {
             String finR = reasoningSb.toString().trim();
-            if (finR.isEmpty() || "null".equals(finR)) {
+            if (finR.isEmpty()) {
                 synchronized (mSessionStore) {
                     session.uiItems.remove(currentThinkItem);
                 }

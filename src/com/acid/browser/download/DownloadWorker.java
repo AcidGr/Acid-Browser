@@ -68,12 +68,25 @@ public class DownloadWorker implements Runnable {
 
         try {
             String currentUrl = mTask.finalUrl != null ? mTask.finalUrl : mTask.url;
+            Map<String, String> activeHeaders = new java.util.HashMap<String, String>(mTask.requestHeaders);
+            // If pre-flight probe already redirected off-origin from mTask.url to mTask.finalUrl, enforce policy too
+            if (mTask.url != null && !mTask.url.equals(currentUrl)) {
+                try {
+                    if (!HttpProbe.shouldRetainCredentialsOnRedirect(new URL(mTask.url), new URL(currentUrl))) {
+                        HttpProbe.stripSensitiveHeaders(activeHeaders);
+                    }
+                } catch (Exception ignored) {}
+            }
             int redirects = 0;
 
             while (redirects < MAX_REDIRECTS) {
                 if (isAborted()) return;
 
                 URL u = new URL(currentUrl);
+                String proto = u.getProtocol() != null ? u.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
+                if (!"http".equals(proto) && !"https".equals(proto)) {
+                    throw new IOException("Unsupported download protocol: " + proto);
+                }
                 conn = (HttpURLConnection) u.openConnection();
                 if (mTask != null) {
                     mTask.registerConnection(conn);
@@ -82,8 +95,7 @@ public class DownloadWorker implements Runnable {
                 conn.setReadTimeout(READ_TIMEOUT_MS);
                 conn.setInstanceFollowRedirects(false);
 
-                // Preserve original headers across all redirects
-                for (Map.Entry<String, String> entry : mTask.requestHeaders.entrySet()) {
+                for (Map.Entry<String, String> entry : activeHeaders.entrySet()) {
                     conn.setRequestProperty(entry.getKey(), entry.getValue());
                 }
 
@@ -120,9 +132,15 @@ public class DownloadWorker implements Runnable {
                     if (loc == null || loc.trim().isEmpty()) {
                         throw new IOException("Redirect without Location header (HTTP " + code + ")");
                     }
-                    URL nextUrl = new URL(new URL(currentUrl), loc);
+                    URL nextUrl = new URL(u, loc.trim());
+                    String nextProto = nextUrl.getProtocol() != null ? nextUrl.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
+                    if (!"http".equals(nextProto) && !"https".equals(nextProto)) {
+                        throw new IOException("Disallowed redirect protocol: " + nextProto);
+                    }
+                    if (!HttpProbe.shouldRetainCredentialsOnRedirect(u, nextUrl)) {
+                        HttpProbe.stripSensitiveHeaders(activeHeaders);
+                    }
                     currentUrl = nextUrl.toString();
-                    mTask.finalUrl = currentUrl;
                     redirects++;
                     continue;
                 }

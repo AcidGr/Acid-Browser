@@ -112,7 +112,7 @@ public class UserscriptMeta {
             }
             if (!line.startsWith("@")) continue;
 
-            int space = line.indexOf(' ');
+            int space = indexOfWhitespace(line);
             String key;
             String value;
             if (space < 0) {
@@ -270,7 +270,11 @@ public class UserscriptMeta {
     /** Glob match where {@code *} spans anything, including path separators. */
     public static boolean globMatches(String glob, String url) {
         if (glob == null || url == null) return false;
-        if ("*".equals(glob) || "*://*/*".equals(glob)) return true;
+        if ("*".equals(glob)) return true;
+        if ("*://*/*".equals(glob)) {
+            return url.regionMatches(true, 0, "http://", 0, 7)
+                || url.regionMatches(true, 0, "https://", 0, 8);
+        }
 
         Pattern p = REGEX_CACHE.get(glob);
         if (p == null) {
@@ -308,19 +312,20 @@ public class UserscriptMeta {
             }
             sb.append("://");
 
-            // 2. Host part: '*' strictly matches [^/]+ so subdomain globs never cross path boundaries
+            // 2. Host part: '*' strictly matches [^/?#@]+ so subdomain globs never cross
+            // path ('/'), query ('?'), fragment ('#'), or userinfo ('@') boundaries
             if ("*".equals(hostPart)) {
-                sb.append("[^/]+");
+                sb.append("[^/?#@]+");
             } else if (hostPart.startsWith("*.")) {
                 String domain = hostPart.substring(2);
-                sb.append("(?:[^/]+\\.)?").append(Pattern.quote(domain));
+                sb.append("(?:[^/?#@]+\\.)?").append(Pattern.quote(domain));
             } else {
                 for (int i = 0; i < hostPart.length(); i++) {
                     char c = hostPart.charAt(i);
                     if (c == '*') {
-                        sb.append("[^/]*");
+                        sb.append("[^/?#@]*");
                     } else if (c == '?') {
-                        sb.append("[^/]");
+                        sb.append("[^/?#@]");
                     } else if ("()+[]{}^$|\\.".indexOf(c) >= 0) {
                         sb.append('\\').append(c);
                     } else {

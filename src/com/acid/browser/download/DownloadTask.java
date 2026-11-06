@@ -132,21 +132,23 @@ public class DownloadTask {
      * path falls outside {@code dir} is reduced to its leaf component.
      */
     private static File resolveInside(File dir, String name) {
-        File candidate = new File(dir, name);
-        try {
-            String basePath = dir.getCanonicalPath();
-            String candidatePath = candidate.getCanonicalPath();
-            if (candidatePath.equals(basePath) || candidatePath.startsWith(basePath + File.separator)) {
-                return candidate;
+        if (name != null && !name.trim().isEmpty()) {
+            File candidate = new File(dir, name);
+            try {
+                String basePath = dir.getCanonicalPath();
+                String candidatePath = candidate.getCanonicalPath();
+                if (!candidatePath.equals(basePath) && candidatePath.startsWith(basePath + File.separator)) {
+                    return candidate;
+                }
+            } catch (Exception ignored) {
+                // Canonicalisation failed (unusual filesystem): fall through to the leaf fallback.
             }
-        } catch (Exception ignored) {
-            // Canonicalisation failed (unusual filesystem): fall through to the leaf fallback.
         }
-        String leaf = name;
+        String leaf = name != null ? name : "";
         int slash = Math.max(leaf.lastIndexOf('/'), leaf.lastIndexOf('\\'));
         if (slash >= 0) leaf = leaf.substring(slash + 1);
-        leaf = leaf.replace(".", "");
-        if (leaf.trim().isEmpty()) leaf = "download";
+        leaf = leaf.replaceAll("[\\\\/:*?\"<>|;\\r\\n\\t\\x00]", "_").trim();
+        if (leaf.isEmpty() || leaf.replace(".", "").isEmpty()) leaf = "download";
         return new File(dir, leaf);
     }
 

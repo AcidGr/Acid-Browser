@@ -80,10 +80,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public static class TabSession {
         public final int id;
         public final WebView webView;
-        public String title = "New Tab";
-        public String url = HOME_URL;
-        public int progress = 0;
-        public boolean isLoading = false;
+        public volatile String title = "New Tab";
+        public volatile String url = HOME_URL;
+        public volatile int progress = 0;
+        public volatile boolean isLoading = false;
         public Bitmap snapshot = null;
 
         public TabSession(int id, WebView webView) {
@@ -722,6 +722,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (request != null && request.getUrl() != null) {
                     Uri u = request.getUrl();
                     if ("acid-favicon.local".equalsIgnoreCase(u.getHost())) {
+                        if (Build.VERSION.SDK_INT >= 21) {
+                            if (request.isForMainFrame()) {
+                                return FaviconManager.buildEmpty404Response();
+                            }
+                            Map<String, String> reqHeaders = request.getRequestHeaders();
+                            if (!isAllowedLocalHomeRequestHeaders(reqHeaders)) {
+                                return FaviconManager.buildEmpty404Response();
+                            }
+                        }
+                        if (!isTrustedLocalHomepageFileUrl(tab.url, getWorkspaceDir())) {
+                            return FaviconManager.buildEmpty404Response();
+                        }
                         return interceptFaviconRequest(u);
                     }
                     WebResourceResponse resp = AdBlockManager.getInstance(mContext).shouldIntercept(u);
@@ -738,6 +750,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (url != null) {
                     Uri u = Uri.parse(url);
                     if ("acid-favicon.local".equalsIgnoreCase(u.getHost())) {
+                        if (!isTrustedLocalHomepageFileUrl(tab.url, getWorkspaceDir())) {
+                            return FaviconManager.buildEmpty404Response();
+                        }
                         return interceptFaviconRequest(u);
                     }
                     WebResourceResponse resp = AdBlockManager.getInstance(mContext).shouldIntercept(u);
@@ -839,7 +854,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     injectDarkModeCss(view);
                 }
 
-                if (url != null && (url.equals(HOME_URL) || url.endsWith("/homepage/index.html"))) {
+                if (isTrustedLocalHomepageFileUrl(url, getWorkspaceDir())) {
                     pushBookmarksToActiveHomeTabs();
                 }
 
@@ -1562,6 +1577,71 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return mSkillManager;
     }
 
+    /**
+     * Strictly verifies that {@code url} is either the bundled APK asset homepage
+     * ({@code file:///android_asset/homepage/index.html}) or a canonical {@code file://} file
+     * inside {@code <workspaceDir>/homepage/}. Remote HTTP(S) URLs ending in
+     * {@code /homepage/index.html} and {@code about:blank} are strictly rejected.
+     */
+    public static boolean isTrustedLocalHomepageFileUrl(String url, File workspaceDir) {
+        if (url == null) return false;
+        String clean = url.trim();
+        int qIdx = clean.indexOf('?');
+        if (qIdx >= 0) clean = clean.substring(0, qIdx);
+        int hIdx = clean.indexOf('#');
+        if (hIdx >= 0) clean = clean.substring(0, hIdx);
+        if (clean.isEmpty()) return false;
+
+        if (HOME_URL.equals(clean)) {
+            return true;
+        }
+        String lower = clean.toLowerCase(java.util.Locale.ROOT);
+        if (!lower.startsWith("file://")) {
+            return false;
+        }
+        if (lower.startsWith("file:///android_asset/")) {
+            return false;
+        }
+        if (workspaceDir == null) {
+            return false;
+        }
+        try {
+            String rawPath = clean.substring("file://".length());
+            rawPath = java.net.URLDecoder.decode(rawPath, "UTF-8");
+            File targetCanon = new File(rawPath).getCanonicalFile();
+            File homeDirCanon = new File(workspaceDir, "homepage").getCanonicalFile();
+            String homePrefix = homeDirCanon.getPath() + File.separator;
+            return targetCanon.getPath().startsWith(homePrefix);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Rejects subresource requests to {@code acid-favicon.local} carrying an external web
+     * {@code Origin} or {@code Referer} header (local {@code file://} pages send {@code Origin: null}
+     * or omit {@code Origin}/{@code Referer}).
+     */
+    public static boolean isAllowedLocalHomeRequestHeaders(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) return true;
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            if (entry.getKey() == null || entry.getValue() == null) continue;
+            String k = entry.getKey().trim().toLowerCase(java.util.Locale.ROOT);
+            String v = entry.getValue().trim().toLowerCase(java.util.Locale.ROOT);
+            if (v.isEmpty()) continue;
+            if ("origin".equals(k)) {
+                if (!"null".equals(v) && !v.startsWith("file://")) {
+                    return false;
+                }
+            } else if ("referer".equals(k)) {
+                if (!v.startsWith("file://")) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     private WebResourceResponse interceptFaviconRequest(Uri reqUri) {
         if (reqUri == null) return null;
         String path = reqUri.getPath();
@@ -1574,7 +1654,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             if (Build.VERSION.SDK_INT >= 21) {
                 java.util.Map<String, String> headers = new java.util.HashMap<String, String>();
                 headers.put("Cache-Control", "no-store");
-                headers.put("Access-Control-Allow-Origin", "*");
+                headers.put("X-Content-Type-Options", "nosniff");
                 resp.setResponseHeaders(headers);
             }
             return resp;
@@ -1612,8 +1692,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public void run() {
                 for (TabSession t : mTabs) {
-                    if (t != null && t.webView != null && t.url != null
-                            && (t.url.equals(HOME_URL) || t.url.endsWith("/homepage/index.html"))) {
+                    if (t != null && t.webView != null
+                            && isTrustedLocalHomepageFileUrl(t.url, getWorkspaceDir())) {
                         if (Build.VERSION.SDK_INT >= 19) {
                             t.webView.evaluateJavascript(js, null);
                         } else {

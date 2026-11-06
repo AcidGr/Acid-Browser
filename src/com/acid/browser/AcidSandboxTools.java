@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -462,35 +463,13 @@ public class AcidSandboxTools {
         }
 
         if ("navigate".equals(action)) {
-            String url = args.optString("url", "");
-            if (url.startsWith("workspace://")) {
-                File f = resolveSandboxFile(url.substring("workspace://".length()));
-                if (f == null) {
-                    return new ToolExecResult("Error: Access denied: path escapes sandbox workspace (" + url + ")", false, null);
-                }
-                url = "file://" + f.getAbsolutePath();
-            } else if (url.startsWith("file://")) {
-                if (!url.startsWith("file:///android_asset/")) {
-                    String localPath = url.substring("file://".length());
-                    int qIdx = localPath.indexOf('?');
-                    if (qIdx >= 0) localPath = localPath.substring(0, qIdx);
-                    int hIdx = localPath.indexOf('#');
-                    if (hIdx >= 0) localPath = localPath.substring(0, hIdx);
-                    try {
-                        localPath = java.net.URLDecoder.decode(localPath, "UTF-8");
-                    } catch (Exception ignored) {}
-                    File f = resolveSandboxFile(localPath);
-                    if (f == null) {
-                        return new ToolExecResult("Error: Access denied: file:// URL escapes sandbox workspace (" + url + ")", false, null);
-                    }
-                    url = "file://" + f.getAbsolutePath();
-                }
-            } else if (!url.contains("://") && !url.startsWith("about:") && !url.startsWith("javascript:")) {
-                // Check if it refers to a local HTML file inside workspace
-                File possibleLocal = resolveSandboxFile(url);
-                if (possibleLocal != null && possibleLocal.exists() && possibleLocal.isFile()) {
-                    url = "file://" + possibleLocal.getAbsolutePath();
-                }
+            String rawUrl = args.optString("url", "");
+            String url = resolveAndValidateNavigationUrl(rawUrl);
+            if (url == null) {
+                String msgPrefix = rawUrl.toLowerCase(Locale.US).startsWith("workspace://")
+                    ? "Error: Access denied: path escapes sandbox workspace ("
+                    : "Error: Access denied: file:// URL escapes sandbox workspace (";
+                return new ToolExecResult(msgPrefix + rawUrl + ")", false, null);
             }
             if (driver == null) {
                 return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
@@ -629,7 +608,21 @@ public class AcidSandboxTools {
         }
 
         if ("tabs".equals(action)) {
-            final String sub = args.optString("tab_action", "list").toLowerCase();
+            final String sub = args.optString("tab_action", "list").toLowerCase(Locale.US);
+            final String validatedNewTabUrl;
+            if ("new".equals(sub)) {
+                String rawNewUrl = args.optString("url", BrowserController.HOME_URL);
+                if (rawNewUrl == null || rawNewUrl.trim().isEmpty() || BrowserController.HOME_URL.equalsIgnoreCase(rawNewUrl.trim())) {
+                    validatedNewTabUrl = BrowserController.HOME_URL;
+                } else {
+                    validatedNewTabUrl = resolveAndValidateNavigationUrl(rawNewUrl);
+                    if (validatedNewTabUrl == null) {
+                        return new ToolExecResult("Error: Access denied: file:// URL escapes sandbox workspace (" + rawNewUrl + ")", false, null);
+                    }
+                }
+            } else {
+                validatedNewTabUrl = BrowserController.HOME_URL;
+            }
             final CountDownLatch latch = new CountDownLatch(1);
             runOnMain(new Runnable() {
                 @Override
@@ -640,7 +633,7 @@ public class AcidSandboxTools {
 
                     if ("new".equals(sub)) {
                         BrowserController.TabSession created = mController.createNewTab(
-                            args.optString("url", BrowserController.HOME_URL),
+                            validatedNewTabUrl,
                             isWatching
                         );
                         if (created != null) {
@@ -774,6 +767,61 @@ public class AcidSandboxTools {
     // =========================================================================
     // 2. Sandbox File Tools: read, write, edit
     // =========================================================================
+
+    /**
+     * Validates and normalizes a navigation/new-tab URL against the workspace sandbox.
+     * Returns the normalized URL string, or {@code null} if the URL attempts to escape
+     * the workspace via {@code file://}, {@code workspace://}, or {@code content://}.
+     */
+    public String resolveAndValidateNavigationUrl(String rawUrl) {
+        if (rawUrl == null) return "";
+        String url = rawUrl.trim();
+        if (url.isEmpty()) return "";
+        String lower = url.toLowerCase(Locale.US);
+
+        if (lower.startsWith("workspace://")) {
+            File f = resolveSandboxFile(url.substring("workspace://".length()));
+            if (f == null) return null;
+            return "file://" + f.getAbsolutePath();
+        }
+        if (lower.startsWith("content:") || lower.startsWith("intent:")) {
+            return null;
+        }
+        if (lower.startsWith("file:")) {
+            String localPath = lower.startsWith("file://")
+                ? url.substring("file://".length())
+                : url.substring("file:".length());
+            int qIdx = localPath.indexOf('?');
+            if (qIdx >= 0) localPath = localPath.substring(0, qIdx);
+            int hIdx = localPath.indexOf('#');
+            if (hIdx >= 0) localPath = localPath.substring(0, hIdx);
+            try {
+                localPath = java.net.URLDecoder.decode(localPath, "UTF-8");
+            } catch (Exception ignored) {}
+            if (localPath.indexOf('\0') >= 0 || localPath.indexOf('\\') >= 0) {
+                return null;
+            }
+            if (localPath.startsWith("/android_asset/") || localPath.startsWith("/android_res/")) {
+                String[] segs = localPath.split("/");
+                for (String seg : segs) {
+                    if ("..".equals(seg) || ".".equals(seg)) {
+                        return null;
+                    }
+                }
+                return "file://" + localPath;
+            }
+            File f = resolveSandboxFile(localPath);
+            if (f == null) return null;
+            return "file://" + f.getAbsolutePath();
+        }
+        if (!url.contains("://") && !lower.startsWith("about:") && !lower.startsWith("javascript:")) {
+            File possibleLocal = resolveSandboxFile(url);
+            if (possibleLocal != null && possibleLocal.exists() && possibleLocal.isFile()) {
+                return "file://" + possibleLocal.getAbsolutePath();
+            }
+        }
+        return url;
+    }
 
     public File resolveSandboxFile(String rawPath) {
         if (rawPath == null || rawPath.trim().isEmpty()) {

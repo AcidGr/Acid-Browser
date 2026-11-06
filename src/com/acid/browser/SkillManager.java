@@ -533,8 +533,8 @@ public class SkillManager {
         try {
             String skillsCanon = mSkillsDir.getCanonicalPath();
             String targetCanon = direct.getCanonicalPath();
-            if (!targetCanon.startsWith(skillsCanon)) {
-                return null; // Prevent path traversal outside skills/
+            if (!targetCanon.startsWith(skillsCanon + File.separator)) {
+                return null; // Prevent path traversal outside skills/ or targeting skills/ root
             }
         } catch (Exception e) {
             return null;
@@ -635,7 +635,10 @@ public class SkillManager {
         while (clean.startsWith("/")) clean = clean.substring(1);
         if (clean.startsWith("skills/")) clean = clean.substring(7);
 
-        if (clean.isEmpty()) return false;
+        if (clean.isEmpty() || ".".equals(clean) || "..".equals(clean)
+            || clean.startsWith("../") || clean.contains("/../") || clean.endsWith("/..")) {
+            return false;
+        }
 
         // Check if it refers to a directory package (e.g. "my-skill/SKILL.md" or "my-skill")
         int slash = clean.indexOf('/');
@@ -657,6 +660,15 @@ public class SkillManager {
         }
 
         File target = new File(mSkillsDir, clean);
+        try {
+            String skillsCanon = mSkillsDir.getCanonicalPath();
+            String targetCanon = target.getCanonicalPath();
+            if (!targetCanon.startsWith(skillsCanon + File.separator)) {
+                return false;
+            }
+        } catch (Exception e) {
+            return false;
+        }
         if (target.exists() && !target.equals(mSkillsDir)) {
             boolean ok = target.isDirectory() ? SkillStorageVault.deleteRecursiveSafe(target) : target.delete();
             if (ok) {

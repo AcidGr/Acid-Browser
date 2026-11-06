@@ -1142,9 +1142,11 @@ public class WebAutomationDriver {
                 clear + "," +
                 submit + ")); })()";
             String raw = evaluateJsSync(expr, 4000);
+            JSONObject res = new JSONObject(raw);
             String ref = targetOpts != null ? targetOpts.optString("ref", targetOpts.optString("selector", targetOpts.optString("text", "field"))) : "field";
-            mHost.emitLog("[FILL] [" + ref + "] -> \"" + text + "\"" + (submit ? " (submitted)" : ""));
-            return new JSONObject(raw);
+            String displayText = shouldMaskFillLog(targetOpts, res) ? "***" : text;
+            mHost.emitLog("[FILL] [" + ref + "] -> \"" + displayText + "\"" + (submit ? " (submitted)" : ""));
+            return res;
         } catch (Exception e) {
             Log.e(TAG, "fillSync failed", e);
             JSONObject err = new JSONObject();
@@ -1153,6 +1155,27 @@ public class WebAutomationDriver {
             }
             return err;
         }
+    }
+
+    static boolean shouldMaskFillLog(JSONObject targetOpts, JSONObject receipt) {
+        if (receipt != null) {
+            if ("***".equals(receipt.optString("value", ""))
+                || "***".equals(receipt.optString("expected", ""))) {
+                return true;
+            }
+        }
+        if (targetOpts != null) {
+            String combined = (targetOpts.optString("selector", "") + " "
+                + targetOpts.optString("text", "") + " "
+                + targetOpts.optString("ref", "")).toLowerCase(java.util.Locale.US);
+            if (combined.contains("pass") || combined.contains("pwd")
+                || combined.contains("secret") || combined.contains("token")
+                || combined.contains("cvv") || combined.contains("cvc")
+                || combined.contains("密码")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public JSONObject fillSync(String ref, String text, boolean clear, boolean submit) {

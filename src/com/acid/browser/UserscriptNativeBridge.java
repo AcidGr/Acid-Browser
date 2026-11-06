@@ -299,7 +299,7 @@ public class UserscriptNativeBridge {
 
             if ("openInTab".equals(action)) {
                 String url = args.optString("url", "");
-                if (mHost != null && !url.isEmpty()) {
+                if (mHost != null && (url.startsWith("http://") || url.startsWith("https://"))) {
                     mHost.openInTab(url, args.optBoolean("active", true));
                     return "true";
                 }

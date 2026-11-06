@@ -32,18 +32,23 @@ def main():
         line = line.strip()
         if not line:
             continue
+        req_data = None
         try:
             req_data = json.loads(line)
+            is_notification = isinstance(req_data, dict) and ("id" not in req_data)
             req = urllib.request.Request(
                 MCP_ENDPOINT,
                 data=json.dumps(req_data).encode('utf-8'),
                 headers=headers
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
-                resp_text = resp.read().decode('utf-8')
-                sys.stdout.write(resp_text + "\n")
-                sys.stdout.flush()
+                resp_text = resp.read().decode('utf-8').strip()
+                if not is_notification and resp_text:
+                    sys.stdout.write(resp_text + "\n")
+                    sys.stdout.flush()
         except Exception as e:
+            if isinstance(req_data, dict) and ("id" not in req_data):
+                continue
             req_id = req_data.get("id") if (isinstance(req_data, dict) and "id" in req_data) else None
             err_resp = {
                 "jsonrpc": "2.0",

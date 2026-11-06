@@ -304,6 +304,14 @@ public class UserscriptManager {
             } else if (!AcidIo.writeFileUtf8Safe(defaultScript, src)) {
                 Log.w(TAG, "Could not install default userscript to " + defaultScript.getAbsolutePath());
             }
+        } else {
+            String existing = AcidIo.readFileUtf8OrEmpty(defaultScript, 64 * 1024);
+            if (existing.contains("https://acid.browser/userscripts") && !existing.contains("@grant")) {
+                String src = AcidIo.readAssetUtf8OrEmpty(mContext, "userscripts/anti_app_hijack.user.js");
+                if (!src.isEmpty()) {
+                    AcidIo.writeFileUtf8Safe(defaultScript, src);
+                }
+            }
         }
     }
 
