@@ -64,9 +64,11 @@ public class AgentSessionsSheet extends AcidBottomSheetView {
                     final AcidSessionStore.SessionMeta meta = sessions.get(i);
                     boolean isCurrent = (active != null && active.id.equals(meta.id));
 
+                    String baseTitle = "新对话".equals(meta.title) ? AcidLocale.tr("新对话") : meta.title;
+                    String displayTitle = baseTitle + (isCurrent ? (AcidLocale.isEn() ? " (Current)" : " (当前)") : "");
                     LinearLayout row = new AcidWidgets.ListRow()
                         .leadingIcon(AcidIcons.ICON_CHAT_LIST, accent, 18)
-                        .title(meta.title + (isCurrent ? " (当前)" : ""))
+                        .title(displayTitle)
                         .subtitle(meta.getFormattedTime() + " · " + meta.messageCount + " 条消息")
                         .selected(isCurrent, accent)
                         .trailingIconAction(ctx, mIsDarkMode, AcidIcons.ICON_TRASH, AcidTheme.muted(mIsDarkMode), new OnClickListener() {

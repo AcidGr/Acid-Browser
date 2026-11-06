@@ -385,9 +385,10 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 public void onSelected(int which) {
                     mDataStore.setLanguageIndex(which);
                     AcidLocale.applyLanguageIndex(ctx, which);
-                    refreshActivePage();
                     if (mListener != null) {
                         mListener.onLanguageChanged(which);
+                    } else {
+                        refreshActivePage();
                     }
                     AcidFeedback.ok(ctx, "界面语言已切换为: " + items[which]);
                 }

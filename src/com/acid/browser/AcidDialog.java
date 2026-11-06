@@ -71,7 +71,9 @@ public final class AcidDialog {
     private final Context mContext;
     private final boolean mDark;
     private String mTitle = "";
+    private boolean mTranslateTitle = true;
     private String mMessage = null;
+    private boolean mTranslateMessage = true;
     private View mCustomView = null;
 
     private String[] mSingleItems = null;
@@ -103,11 +105,25 @@ public final class AcidDialog {
 
     public AcidDialog setTitle(String title) {
         mTitle = title != null ? title : "";
+        mTranslateTitle = true;
+        return this;
+    }
+
+    public AcidDialog setRawTitle(String rawTitle) {
+        mTitle = rawTitle != null ? rawTitle : "";
+        mTranslateTitle = false;
         return this;
     }
 
     public AcidDialog setMessage(String message) {
         mMessage = message;
+        mTranslateMessage = true;
+        return this;
+    }
+
+    public AcidDialog setRawMessage(String rawMessage) {
+        mMessage = rawMessage;
+        mTranslateMessage = false;
         return this;
     }
 
@@ -207,7 +223,7 @@ public final class AcidDialog {
         // 1. Header Title (Dialog Title = 15sp Bold)
         if (!TextUtils.isEmpty(mTitle)) {
             TextView tvTitle = new TextView(mContext);
-            tvTitle.setText(AcidLocale.tr(mTitle));
+            tvTitle.setText(mTranslateTitle ? AcidLocale.tr(mTitle) : mTitle);
             tvTitle.setTextColor(AcidTheme.text(mDark));
             tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_DIALOG_TITLE);
             tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
@@ -229,7 +245,7 @@ public final class AcidDialog {
 
         if (!TextUtils.isEmpty(mMessage)) {
             TextView tvMsg = new TextView(mContext);
-            tvMsg.setText(AcidLocale.tr(mMessage));
+            tvMsg.setText(mTranslateMessage ? AcidLocale.tr(mMessage) : mMessage);
             tvMsg.setTextColor(AcidTheme.text(mDark));
             tvMsg.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
             tvMsg.setLineSpacing(AcidTheme.dp(mContext, 3f), 1f);

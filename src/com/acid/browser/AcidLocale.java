@@ -29,7 +29,7 @@ public final class AcidLocale {
     private static volatile int sLanguageIndex = AcidSettings.LANG_SYSTEM;
     private static volatile boolean sEffectiveEnglish = false;
     private static volatile Resources sLocalizedResources = null;
-    private static final Locale INITIAL_JVM_LOCALE = Locale.getDefault();
+    private static volatile Locale sObservedSystemLocale = null;
 
     private static final Map<String, String> EN_MAP = new HashMap<String, String>(512);
 
@@ -50,10 +50,33 @@ public final class AcidLocale {
         return applyLanguageIndex(context, idx);
     }
 
+    /**
+     * Captures a live OS / per-app {@link Configuration} change delivered to {@code Activity.onConfigurationChanged}
+     * and refreshes the effective language when {@link AcidSettings#LANG_SYSTEM} is selected.
+     */
+    public static synchronized boolean onSystemConfigurationChanged(
+        Context context,
+        Configuration newConfig,
+        BrowserDataStore store
+    ) {
+        Locale updated = extractPrimaryLocale(newConfig);
+        if (updated != null) {
+            sObservedSystemLocale = updated;
+        }
+        if (store != null && store.getLanguageIndex() == AcidSettings.LANG_SYSTEM) {
+            return applyLanguageIndex(context, AcidSettings.LANG_SYSTEM);
+        }
+        return false;
+    }
+
     public static synchronized boolean applyLanguageIndex(Context context, int langIndex) {
         boolean prevEn = sEffectiveEnglish;
         int prevIdx = sLanguageIndex;
         sLanguageIndex = langIndex;
+
+        if (context == null) {
+            sObservedSystemLocale = null;
+        }
 
         boolean nextEn;
         if (langIndex == AcidSettings.LANG_EN) {
@@ -70,9 +93,14 @@ public final class AcidLocale {
         Locale targetLocale = nextEn ? Locale.ENGLISH : Locale.SIMPLIFIED_CHINESE;
         if (context != null) {
             try {
-                Locale.setDefault(targetLocale);
                 Resources baseRes = context.getResources();
                 if (baseRes != null) {
+                    if (sObservedSystemLocale == null) {
+                        Locale baseLoc = extractPrimaryLocale(baseRes.getConfiguration());
+                        if (baseLoc != null) {
+                            sObservedSystemLocale = baseLoc;
+                        }
+                    }
                     Configuration cfg = new Configuration(baseRes.getConfiguration());
                     if (Build.VERSION.SDK_INT >= 17) {
                         cfg.setLocale(targetLocale);
@@ -91,13 +119,49 @@ public final class AcidLocale {
         return (prevEn != nextEn) || (prevIdx != langIndex);
     }
 
+    private static Locale extractPrimaryLocale(Configuration cfg) {
+        if (cfg == null) return null;
+        if (Build.VERSION.SDK_INT >= 24) {
+            try {
+                java.lang.reflect.Method getLocales = cfg.getClass().getMethod("getLocales");
+                Object localeList = getLocales.invoke(cfg);
+                if (localeList != null) {
+                    java.lang.reflect.Method isEmpty = localeList.getClass().getMethod("isEmpty");
+                    if (!Boolean.TRUE.equals(isEmpty.invoke(localeList))) {
+                        java.lang.reflect.Method get = localeList.getClass().getMethod("get", int.class);
+                        Object first = get.invoke(localeList, Integer.valueOf(0));
+                        if (first instanceof Locale) {
+                            return (Locale) first;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        return cfg.locale;
+    }
+
     private static Locale detectSystemLocale(Context context) {
+        if (context != null) {
+            if (sObservedSystemLocale != null) {
+                return sObservedSystemLocale;
+            }
+            try {
+                Resources ctxRes = context.getResources();
+                if (ctxRes != null) {
+                    Locale ctxLoc = extractPrimaryLocale(ctxRes.getConfiguration());
+                    if (ctxLoc != null) {
+                        sObservedSystemLocale = ctxLoc;
+                        return ctxLoc;
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
         try {
             Resources sysRes = Resources.getSystem();
-            if (sysRes != null && sysRes.getConfiguration() != null) {
-                Configuration cfg = sysRes.getConfiguration();
-                if (cfg.locale != null) {
-                    return cfg.locale;
+            if (sysRes != null) {
+                Locale sysLoc = extractPrimaryLocale(sysRes.getConfiguration());
+                if (sysLoc != null) {
+                    return sysLoc;
                 }
             }
         } catch (Throwable ignored) {
@@ -106,7 +170,8 @@ public final class AcidLocale {
                 return Locale.SIMPLIFIED_CHINESE;
             }
         }
-        return INITIAL_JVM_LOCALE != null ? INITIAL_JVM_LOCALE : Locale.SIMPLIFIED_CHINESE;
+        Locale def = Locale.getDefault();
+        return def != null ? def : Locale.SIMPLIFIED_CHINESE;
     }
 
     public static boolean isEn() {
@@ -289,6 +354,14 @@ public final class AcidLocale {
         if (s.startsWith("已切换模型: ")) {
             return "Switched model: " + s.substring(7);
         }
+        if (s.contains(" · 思考:") || s.endsWith(" · 关闭思考")) {
+            return s.replace(" · 关闭思考", " · Think:Off")
+                    .replace(" · 思考:低", " · Think:Low")
+                    .replace(" · 思考:中", " · Think:Med")
+                    .replace(" · 思考:高", " · Think:High")
+                    .replace(" · 思考:极高", " · Think:Max")
+                    .replace(" · 思考:默认", " · Think:Auto");
+        }
         if (s.startsWith("接口: ")) {
             return "Endpoint: " + s.substring(4).replace("(默认地址)", "(Default)");
         }
@@ -352,17 +425,37 @@ public final class AcidLocale {
         }
         if (s.startsWith("[") && s.contains("] ")) {
             int close = s.indexOf("] ");
-            String cat = tr(s.substring(1, close));
-            String rest = s.substring(close + 2);
-            rest = rest.replace("待下载 · ", "Saved · ")
-                       .replace(" · 点击开始下载", " · Tap to start")
-                       .replace("正在下载 ", "Downloading ")
-                       .replace("已暂停 · ", "Paused · ")
-                       .replace("排队等待下载...", "Queued...")
-                       .replace("下载失败 · ", "Failed · ")
-                       .replace("已完成 · ", "Completed · ")
-                       .replace("未知大小", "Unknown size");
-            return "[" + cat + "] " + rest;
+            String rawCat = s.substring(1, close);
+            if (isDownloadCategoryLabel(rawCat)) {
+                String cat = tr(rawCat);
+                String rest = s.substring(close + 2);
+                rest = rest.replace("待下载 · ", "Saved · ")
+                           .replace(" · 点击开始下载", " · Tap to start")
+                           .replace("正在下载 ", "Downloading ")
+                           .replace("已暂停 · ", "Paused · ")
+                           .replace("排队等待下载...", "Queued...")
+                           .replace("下载失败 · ", "Failed · ")
+                           .replace("已完成 · ", "Completed · ")
+                           .replace("未知大小", "Unknown size");
+                return "[" + cat + "] " + rest;
+            }
+        }
+        if (s.startsWith("已停用 · ") || s.startsWith("[官方核心] ") || s.startsWith("[技能包")
+                || s.startsWith("所有网站 · ")) {
+            String out = s;
+            if (out.startsWith("已停用 · ")) {
+                out = "Disabled · " + out.substring(6);
+            }
+            out = out.replace("[官方核心] ", "[Core] ")
+                     .replace("[技能包] ", "[Package] ");
+            if (out.contains("[技能包 · ") && out.contains("个文件] ")) {
+                out = out.replace("[技能包 · ", "[Package · ").replace("个文件] ", " files] ");
+            }
+            out = out.replace("所有网站 · ", "All Sites · ");
+            return out;
+        }
+        if (s.startsWith("安装失败: ")) {
+            return "Install failed: " + s.substring(6);
         }
         if (s.startsWith("正在多线程下载: ")) {
             return s.replace("正在多线程下载: ", "Multi-thread downloading: ").replace(" · 剩余 ", " · ETA ");
@@ -459,6 +552,12 @@ public final class AcidLocale {
             return "Copied to clipboard";
         }
         return s;
+    }
+
+    private static boolean isDownloadCategoryLabel(String cat) {
+        return "全部".equals(cat) || "安装包".equals(cat) || "压缩包".equals(cat)
+            || "文档".equals(cat) || "图片".equals(cat) || "视频".equals(cat)
+            || "音频".equals(cat) || "其它".equals(cat);
     }
 
     private static String translateYesterdayPrefix(String t) {
@@ -934,6 +1033,26 @@ public final class AcidLocale {
         EN_MAP.put("已限制仅本机回环访问", "Restricted to localhost (127.0.0.1) only");
         EN_MAP.put("连接与使用说明", "Connection Guide");
         EN_MAP.put("复制令牌", "Copy Token");
+        EN_MAP.put(
+            "1. 本机/跨机连接：\n"
+            + "   • 同一手机上的 AI 工具使用「本机地址」。\n"
+            + "   • 电脑上的 Cursor、Claude Desktop 等请使用「局域网地址」，两台设备需在同一 Wi-Fi 下。\n\n"
+            + "2. 客户端认证配置：\n"
+            + "   • 开启认证后，客户端需在请求头中配置：\n"
+            + "     Authorization: Bearer <访问令牌>\n"
+            + "   • 或在连接 URL 结尾追加参数：?token=<访问令牌>\n\n"
+            + "3. 安全注意：\n"
+            + "   • 认证通信不加密，请在可信任的家庭或公司局域网中使用，切勿在公共开放 Wi-Fi 下开启局域网连接。",
+            "1. Local / LAN Connection:\n"
+            + "   • On-device AI tools: use the Localhost Endpoint.\n"
+            + "   • Desktop tools (Cursor, Claude Desktop): use the LAN Endpoint on the same Wi-Fi.\n\n"
+            + "2. Client Authentication:\n"
+            + "   • When auth is enabled, pass the header:\n"
+            + "     Authorization: Bearer <token>\n"
+            + "   • Or append query parameter: ?token=<token>\n\n"
+            + "3. Security Notice:\n"
+            + "   • Traffic is unencrypted HTTP. Use LAN mode only on trusted private Wi-Fi networks."
+        );
 
         // About & Begging Sheet
         EN_MAP.put("乞讨", "Donate");
@@ -947,9 +1066,14 @@ public final class AcidLocale {
             "This is the author's begging page — you can pay, but you will get nothing in return!");
         EN_MAP.put("微信", "WeChat Pay");
         EN_MAP.put("支付宝", "Alipay");
+        EN_MAP.put("推荐使用支付宝", "Alipay Recommended");
+        EN_MAP.put("推荐使用微信支付", "WeChat Pay Recommended");
+        EN_MAP.put("打开支付宝 [扫一扫]", "Scan with Alipay");
+        EN_MAP.put("微信扫一扫向作者付款", "Scan with WeChat to pay author");
         EN_MAP.put("以后都隐藏乞讨按钮", "Hide This Button Forever");
         EN_MAP.put("已隐藏乞讨按钮", "Donate button hidden");
         EN_MAP.put("更新说明", "Release Notes");
+        EN_MAP.put("修复已知问题，提升稳定性与浏览体验", "Bug fixes and stability improvements");
         EN_MAP.put("检查更新失败，请访问 GitHub Releases 查看", "Update check failed. Please check GitHub Releases.");
 
         // Element Context Menu & JS Dialogs

@@ -305,7 +305,7 @@ public class McpSheet extends AcidBottomSheetView {
                 tvTip.setTextColor(mutedColor);
                 tvTip.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvTip.setLineSpacing(AcidTheme.dp(ctx, 3), 1.0f);
-                tvTip.setText(
+                tvTip.setText(AcidLocale.tr(
                     "1. 本机/跨机连接：\n"
                     + "   • 同一手机上的 AI 工具使用「本机地址」。\n"
                     + "   • 电脑上的 Cursor、Claude Desktop 等请使用「局域网地址」，两台设备需在同一 Wi-Fi 下。\n\n"
@@ -315,7 +315,7 @@ public class McpSheet extends AcidBottomSheetView {
                     + "   • 或在连接 URL 结尾追加参数：?token=<访问令牌>\n\n"
                     + "3. 安全注意：\n"
                     + "   • 认证通信不加密，请在可信任的家庭或公司局域网中使用，切勿在公共开放 Wi-Fi 下开启局域网连接。"
-                );
+                ));
                 tipCard.addView(tvTip);
                 container.addView(tipCard);
             }
@@ -325,7 +325,7 @@ public class McpSheet extends AcidBottomSheetView {
     private void showTokenDetailDialog(final Context ctx, final String token) {
         new AcidDialog(ctx, mIsDarkMode)
             .setTitle("访问令牌 (Token)")
-            .setMessage(token)
+            .setRawMessage(token)
             .setPositiveButton("复制令牌", new AcidDialog.OnActionListener() {
                 @Override
                 public boolean onAction(Dialog dialog) {

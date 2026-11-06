@@ -182,7 +182,7 @@ public class SkillSheet extends AcidBottomSheetView {
                         rowBuilder.titleView.setTypeface(isChecked ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
                     }
                     if (rowBuilder.subtitleView != null) {
-                        rowBuilder.subtitleView.setText(formatSkillSubtitle(meta));
+                        rowBuilder.subtitleView.setText(AcidLocale.tr(formatSkillSubtitle(meta)));
                     }
                     card.setAlpha(isChecked ? 1f : 0.75f);
                     AcidFeedback.info(ctx, (isChecked ? "已启用技能「" : "已停用技能「") + meta.title + "」");
@@ -260,26 +260,29 @@ public class SkillSheet extends AcidBottomSheetView {
             public void render(LinearLayout pinned, LinearLayout container, LinearLayout footer) {
                 final Context ctx = getContext();
                 final String content = mManager != null ? mManager.readSkill(meta.fileName) : "";
+                boolean en = AcidLocale.isEn();
 
                 // 1. Metadata Card
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "技能元数据"));
                 LinearLayout metaCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
                 TextView tvMeta = new TextView(ctx);
                 StringBuilder sb = new StringBuilder();
-                sb.append("技能标识 (Name): ").append(meta.name).append("\n");
-                sb.append("入口路径: skills/").append(meta.fileName).append("\n");
-                sb.append("技能状态: ").append(meta.enabled ? "已启用 (按需注入 Agent)" : "已停用 (不注入 System Prompt)").append("\n");
+                sb.append(en ? "Name: " : "技能标识 (Name): ").append(meta.name).append("\n");
+                sb.append(en ? "Entry Path: skills/" : "入口路径: skills/").append(meta.fileName).append("\n");
+                sb.append(en ? "Status: " : "技能状态: ").append(meta.enabled
+                    ? (en ? "Enabled (Injected on demand)" : "已启用 (按需注入 Agent)")
+                    : (en ? "Disabled (Not injected)" : "已停用 (不注入 System Prompt)")).append("\n");
                 if (meta.isBuiltin) {
-                    sb.append("技能类型: 官方核心预置 (Core Builtin)\n");
+                    sb.append(en ? "Type: Official Core Builtin\n" : "技能类型: 官方核心预置 (Core Builtin)\n");
                 } else if (meta.isDirectoryPackage) {
-                    sb.append("技能类型: 标准多文件技能包 (含 ")
-                      .append(meta.companionFiles.size()).append(" 个附属文件)\n");
+                    sb.append(en ? "Type: Multi-file Skill Package (" : "技能类型: 标准多文件技能包 (含 ")
+                      .append(meta.companionFiles.size()).append(en ? " companion files)\n" : " 个附属文件)\n");
                 } else {
-                    sb.append("技能类型: 单文件扩展技能 (Markdown)\n");
+                    sb.append(en ? "Type: Single-file Markdown Skill\n" : "技能类型: 单文件扩展技能 (Markdown)\n");
                 }
-                sb.append("总计大小: ").append(String.format(Locale.getDefault(), "%.1f KB", meta.fileSize / 1024.0)).append("\n");
-                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
-                sb.append("最后修改: ").append(sdf.format(new Date(meta.lastModified)));
+                sb.append(en ? "Total Size: " : "总计大小: ").append(String.format(Locale.US, "%.1f KB", meta.fileSize / 1024.0)).append("\n");
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
+                sb.append(en ? "Last Modified: " : "最后修改: ").append(sdf.format(new Date(meta.lastModified)));
                 tvMeta.setText(sb.toString());
                 tvMeta.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvMeta.setTextColor(AcidTheme.muted(mIsDarkMode));
@@ -369,7 +372,7 @@ public class SkillSheet extends AcidBottomSheetView {
             });
         }
 
-        return page;
+        return page.withRawTitle();
     }
 
     // =========================================================================
@@ -415,7 +418,7 @@ public class SkillSheet extends AcidBottomSheetView {
 
                 footer.addView(AcidWidgets.buttonRow(ctx, btnCopy, btnEdit));
             }
-        });
+        }).withRawTitle();
     }
 
     private void confirmResetBuiltin(final SkillManager.SkillMeta meta) {

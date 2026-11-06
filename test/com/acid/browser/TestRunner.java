@@ -1111,12 +1111,49 @@ public final class TestRunner {
         assertEquals(Integer.valueOf(AcidSettings.LANG_SYSTEM), AcidSettings.LANGUAGE.defaultValue, "Default language is Follow System (0)");
         assertEquals(AcidSettings.LANG_EN, AcidSettings.LANGUAGE.codeToIndex("en"), "Language code 'en' maps to LANG_EN");
         assertEquals(AcidSettings.LANG_ZH, AcidSettings.LANGUAGE.codeToIndex("zh-CN"), "Language alias 'zh-CN' maps to LANG_ZH");
+        java.util.Locale initialJvmLocale = java.util.Locale.getDefault();
         try {
             AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_EN);
             assertTrue(AcidLocale.isEn(), "AcidLocale switches to English");
+            assertEquals(initialJvmLocale, java.util.Locale.getDefault(), "Switching AcidLocale does not pollute JVM Locale.getDefault()");
             assertEquals("Settings", AcidLocale.tr("设置"), "Static label translated to English");
-            assertEquals("Blocked 42 times", AcidLocale.tr("已拦截 42 次"), "Dynamic counter translated to English");
+            assertEquals("Blocked 42 times", AcidLocale.tr("已拦截 42 times".replace("times", "次")), "Dynamic counter translated to English");
             assertEquals("All Chats (5)", AcidLocale.tr("全部会话 (5)"), "Section count header translated to English");
+            assertEquals(
+                "DeepSeek / DeepSeek-R1 · Think:High",
+                AcidLocale.tr("DeepSeek / DeepSeek-R1 · 思考:高"),
+                "Model status reasoning effort suffix translated to English"
+            );
+            assertEquals(
+                "DeepSeek / DeepSeek-V3 · Think:Off",
+                AcidLocale.tr("DeepSeek / DeepSeek-V3 · 关闭思考"),
+                "Model status Think:Off suffix translated to English"
+            );
+            assertEquals(
+                "[Archive] Downloading 5.0 MB",
+                AcidLocale.tr("[压缩包] 正在下载 5.0 MB"),
+                "Download category subtitle translated to English"
+            );
+            assertEquals(
+                "[用户笔记] 正在下载 5.0 MB",
+                AcidLocale.tr("[用户笔记] 正在下载 5.0 MB"),
+                "Non-download bracketed user text is not mutated by download category rule"
+            );
+            assertEquals(
+                "Disabled · [Core] desc",
+                AcidLocale.tr("已停用 · [官方核心] desc"),
+                "Disabled builtin skill subtitle prefix translated to English"
+            );
+            assertEquals(
+                "[Package · 3 files] desc",
+                AcidLocale.tr("[技能包 · 3个文件] desc"),
+                "Multi-file skill package subtitle prefix translated to English"
+            );
+            assertEquals(
+                "Disabled · All Sites · v1.0 · document-end",
+                AcidLocale.tr("已停用 · 所有网站 · v1.0 · document-end"),
+                "Userscript subtitle translated to English"
+            );
 
             AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_ZH);
             assertTrue(!AcidLocale.isEn(), "AcidLocale switches back to Simplified Chinese");

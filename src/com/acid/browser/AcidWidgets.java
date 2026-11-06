@@ -687,7 +687,7 @@ public final class AcidWidgets {
             }
 
             titleView = new TextView(ctx);
-            titleView.setText(AcidLocale.tr(mTitle));
+            titleView.setText(mTitle);
             titleView.setTextColor(mDimmed ? AcidTheme.muted(dark) : AcidTheme.text(dark));
             titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_ITEM);
             titleView.setTypeface(mDimmed ? Typeface.DEFAULT : Typeface.DEFAULT_BOLD);

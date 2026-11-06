@@ -295,8 +295,8 @@ public class AboutSheet extends AcidBottomSheetView {
         final String hex = isAlipay ? ALIPAY_QR_HEX : WECHAT_QR_HEX;
         final int brandColor = isAlipay ? Color.rgb(22, 119, 255) : Color.rgb(7, 193, 96);
         final String badgeChar = isAlipay ? "支" : "微";
-        final String titleText = isAlipay ? "推荐使用支付宝" : "推荐使用微信支付";
-        final String subText = isAlipay ? "打开支付宝 [扫一扫]" : "微信扫一扫向作者付款";
+        final String titleText = AcidLocale.tr(isAlipay ? "推荐使用支付宝" : "推荐使用微信支付");
+        final String subText = AcidLocale.tr(isAlipay ? "打开支付宝 [扫一扫]" : "微信扫一扫向作者付款");
 
         Bitmap bmp = Bitmap.createBitmap(cardW, cardH, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bmp);
@@ -394,7 +394,7 @@ public class AboutSheet extends AcidBottomSheetView {
         box.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "更新说明"));
 
         TextView tvLog = new TextView(ctx);
-        tvLog.setText(info.changelog.isEmpty() ? "修复已知问题，提升稳定性与浏览体验" : info.changelog);
+        tvLog.setText(info.changelog.isEmpty() ? AcidLocale.tr("修复已知问题，提升稳定性与浏览体验") : info.changelog);
         tvLog.setTextColor(AcidTheme.muted(mIsDarkMode));
         tvLog.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         tvLog.setLineSpacing(AcidTheme.dp(ctx, 3f), 1f);

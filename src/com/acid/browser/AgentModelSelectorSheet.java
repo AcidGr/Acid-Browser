@@ -92,7 +92,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
             tvCurVal.setText(activeProvider.displayName + " / " + activeModel.name);
             tvCurVal.setTextColor(textCol);
         } else {
-            tvCurVal.setText("暂无可用模型，请点击右上角「模型配置」添加");
+            tvCurVal.setText(AcidLocale.tr("暂无可用模型，请点击右上角「模型配置」添加"));
             tvCurVal.setTextColor(AcidTheme.COLOR_AMBER);
         }
         tvCurVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
@@ -125,7 +125,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
                     boolean isSel = efId.equals(activeEffort);
 
                     TextView pill = new TextView(ctx);
-                    pill.setText(AcidModelStore.getEffortDisplayName(efId));
+                    pill.setText(AcidLocale.tr(AcidModelStore.getEffortDisplayName(efId)));
                     pill.setGravity(Gravity.CENTER);
                     pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                     pill.setTypeface(isSel ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);

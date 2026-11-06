@@ -25,19 +25,19 @@ public final class JsDialogHelper {
             try {
                 String host = Uri.parse(url).getHost();
                 if (host != null && !host.isEmpty()) {
-                    return host + " 提示";
+                    return host + (AcidLocale.isEn() ? " says" : " 提示");
                 }
             } catch (Exception ignored) {}
         }
-        return fallback;
+        return AcidLocale.tr(fallback);
     }
 
     public static void showAlert(Context ctx, boolean dark, String url, String message, final JsResult result) {
         final boolean[] settled = new boolean[]{false};
         try {
             new AcidDialog(ctx, dark)
-                .setTitle(hostTitle(url, "网页提示"))
-                .setMessage(message != null ? message : "")
+                .setRawTitle(hostTitle(url, "网页提示"))
+                .setRawMessage(message != null ? message : "")
                 .setPositiveButton("确定", new AcidDialog.OnActionListener() {
                     @Override
                     public boolean onAction(Dialog dialog) {
@@ -76,8 +76,8 @@ public final class JsDialogHelper {
         final boolean[] settled = new boolean[]{false};
         try {
             new AcidDialog(ctx, dark)
-                .setTitle(hostTitle(url, "网页确认"))
-                .setMessage(message != null ? message : "")
+                .setRawTitle(hostTitle(url, "网页确认"))
+                .setRawMessage(message != null ? message : "")
                 .setPositiveButton("确定", new AcidDialog.OnActionListener() {
                     @Override
                     public boolean onAction(Dialog dialog) {
@@ -140,8 +140,8 @@ public final class JsDialogHelper {
             box.addView(et);
 
             new AcidDialog(ctx, dark)
-                .setTitle(hostTitle(url, "网页输入"))
-                .setMessage(message != null ? message : "")
+                .setRawTitle(hostTitle(url, "网页输入"))
+                .setRawMessage(message != null ? message : "")
                 .setCustomView(box)
                 .setPositiveButton("确定", new AcidDialog.OnActionListener() {
                     @Override

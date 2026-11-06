@@ -1785,7 +1785,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             + "if(window.__updateAcidLanguage){window.__updateAcidLanguage('" + lang + "');}"
             + "else{"
             + "var q=document.getElementById('quote-text');if(q&&(q.textContent==='你可以让Agent帮你自定义主页'||q.textContent==='Ask Agent to customize your homepage'))q.textContent='" + quote + "';"
-            + "var s=document.getElementById('search-input');if(s)s.placeholder='" + ph + "';"
+            + "var s=document.getElementById('search-input');if(s&&(!s.placeholder||s.placeholder==='搜索或输入网址...'||s.placeholder==='Search or enter URL...'))s.placeholder='" + ph + "';"
             + "}"
             + "}catch(e){}";
         mMainHandler.post(new Runnable() {
