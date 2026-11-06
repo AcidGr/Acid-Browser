@@ -413,7 +413,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     }
 
     public void setTitle(String title) {
-        mTitleView.setText(title != null ? title : "");
+        mTitleView.setText(AcidLocale.tr(title != null ? title : ""));
     }
 
     public void setHeaderNavigation(boolean showBack, OnClickListener backListener) {
@@ -460,7 +460,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     public void setAction(int iconId, String text, int color, OnClickListener listener) {
         mBtnAction.setVisibility(View.VISIBLE);
         int resolvedColor = resolveDynamicAccentColor(color);
-        mBtnAction.update(iconId, text, resolvedColor);
+        mBtnAction.update(iconId, AcidLocale.tr(text), resolvedColor);
         mBtnAction.setOnClickListener(listener);
     }
 

@@ -127,6 +127,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         requestWindowFeature(Window.FEATURE_NO_TITLE);
 
         mDataStore = new BrowserDataStore(this);
+        AcidLocale.syncFromDataStore(this, mDataStore);
         mDataStore.setCallbackDispatcher(new BrowserDataStore.CallbackDispatcher() {
             @Override
             public void dispatch(Runnable action) {
@@ -627,6 +628,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         BrowserActivity.this,
                         enabled ? "已开启无图省流模式" : "已恢复正常图片加载"
                     );
+                }
+
+                @Override
+                public void onLanguageChanged(int langIndex) {
+                    applyLanguageHotSwitch();
                 }
             }
         );
@@ -1199,6 +1205,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mSyncingHotReload) return;
         mSyncingHotReload = true;
         try {
+            boolean langChanged = AcidLocale.syncFromDataStore(this, mDataStore);
             if (mController != null) {
                 mController.applySettingsHotReload();
             }
@@ -1215,14 +1222,51 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mHttpServer.stop();
                 }
             }
-            updateShieldVisual();
-            updateMenuSheetCards();
-            if (mSettingsSheet != null) {
-                mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
-                mSettingsSheet.refresh();
+            if (langChanged) {
+                applyLanguageHotSwitch();
+            } else {
+                updateShieldVisual();
+                updateMenuSheetCards();
+                if (mSettingsSheet != null) {
+                    mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
+                    mSettingsSheet.refresh();
+                }
             }
         } finally {
             mSyncingHotReload = false;
+        }
+    }
+
+    private void applyLanguageHotSwitch() {
+        AcidLocale.syncFromDataStore(this, mDataStore);
+        updateAddressBarVisual();
+        refreshTakeoverBanner();
+        if (mOverlayView != null) {
+            mOverlayView.postInvalidate();
+        }
+        if (mMenuSheet != null) {
+            mMenuSheet.refreshLanguage();
+            updateMenuSheetCards();
+        }
+        if (mAgentFloatingView != null) {
+            mAgentFloatingView.refreshLanguage();
+        }
+        if (mTabsOverview != null && mTabsOverview.isShowing()) {
+            mTabsOverview.renderTabsGrid();
+        }
+        AcidBottomSheetView[] allSheets = new AcidBottomSheetView[]{
+            mSettingsSheet, mAboutSheet, mMcpSheet, mAdBlockSheet,
+            mUserscriptSheet, mSkillSheet, mBookmarksHistorySheet,
+            mDownloadsSheet, mDownloadConfirmSheet, mSessionsSheet,
+            mModelSelectorSheet, mProviderConfigSheet
+        };
+        for (AcidBottomSheetView s : allSheets) {
+            if (s != null && s.isShowing()) {
+                s.refreshActivePage();
+            }
+        }
+        if (mController != null) {
+            mController.pushLanguageToActiveHomeTabs();
         }
     }
 
@@ -1417,7 +1461,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mSearchContainer.setBackground(AcidTheme.pillBg(this, searchBg, searchBorder, AcidTheme.RADIUS_PILL));
         mSearchIcon.setIcon(mIncognitoMode ? AcidIcons.ICON_INCOGNITO : AcidIcons.ICON_SEARCH);
         mSearchIcon.setColor(mIncognitoMode ? AcidTheme.COLOR_PURPLE : AcidTheme.muted(mIsDarkMode));
-        mEtUrl.setHint(mIncognitoMode ? "无痕模式 · 搜索或输入网址..." : "搜索或输入网址...");
+        mEtUrl.setHint(AcidLocale.tr(mIncognitoMode ? "无痕模式 · 搜索或输入网址..." : "搜索或输入网址..."));
         mEtUrl.setTextColor(AcidTheme.text(mIsDarkMode));
         mEtUrl.setHintTextColor(AcidTheme.muted(mIsDarkMode));
     }
@@ -1629,7 +1673,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     if (summary == null || summary.trim().isEmpty()) {
                         summary = isDrivingCurrent ? "自动化运行中 · 页面触控已锁定" : "后台自动化进行中 · 当前页可自由浏览";
                     }
-                    mTvTakeoverStatus.setText(summary);
+                    mTvTakeoverStatus.setText(AcidLocale.tr(summary));
                     mTvTakeoverStatus.setTextColor(accent);
 
                     // 2. 前台受控与后台非受控唯一的区别：右侧动作按钮不同
@@ -1643,7 +1687,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     String reason = mController.getTakeoverReason();
                     mTakeoverIcon.setIcon(AcidIcons.ICON_HUMAN);
                     mTakeoverIcon.setColor(AcidTheme.COLOR_AMBER);
-                    mTvTakeoverStatus.setText("请人工协助: " + (reason.isEmpty() ? "请完成页面操作" : reason));
+                    mTvTakeoverStatus.setText(AcidLocale.tr("请人工协助: " + (reason.isEmpty() ? "请完成页面操作" : reason)));
                     mTvTakeoverStatus.setTextColor(AcidTheme.COLOR_AMBER);
                     mBtnTakeoverAction.update(AcidIcons.ICON_AGENT, "交还AI", accent);
                 } else {
@@ -1853,6 +1897,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        if (mDataStore != null && mDataStore.getLanguageIndex() == AcidSettings.LANG_SYSTEM) {
+            if (AcidLocale.syncFromDataStore(this, mDataStore)) {
+                applyLanguageHotSwitch();
+            }
+        }
         if (mIsFullscreenMode) {
             applyFullscreenWindowFlags(true);
         }

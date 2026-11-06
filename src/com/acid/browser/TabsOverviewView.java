@@ -229,7 +229,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
 
         List<BrowserController.TabSession> tabs = mController.getTabs();
         BrowserController.TabSession activeTab = mController.getActiveTab();
-        mTvTabsCountTitle.setText("标签页 (" + tabs.size() + ")");
+        mTvTabsCountTitle.setText(AcidLocale.tr("标签页 (" + tabs.size() + ")"));
 
         LinearLayout leftCol = new LinearLayout(getContext());
         leftCol.setOrientation(LinearLayout.VERTICAL);
@@ -427,7 +427,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
             empty.addView(emptyIcon);
 
             TextView tip = new TextView(ctx);
-            tip.setText("空白页面");
+            tip.setText(AcidLocale.tr("空白页面"));
             tip.setTextColor(AcidTheme.muted(mIsDarkMode));
             tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             LinearLayout.LayoutParams tipLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);

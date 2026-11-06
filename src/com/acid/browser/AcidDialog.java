@@ -207,7 +207,7 @@ public final class AcidDialog {
         // 1. Header Title (Dialog Title = 15sp Bold)
         if (!TextUtils.isEmpty(mTitle)) {
             TextView tvTitle = new TextView(mContext);
-            tvTitle.setText(mTitle);
+            tvTitle.setText(AcidLocale.tr(mTitle));
             tvTitle.setTextColor(AcidTheme.text(mDark));
             tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_DIALOG_TITLE);
             tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
@@ -229,7 +229,7 @@ public final class AcidDialog {
 
         if (!TextUtils.isEmpty(mMessage)) {
             TextView tvMsg = new TextView(mContext);
-            tvMsg.setText(mMessage);
+            tvMsg.setText(AcidLocale.tr(mMessage));
             tvMsg.setTextColor(AcidTheme.text(mDark));
             tvMsg.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
             tvMsg.setLineSpacing(AcidTheme.dp(mContext, 3f), 1f);
@@ -399,7 +399,7 @@ public final class AcidDialog {
             ));
 
             TextView tv = new TextView(mContext);
-            tv.setText(mSingleItems[i]);
+            tv.setText(AcidLocale.tr(mSingleItems[i]));
             tv.setTextColor(AcidTheme.text(mDark));
             tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
             tv.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
@@ -501,7 +501,7 @@ public final class AcidDialog {
         row.addView(box);
 
         final TextView tv = new TextView(ctx);
-        tv.setText(label);
+        tv.setText(AcidLocale.tr(label));
         tv.setTextColor(AcidTheme.text(dark));
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         row.addView(tv, new LinearLayout.LayoutParams(

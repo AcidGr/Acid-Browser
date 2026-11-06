@@ -203,17 +203,17 @@ public class AgentOverlayView extends View {
             float startY = cardTop + dp(32);
 
             // Title
-            canvas.drawText("Agent正在操作此页面", centerX, startY, mTipTitlePaint);
+            canvas.drawText(AcidLocale.tr("Agent正在操作此页面"), centerX, startY, mTipTitlePaint);
 
             // Description lines
             startY += dp(26);
-            canvas.drawText("请保持浏览器在前台或小窗。", centerX, startY, mTipBodyPaint);
+            canvas.drawText(AcidLocale.tr("请保持浏览器在前台或小窗。"), centerX, startY, mTipBodyPaint);
             startY += dp(22);
-            canvas.drawText("切换标签页不影响Agent继续运行。", centerX, startY, mTipBodyPaint);
+            canvas.drawText(AcidLocale.tr("切换标签页不影响Agent继续运行。"), centerX, startY, mTipBodyPaint);
 
             // Dismiss footnote
             startY += dp(32);
-            canvas.drawText("● 点击关闭遮罩提示 ●", centerX, startY, mTipFootPaint);
+            canvas.drawText(AcidLocale.tr("● 点击关闭遮罩提示 ●"), centerX, startY, mTipFootPaint);
         }
 
         // 2. Draw breathing border in AGENT (only if driving currently visible tab) or TAKEOVER_REQUESTED mode

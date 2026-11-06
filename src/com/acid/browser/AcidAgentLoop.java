@@ -388,7 +388,11 @@ public class AcidAgentLoop {
                 mController.setAgentBoundTabId(activeTab.id);
             }
         }
-        submitUserTask("我已完成手动操作，请观察当前最新页面并继续完成任务。");
+        submitUserTask(AcidLocale.getString(
+            R.string.takeover_resume_prompt,
+            "我已完成手动操作，请观察当前最新页面并继续完成任务。",
+            "I have completed the manual action. Please observe the current page and continue the task."
+        ));
     }
 
     private String buildSystemPrompt() {
@@ -423,6 +427,9 @@ public class AcidAgentLoop {
             "- **Bookmarks Management & Hot-Reload**: User bookmarks are stored in `bookmarks.json` in your workspace (`" + wsPath + "/bookmarks.json`). You can read them (`read`), add new bookmarks, or organize them via `write` or `edit`. Any change to `bookmarks.json` automatically live-reloads into the browser.\n" +
             "- **Browsing History & Audit**: Full browsing history is stored in `history.json` in your workspace (`" + wsPath + "/history.json`) with timestamps. You can read it (`read`) to help users search, recall, or organize past visits. Any modification automatically live-reloads.\n" +
             "- **Human-in-the-Loop Takeover**: When encountering login passwords, SMS codes, CAPTCHAs, or payment confirmations, call `browser(action='request_takeover', reason='...')` and stop so the user can take over.\n" +
+            "- **Response Language**: " + (AcidLocale.isEn()
+                ? "Respond to the user in English unless the user explicitly asks in another language.\n"
+                : "Respond to the user in Simplified Chinese (简体中文) unless the user explicitly asks in another language.\n") +
             "- Format your final explanations clearly using Markdown (headings, bold, lists, code blocks).";
     }
 

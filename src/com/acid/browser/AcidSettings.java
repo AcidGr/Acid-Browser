@@ -326,6 +326,20 @@ public final class AcidSettings {
         new String[]{"internal", "builtin", "native", "system"}
     ));
 
+    public static final int LANG_SYSTEM = 0;
+    public static final int LANG_ZH = 1;
+    public static final int LANG_EN = 2;
+
+    public static final EnumIndexKey LANGUAGE = register(new EnumIndexKey(
+        "app_language",
+        "language",
+        LANG_SYSTEM,
+        "界面语言",
+        new String[]{"system", "zh", "en"},
+        new String[]{"跟随系统", "简体中文", "English"},
+        new String[]{"auto", "system", "default", "system", "zh-cn", "zh", "cn", "zh", "chinese", "zh", "en-us", "en", "english", "en"}
+    ));
+
     public static final BoolKey BLOCK_IMAGES = register(new BoolKey(
         "block_images", "block_images", false, "无图省流模式", true, false
     ));

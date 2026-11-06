@@ -50,7 +50,7 @@ public final class AcidWidgets {
      */
     public static TextView sectionHeader(Context ctx, boolean dark, String title) {
         TextView tv = new TextView(ctx);
-        tv.setText(title != null ? title : "");
+        tv.setText(AcidLocale.tr(title != null ? title : ""));
         tv.setTextColor(AcidTheme.icon(dark));
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_OVERLINE);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
@@ -87,7 +87,7 @@ public final class AcidWidgets {
         );
 
         TextView tvLeft = new TextView(ctx);
-        tvLeft.setText(leftTitle != null ? leftTitle : "");
+        tvLeft.setText(AcidLocale.tr(leftTitle != null ? leftTitle : ""));
         tvLeft.setTextColor(AcidTheme.icon(dark));
         tvLeft.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_OVERLINE);
         tvLeft.setTypeface(Typeface.DEFAULT_BOLD);
@@ -109,7 +109,7 @@ public final class AcidWidgets {
      */
     public static TextView descriptionText(Context ctx, boolean dark, String text) {
         TextView tv = new TextView(ctx);
-        tv.setText(text != null ? text : "");
+        tv.setText(AcidLocale.tr(text != null ? text : ""));
         tv.setTextColor(AcidTheme.muted(dark));
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         tv.setLineSpacing(AcidTheme.dp(ctx, 2.5f), 1f);
@@ -262,7 +262,7 @@ public final class AcidWidgets {
         tLp.rightMargin = AcidTheme.dp(ctx, 8);
 
         TextView tvTitle = new TextView(ctx);
-        tvTitle.setText(title != null ? title : "");
+        tvTitle.setText(AcidLocale.tr(title != null ? title : ""));
         tvTitle.setTextColor(dangerText ? AcidTheme.COLOR_RED : AcidTheme.text(dark));
         tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_ITEM);
         tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
@@ -272,7 +272,7 @@ public final class AcidWidgets {
 
         if (!TextUtils.isEmpty(subtitle)) {
             TextView tvSub = new TextView(ctx);
-            tvSub.setText(subtitle);
+            tvSub.setText(AcidLocale.tr(subtitle));
             tvSub.setTextColor(AcidTheme.muted(dark));
             tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             tvSub.setSingleLine(true);
@@ -318,7 +318,7 @@ public final class AcidWidgets {
 
         if (!TextUtils.isEmpty(rightValue)) {
             TextView tvVal = new TextView(ctx);
-            tvVal.setText(rightValue);
+            tvVal.setText(AcidLocale.tr(rightValue));
             tvVal.setTextColor(AcidTheme.muted(dark));
             tvVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             tvVal.setSingleLine(true);
@@ -602,7 +602,7 @@ public final class AcidWidgets {
 
         public ListRow trailingText(Context ctx, boolean dark, String text) {
             TextView tv = new TextView(ctx);
-            tv.setText(text);
+            tv.setText(AcidLocale.tr(text));
             tv.setTextColor(AcidTheme.muted(dark));
             tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             mTrailingView = tv;
@@ -687,7 +687,7 @@ public final class AcidWidgets {
             }
 
             titleView = new TextView(ctx);
-            titleView.setText(mTitle);
+            titleView.setText(AcidLocale.tr(mTitle));
             titleView.setTextColor(mDimmed ? AcidTheme.muted(dark) : AcidTheme.text(dark));
             titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_ITEM);
             titleView.setTypeface(mDimmed ? Typeface.DEFAULT : Typeface.DEFAULT_BOLD);
@@ -697,7 +697,7 @@ public final class AcidWidgets {
 
             if (!TextUtils.isEmpty(mSubtitle)) {
                 subtitleView = new TextView(ctx);
-                subtitleView.setText(mSubtitle);
+                subtitleView.setText(AcidLocale.tr(mSubtitle));
                 subtitleView.setTextColor(mSubtitleColor != 0 ? mSubtitleColor : AcidTheme.muted(dark));
                 subtitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 subtitleView.setSingleLine(true);
@@ -808,7 +808,7 @@ public final class AcidWidgets {
      */
     public static TextView fieldLabel(Context ctx, boolean dark, String label) {
         TextView tv = new TextView(ctx);
-        tv.setText(label != null ? label : "");
+        tv.setText(AcidLocale.tr(label != null ? label : ""));
         tv.setTextColor(AcidTheme.muted(dark));
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_FIELD_LABEL);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
@@ -850,7 +850,7 @@ public final class AcidWidgets {
         EditText et = new EditText(ctx);
         et.setSingleLine(singleLine);
         if (initialValue != null) et.setText(initialValue);
-        if (hint != null) et.setHint(hint);
+        if (hint != null) et.setHint(AcidLocale.tr(hint));
         et.setTextColor(AcidTheme.text(dark));
         et.setHintTextColor(AcidTheme.muted(dark));
         et.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
@@ -894,7 +894,7 @@ public final class AcidWidgets {
         box.addView(icon);
 
         targetEditText.setSingleLine(true);
-        targetEditText.setHint(hint);
+        targetEditText.setHint(AcidLocale.tr(hint));
         targetEditText.setHintTextColor(AcidTheme.muted(dark));
         targetEditText.setTextColor(AcidTheme.text(dark));
         targetEditText.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
@@ -935,7 +935,7 @@ public final class AcidWidgets {
             final int tabIdx = i;
             boolean isActive = (i == activeIndex);
             TextView tab = new TextView(ctx);
-            tab.setText(labels[i]);
+            tab.setText(AcidLocale.tr(labels[i]));
             tab.setGravity(Gravity.CENTER);
             tab.setSingleLine(true);
             tab.setEllipsize(TextUtils.TruncateAt.END);
@@ -1017,7 +1017,7 @@ public final class AcidWidgets {
         for (int i = 0; i < labels.length; i++) {
             final int idx = i;
             TextView pill = new TextView(ctx);
-            pill.setText(labels[i]);
+            pill.setText(AcidLocale.tr(labels[i]));
             pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             pill.setTypeface(Typeface.DEFAULT_BOLD);
             pill.setGravity(Gravity.CENTER);
@@ -1058,7 +1058,7 @@ public final class AcidWidgets {
     public static TextView statusTag(Context ctx, boolean dark, String text, int color) {
         int fg = color != 0 ? color : AcidTheme.accent(dark);
         TextView tv = new TextView(ctx);
-        tv.setText(text != null ? text : "");
+        tv.setText(AcidLocale.tr(text != null ? text : ""));
         tv.setTextColor(fg);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1079,7 +1079,7 @@ public final class AcidWidgets {
         View.OnClickListener onClick
     ) {
         TextView btn = new TextView(ctx);
-        btn.setText(text != null ? text : "");
+        btn.setText(AcidLocale.tr(text != null ? text : ""));
         btn.setTextColor(color != 0 ? color : AcidTheme.accent(dark));
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         btn.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1136,7 +1136,7 @@ public final class AcidWidgets {
     ) {
         int fill = fillColor != 0 ? fillColor : AcidTheme.accent(dark);
         TextView btn = new TextView(ctx);
-        btn.setText(text);
+        btn.setText(AcidLocale.tr(text));
         btn.setTextColor(AcidTheme.onColor(fill));
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         btn.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1170,7 +1170,7 @@ public final class AcidWidgets {
         View.OnClickListener onClick
     ) {
         TextView btn = new TextView(ctx);
-        btn.setText(text);
+        btn.setText(AcidLocale.tr(text));
         btn.setTextColor(textColor != 0 ? textColor : AcidTheme.text(dark));
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         btn.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1205,7 +1205,7 @@ public final class AcidWidgets {
         View.OnClickListener onClick
     ) {
         TextView btn = new TextView(ctx);
-        btn.setText(text);
+        btn.setText(AcidLocale.tr(text));
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         btn.setTypeface(Typeface.DEFAULT_BOLD);
         btn.setGravity(Gravity.CENTER);
@@ -1273,8 +1273,8 @@ public final class AcidWidgets {
 
         public LoadingButton(TextView buttonView, String idleLabel, String loadingLabel) {
             this.view = buttonView;
-            this.mIdleLabel = idleLabel;
-            this.mLoadingLabel = loadingLabel;
+            this.mIdleLabel = AcidLocale.tr(idleLabel);
+            this.mLoadingLabel = AcidLocale.tr(loadingLabel);
         }
 
         public static LoadingButton primary(
@@ -1347,7 +1347,7 @@ public final class AcidWidgets {
         box.addView(icon);
 
         TextView tv = new TextView(ctx);
-        tv.setText(message != null ? message : "");
+        tv.setText(AcidLocale.tr(message != null ? message : ""));
         tv.setTextColor(AcidTheme.muted(dark));
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         tv.setGravity(Gravity.CENTER);

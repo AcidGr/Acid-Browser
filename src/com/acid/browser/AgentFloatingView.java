@@ -299,7 +299,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         titleColLp.rightMargin = AcidTheme.dp(ctx, 6);
 
         mTvAgentSessionTitle = new TextView(ctx);
-        mTvAgentSessionTitle.setText("新对话");
+        mTvAgentSessionTitle.setText(AcidLocale.tr("新对话"));
         mTvAgentSessionTitle.setTextColor(AcidTheme.LIGHT_TEXT);
         mTvAgentSessionTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_ITEM);
         mTvAgentSessionTitle.setTypeface(Typeface.DEFAULT_BOLD);
@@ -430,7 +430,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mAgentInputBar.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 6));
 
         mEtAgentTaskInput = new EditText(ctx);
-        mEtAgentTaskInput.setHint("向 Acid Agent 发送网页或沙盒任务...");
+        mEtAgentTaskInput.setHint(AcidLocale.tr("向 Acid Agent 发送网页或沙盒任务..."));
         mEtAgentTaskInput.setHintTextColor(AcidTheme.LIGHT_MUTED);
         mEtAgentTaskInput.setTextColor(AcidTheme.LIGHT_TEXT);
         mEtAgentTaskInput.setSingleLine(true);
@@ -534,7 +534,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         card.addView(icon);
 
         mTvLoadEarlierSummary = new TextView(ctx);
-        mTvLoadEarlierSummary.setText("已折叠 " + foldedCount + " 条更早历史记录 · 点击加载更多");
+        mTvLoadEarlierSummary.setText(AcidLocale.tr("已折叠 " + foldedCount + " 条更早历史记录 · 点击加载更多"));
         mTvLoadEarlierSummary.setTextColor(mutedCol);
         mTvLoadEarlierSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_FIELD_LABEL);
         mTvLoadEarlierSummary.setTypeface(Typeface.DEFAULT_BOLD);
@@ -543,7 +543,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         card.addView(mTvLoadEarlierSummary, tLp);
 
         TextView btnAll = new TextView(ctx);
-        btnAll.setText("全部展开");
+        btnAll.setText(AcidLocale.tr("全部展开"));
         btnAll.setTextColor(AcidTheme.COLOR_BLUE);
         btnAll.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
         int btnPadH = AcidTheme.dp(ctx, 6);
@@ -600,7 +600,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 mTvLoadEarlierSummary = null;
             }
         } else if (mTvLoadEarlierSummary != null) {
-            mTvLoadEarlierSummary.setText("已折叠 " + mRenderedStartIndex + " 条更早历史记录 · 点击加载更多");
+            mTvLoadEarlierSummary.setText(AcidLocale.tr("已折叠 " + mRenderedStartIndex + " 条更早历史记录 · 点击加载更多"));
         }
     }
 
@@ -651,25 +651,29 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         card.setPadding(pad, padV, pad, padV);
 
         TextView title = new TextView(ctx);
-        title.setText("Acid Agent 自主智能体");
+        title.setText(AcidLocale.getString(R.string.agent_welcome_title, "Acid Agent 自主智能体", "Acid Autonomous Agent"));
         title.setTextColor(textCol);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(title);
 
         TextView desc = new TextView(ctx);
-        desc.setText("内置 browser (网页感知与操控)、read、write、edit、bash 五大沙盒工具。您可以直接发送指令让它跨网页调研、填写表单、编写油猴脚本或生成本地数据报告。");
+        desc.setText(AcidLocale.getString(
+            R.string.agent_welcome_desc,
+            "内置 browser (网页感知与操控)、read、write、edit、bash 五大沙盒工具。您可以直接发送指令让它跨网页调研、填写表单、编写油猴脚本或生成本地数据报告。",
+            "Equipped with 5 core sandbox tools: browser, read, write, edit, and bash. Ask it to research across pages, fill forms, write userscripts, or build local reports."
+        ));
         desc.setTextColor(mutedCol);
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         desc.setPadding(0, AcidTheme.dp(ctx, 4), 0, AcidTheme.dp(ctx, 8));
         card.addView(desc);
 
-        // Quick Start chips
+        // Quick Start chips (follow current UI language)
         String[] samples = new String[]{
-            "帮我下载网盘里的这个文件",
-            "帮我做一个贪吃蛇游戏并直接展示在页面上",
-            "帮我去掉当前页面上的广告",
-            "帮我下载当前页面上的媒体内容"
+            AcidLocale.getString(R.string.agent_sample_1, "帮我下载网盘里的这个文件", "Download this file from the cloud drive"),
+            AcidLocale.getString(R.string.agent_sample_2, "帮我做一个贪吃蛇游戏并直接展示在页面上", "Build a Snake game and display it on the page"),
+            AcidLocale.getString(R.string.agent_sample_3, "帮我去掉当前页面上的广告", "Remove ads on the current page"),
+            AcidLocale.getString(R.string.agent_sample_4, "帮我下载当前页面上的媒体内容", "Download media from the current page")
         };
         for (final String sample : samples) {
             TextView chip = new TextView(ctx);
@@ -798,7 +802,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         String preview = item.text != null ? item.text.replace("\n", " ").trim() : "";
         if ("null".equals(preview)) preview = "";
         if (preview.length() > 36) preview = preview.substring(0, 36) + "...";
-        title.setText(item.isRunning ? ("思考中 · " + preview) : ("思考过程 · " + preview));
+        title.setText(AcidLocale.tr(item.isRunning ? ("思考中 · " + preview) : ("思考过程 · " + preview)));
         title.setTextColor(muted);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         title.setSingleLine(true);
@@ -949,13 +953,13 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             String preview = text.replace("\n", " ").trim();
             if (preview.length() > 36) preview = preview.substring(0, 36) + "...";
             if (item.isRunning) {
-                mTitleView.setText("思考中 · " + preview);
+                mTitleView.setText(AcidLocale.tr("思考中 · " + preview));
                 if (mBodyView.getVisibility() != View.VISIBLE) {
                     mBodyView.setVisibility(View.VISIBLE);
                     mChevron.setIcon(AcidIcons.ICON_CHEVRON_UP);
                 }
             } else {
-                mTitleView.setText("思考过程 · " + preview);
+                mTitleView.setText(AcidLocale.tr("思考过程 · " + preview));
             }
         }
     }
@@ -1060,7 +1064,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mDetailContainer.setVisibility(View.GONE);
 
             mLblArgs = new TextView(ctx);
-            mLblArgs.setText("调用参数 (Arguments)");
+            mLblArgs.setText(AcidLocale.tr("调用参数 (Arguments)"));
             mLblArgs.setTextColor(AcidTheme.LIGHT_MUTED);
             mLblArgs.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
             mLblArgs.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1080,7 +1084,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mDetailContainer.addView(mTvArgsCode, argsLp);
 
             mLblRes = new TextView(ctx);
-            mLblRes.setText("返回结果 (Output)");
+            mLblRes.setText(AcidLocale.tr("返回结果 (Output)"));
             mLblRes.setTextColor(AcidTheme.LIGHT_MUTED);
             mLblRes.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
             mLblRes.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1140,20 +1144,20 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mTvSummary.setTextColor(textCol);
 
             if (item.isRunning) {
-                mTvStatusBadge.setText("执行中");
+                mTvStatusBadge.setText(AcidLocale.tr("执行中"));
                 mTvStatusBadge.setTextColor(AcidTheme.COLOR_AMBER);
                 mTvStatusBadge.setBackground(AcidTheme.pillBg(
                     ctx, AcidTheme.softTint(AcidTheme.COLOR_AMBER, 30), AcidTheme.COLOR_AMBER, AcidTheme.RADIUS_BADGE
                 ));
             } else if (item.isError) {
                 int errCol = AcidTheme.COLOR_RED;
-                mTvStatusBadge.setText("失败");
+                mTvStatusBadge.setText(AcidLocale.tr("失败"));
                 mTvStatusBadge.setTextColor(errCol);
                 mTvStatusBadge.setBackground(AcidTheme.pillBg(
                     ctx, AcidTheme.softTint(errCol, 30), errCol, AcidTheme.RADIUS_BADGE
                 ));
             } else {
-                mTvStatusBadge.setText("完成");
+                mTvStatusBadge.setText(AcidLocale.tr("完成"));
                 mTvStatusBadge.setTextColor(accent);
                 mTvStatusBadge.setBackground(AcidTheme.pillBg(
                     ctx, AcidTheme.softTint(accent, 26), 0, AcidTheme.RADIUS_BADGE
@@ -1208,18 +1212,18 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
 
         if (mTvAgentLoopStatus != null) {
             if (running) {
-                mTvAgentLoopStatus.setText("运行中 · Step " + step);
+                mTvAgentLoopStatus.setText(AcidLocale.tr("运行中 · Step " + step));
                 mTvAgentLoopStatus.setTextColor(yellow);
             } else if (pausedForTakeover) {
-                mTvAgentLoopStatus.setText("等待人工接管协助");
+                mTvAgentLoopStatus.setText(AcidLocale.tr("等待人工接管协助"));
                 mTvAgentLoopStatus.setTextColor(AcidTheme.COLOR_AMBER);
             } else {
-                mTvAgentLoopStatus.setText(mAgentLoop != null ? mAgentLoop.getModelStatusDisplay() : "");
+                mTvAgentLoopStatus.setText(mAgentLoop != null ? AcidLocale.tr(mAgentLoop.getModelStatusDisplay()) : "");
                 mTvAgentLoopStatus.setTextColor(muted);
             }
         }
         if (mTvAgentSessionTitle != null && mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
-            mTvAgentSessionTitle.setText(mAgentLoop.getActiveSession().title);
+            mTvAgentSessionTitle.setText(AcidLocale.tr(mAgentLoop.getActiveSession().title));
         }
         if (mBtnAgentSendStop != null) {
             if (running) {
@@ -1259,8 +1263,28 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         float hitRate = promptTokens > 0 ? ((cachedTokens * 100.0f) / promptTokens) : 0f;
         String hitStr = String.format(java.util.Locale.US, "%.0f%%", hitRate);
 
-        String display = tokenStr + "/1M (" + String.format(java.util.Locale.US, "%.1f%%", pct) + ") · 缓存 " + hitStr;
+        String display = tokenStr + "/1M (" + String.format(java.util.Locale.US, "%.1f%%", pct) + ")"
+            + (AcidLocale.isEn() ? " · Cache " : " · 缓存 ") + hitStr;
         mTvContextUsageText.setText(display);
+    }
+
+    public void refreshLanguage() {
+        int accent = AcidTheme.accent(mIsDarkMode);
+        if (mBtnSessions != null) {
+            mBtnSessions.update(AcidIcons.ICON_CHAT_LIST, "会话", AcidTheme.COLOR_BLUE);
+        }
+        if (mBtnNewSession != null) {
+            mBtnNewSession.update(AcidIcons.ICON_PLUS, "新对话", accent);
+        }
+        if (mEtAgentTaskInput != null) {
+            mEtAgentTaskInput.setHint(AcidLocale.tr("向 Acid Agent 发送网页或沙盒任务..."));
+        }
+        boolean running = mAgentLoop != null && mAgentLoop.isRunning();
+        boolean paused = mAgentLoop != null && mAgentLoop.isPausedForTakeover();
+        onLoopStateChanged(running, paused, 1);
+        if (mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
+            renderSessionChatStream(mAgentLoop.getActiveSession());
+        }
     }
 
     public void triggerAgentSubmitOrStop() {

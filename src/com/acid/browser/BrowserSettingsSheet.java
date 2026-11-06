@@ -27,6 +27,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         void onWebDebuggingChanged(boolean enabled);
         void onDoNotTrackChanged(boolean enabled);
         void onBlockImagesChanged(boolean enabled);
+        void onLanguageChanged(int langIndex);
     }
 
     private final BrowserDataStore mDataStore;
@@ -134,6 +135,13 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "地址栏与启动"));
                 container.addView(AcidWidgets.groupCard(
                     ctx, mIsDarkMode,
+                    AcidWidgets.navRow(
+                        ctx, mIsDarkMode, AcidIcons.ICON_GLOBE, accent,
+                        AcidSettings.LANGUAGE.title, getLanguageLabel(),
+                        new OnClickListener() {
+                            @Override public void onClick(View v) { showLanguageDialog(); }
+                        }
+                    ),
                     AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_SEARCH, accent,
                         AcidSettings.SEARCH_ENGINE.title, getSearchEngineLabel(),
@@ -360,6 +368,31 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
 
     private String getDownloaderEngineLabel() {
         return AcidSettings.DOWNLOADER_ENGINE.indexToLabel(mDataStore.getDownloaderEngine());
+    }
+
+    private String getLanguageLabel() {
+        return AcidSettings.LANGUAGE.indexToLabel(mDataStore.getLanguageIndex());
+    }
+
+    private void showLanguageDialog() {
+        final Context ctx = getContext();
+        final String[] items = AcidSettings.LANGUAGE.displayLabels;
+        AcidDialogs.chooseSingle(
+            ctx, mIsDarkMode, "选择界面语言",
+            items, mDataStore.getLanguageIndex(),
+            new AcidDialogs.SingleChoiceCallback() {
+                @Override
+                public void onSelected(int which) {
+                    mDataStore.setLanguageIndex(which);
+                    AcidLocale.applyLanguageIndex(ctx, which);
+                    refreshActivePage();
+                    if (mListener != null) {
+                        mListener.onLanguageChanged(which);
+                    }
+                    AcidFeedback.ok(ctx, "界面语言已切换为: " + items[which]);
+                }
+            }
+        );
     }
 
     private void showDownloaderEngineDialog() {

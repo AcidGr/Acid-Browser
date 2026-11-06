@@ -149,7 +149,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
             addView(iconView);
 
             titleView = new TextView(context);
-            titleView.setText(title);
+            titleView.setText(AcidLocale.tr(title));
             titleView.setTextColor(textColor);
             titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             titleView.setTypeface(Typeface.DEFAULT_BOLD);
@@ -187,7 +187,7 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
             int textCol = isActive ? accent : AcidTheme.text(dark);
             iconView.setIcon(iconId);
             iconView.setColor(iconCol);
-            titleView.setText(title);
+            titleView.setText(AcidLocale.tr(title));
             titleView.setTextColor(textCol);
             applyCardBg(dark, isActive);
         }
@@ -662,10 +662,16 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
 
     @Override
     public void show() {
+        setTitle("功能");
         refreshTileVisuals();
         mHorizontalPager.goToPageImmediate(mCurrentPage);
         updateIndicator(mCurrentPage);
         super.show();
+    }
+
+    public void refreshLanguage() {
+        setTitle("功能");
+        refreshTileVisuals();
     }
 
     public void toggle() {

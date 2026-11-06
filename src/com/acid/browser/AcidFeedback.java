@@ -37,7 +37,7 @@ public final class AcidFeedback {
             if (sCurrentToast != null) {
                 sCurrentToast.cancel();
             }
-            sCurrentToast = Toast.makeText(context.getApplicationContext(), message, duration);
+            sCurrentToast = Toast.makeText(context.getApplicationContext(), AcidLocale.tr(message), duration);
             sCurrentToast.show();
         } catch (Exception ignored) {
             // Safe no-op in headless/JVM test environments

@@ -102,14 +102,14 @@ public class AdBlockSheet extends AcidBottomSheetView {
                 tLp.rightMargin = AcidTheme.dp(ctx, 8);
 
                 TextView tvTitle = new TextView(ctx);
-                tvTitle.setText(enabled ? "防护已开启" : "防护已暂停");
+                tvTitle.setText(AcidLocale.tr(enabled ? "防护已开启" : "防护已暂停"));
                 tvTitle.setTextColor(textColor);
                 tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
                 tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
                 titleCol.addView(tvTitle);
 
                 TextView tvSub = new TextView(ctx);
-                tvSub.setText("自动拦截网页广告请求、弹窗贴片与恶意唤端");
+                tvSub.setText(AcidLocale.tr("自动拦截网页广告请求、弹窗贴片与恶意唤端"));
                 tvSub.setTextColor(mutedColor);
                 tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvSub.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
@@ -142,13 +142,13 @@ public class AdBlockSheet extends AcidBottomSheetView {
                 counterRow.setPadding(0, AcidTheme.dp(ctx, 10), 0, AcidTheme.dp(ctx, 8));
 
                 TextView tvCountLabel = new TextView(ctx);
-                tvCountLabel.setText("累计已拦截请求: ");
+                tvCountLabel.setText(AcidLocale.tr("累计已拦截请求: "));
                 tvCountLabel.setTextColor(mutedColor);
                 tvCountLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
                 counterRow.addView(tvCountLabel);
 
                 TextView tvCountNum = new TextView(ctx);
-                tvCountNum.setText(mManager.getBlockedCount() + " 次");
+                tvCountNum.setText(AcidLocale.tr(mManager.getBlockedCount() + " 次"));
                 tvCountNum.setTextColor(accentColor);
                 tvCountNum.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
                 tvCountNum.setTypeface(Typeface.DEFAULT_BOLD);
@@ -321,14 +321,14 @@ public class AdBlockSheet extends AcidBottomSheetView {
         pill.setPadding(pad, pad, pad, pad);
 
         TextView valTv = new TextView(ctx);
-        valTv.setText(value);
+        valTv.setText(AcidLocale.tr(value));
         valTv.setTextColor(AcidTheme.text(mIsDarkMode));
         valTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         valTv.setTypeface(Typeface.DEFAULT_BOLD);
         pill.addView(valTv);
 
         TextView labTv = new TextView(ctx);
-        labTv.setText(label);
+        labTv.setText(AcidLocale.tr(label));
         labTv.setTextColor(AcidTheme.muted(mIsDarkMode));
         labTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
         pill.addView(labTv);
