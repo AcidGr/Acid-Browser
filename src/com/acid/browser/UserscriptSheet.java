@@ -184,7 +184,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
                         rowBuilder.titleView.setTypeface(isChecked ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
                     }
                     if (rowBuilder.subtitleView != null) {
-                        rowBuilder.subtitleView.setText(formatScriptSubtitle(meta));
+                        rowBuilder.subtitleView.setText(AcidLocale.tr(formatScriptSubtitle(meta)));
                     }
                     card.setAlpha(isChecked ? 1f : 0.75f);
                     AcidFeedback.info(ctx, (isChecked ? "已启用「" : "已停用「") + meta.name + "」");
@@ -273,6 +273,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
             public void render(LinearLayout pinned, LinearLayout container, LinearLayout footer) {
                 final Context ctx = getContext();
                 int accent = AcidTheme.accent(mIsDarkMode);
+                boolean en = AcidLocale.isEn();
 
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "基本信息"));
                 LinearLayout infoCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
@@ -288,29 +289,32 @@ public class UserscriptSheet extends AcidBottomSheetView {
 
                 TextView info = new TextView(ctx);
                 StringBuilder sb = new StringBuilder();
-                sb.append("状态: ").append(meta.enabled ? "已启用 (随匹配页面自动执行)" : "已停用").append("\n");
-                sb.append("生效范围: ").append(meta.describeScope()).append("\n");
-                sb.append("注入时机: ").append(meta.runAt).append("\n");
+                sb.append(en ? "Status: " : "状态: ").append(meta.enabled
+                    ? (en ? "Enabled (Auto-runs on matching pages)" : "已启用 (随匹配页面自动执行)")
+                    : (en ? "Disabled" : "已停用")).append("\n");
+                sb.append(en ? "Scope: " : "生效范围: ").append(AcidLocale.tr(meta.describeScope())).append("\n");
+                sb.append(en ? "Run At: " : "注入时机: ").append(meta.runAt).append("\n");
                 if (!meta.requires.isEmpty()) {
-                    sb.append("依赖脚本: ").append(meta.requires.size()).append(" 个外部库\n");
+                    sb.append(en ? "Requires: " : "依赖脚本: ").append(meta.requires.size())
+                      .append(en ? " external libraries\n" : " 个外部库\n");
                 }
                 if (!meta.grants.isEmpty()) {
-                    sb.append("权限声明: ");
+                    sb.append(en ? "Grants: " : "权限声明: ");
                     for (int i = 0; i < meta.grants.size(); i++) {
                         if (i > 0) sb.append(", ");
                         sb.append(meta.grants.get(i));
                     }
                     sb.append("\n");
                 }
-                if (!TextUtils.isEmpty(meta.author)) sb.append("作者: ").append(meta.author).append("\n");
-                if (!TextUtils.isEmpty(meta.version)) sb.append("版本: v").append(meta.version).append("\n");
-                if (!TextUtils.isEmpty(meta.homepageUrl)) sb.append("主页: ").append(meta.homepageUrl).append("\n");
-                if (!TextUtils.isEmpty(meta.supportUrl)) sb.append("反馈: ").append(meta.supportUrl).append("\n");
+                if (!TextUtils.isEmpty(meta.author)) sb.append(en ? "Author: " : "作者: ").append(meta.author).append("\n");
+                if (!TextUtils.isEmpty(meta.version)) sb.append(en ? "Version: v" : "版本: v").append(meta.version).append("\n");
+                if (!TextUtils.isEmpty(meta.homepageUrl)) sb.append(en ? "Homepage: " : "主页: ").append(meta.homepageUrl).append("\n");
+                if (!TextUtils.isEmpty(meta.supportUrl)) sb.append(en ? "Support: " : "反馈: ").append(meta.supportUrl).append("\n");
                 if (!TextUtils.isEmpty(UserscriptManager.updateUrlOf(meta))) {
-                    sb.append("更新源: ").append(UserscriptManager.updateUrlOf(meta)).append("\n");
+                    sb.append(en ? "Update URL: " : "更新源: ").append(UserscriptManager.updateUrlOf(meta)).append("\n");
                 }
-                if (meta.unwrap) sb.append("运行方式: @unwrap (页面作用域)\n");
-                sb.append("文件名: ").append(meta.fileName);
+                if (meta.unwrap) sb.append(en ? "Execution: @unwrap (Page Scope)\n" : "运行方式: @unwrap (页面作用域)\n");
+                sb.append(en ? "File: " : "文件名: ").append(meta.fileName);
                 info.setText(sb.toString());
                 info.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 info.setTextColor(AcidTheme.muted(mIsDarkMode));
@@ -374,7 +378,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 editLp.topMargin = AcidTheme.dp(ctx, 10);
                 footer.addView(secondRow, editLp);
             }
-        }).withAction(AcidIcons.ICON_TRASH, "删除", AcidTheme.COLOR_RED, new OnClickListener() {
+        }).withRawTitle().withAction(AcidIcons.ICON_TRASH, "删除", AcidTheme.COLOR_RED, new OnClickListener() {
             @Override
             public void onClick(View v) {
                 confirmDelete(meta);
@@ -593,20 +597,22 @@ public class UserscriptSheet extends AcidBottomSheetView {
             box.addView(tvDesc);
         }
 
+        boolean en = AcidLocale.isEn();
         StringBuilder scopeSb = new StringBuilder();
-        scopeSb.append("生效范围: ").append(meta.describeScope())
-            .append("\n注入时机: ").append(meta.runAt);
+        scopeSb.append(en ? "Scope: " : "生效范围: ").append(AcidLocale.tr(meta.describeScope()))
+            .append(en ? "\nRun At: " : "\n注入时机: ").append(meta.runAt);
         if (!meta.requires.isEmpty()) {
-            scopeSb.append("\n外部依赖: ").append(meta.requires.size()).append(" 个库 (安装后自动后台缓存)");
+            scopeSb.append(en ? "\nRequires: " : "\n外部依赖: ").append(meta.requires.size())
+                .append(en ? " libraries (auto-cached in background)" : " 个库 (安装后自动后台缓存)");
         }
         if (!meta.grants.isEmpty()) {
-            scopeSb.append("\n权限声明: ");
+            scopeSb.append(en ? "\nGrants: " : "\n权限声明: ");
             for (int i = 0; i < meta.grants.size(); i++) {
                 if (i > 0) scopeSb.append(", ");
                 scopeSb.append(meta.grants.get(i));
             }
         }
-        scopeSb.append("\n脚本来源: ").append(sourceLabel);
+        scopeSb.append(en ? "\nSource: " : "\n脚本来源: ").append(sourceLabel);
 
         TextView tvScope = new TextView(ctx);
         tvScope.setText(scopeSb.toString());

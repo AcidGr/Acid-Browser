@@ -66,7 +66,7 @@ public class TabsOverviewView extends FrameLayout implements AcidOverlay {
         mTopBar.setPadding(padH, padV, padH, padV);
 
         mTvTabsCountTitle = new TextView(context);
-        mTvTabsCountTitle.setText("标签页 (1)");
+        mTvTabsCountTitle.setText(AcidLocale.tr("标签页 (1)"));
         mTvTabsCountTitle.setTextColor(AcidTheme.LIGHT_TEXT);
         mTvTabsCountTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_SHEET_TITLE);
         mTvTabsCountTitle.setTypeface(Typeface.DEFAULT_BOLD);

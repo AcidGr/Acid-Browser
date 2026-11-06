@@ -61,6 +61,7 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
 
     public static final class SheetPage {
         public final String title;
+        public boolean rawTitle = false;
         public int actionIconId;
         public String actionText;
         public int actionColor;
@@ -102,6 +103,11 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
                     renderer.render(pinnedHeader, contentContainer);
                 }
             };
+        }
+
+        public SheetPage withRawTitle() {
+            this.rawTitle = true;
+            return this;
         }
 
         public SheetPage withAction(int iconId, String text, OnClickListener listener) {
@@ -416,6 +422,10 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mTitleView.setText(AcidLocale.tr(title != null ? title : ""));
     }
 
+    public void setRawTitle(String title) {
+        mTitleView.setText(title != null ? title : "");
+    }
+
     public void setHeaderNavigation(boolean showBack, OnClickListener backListener) {
         if (showBack) {
             mBtnBackIcon.setVisibility(View.VISIBLE);
@@ -590,7 +600,11 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     private void renderActivePage(final boolean restoreScroll) {
         if (mPageStack.isEmpty()) return;
         final SheetPage top = mPageStack.get(mPageStack.size() - 1);
-        setTitle(top.title);
+        if (top.rawTitle) {
+            setRawTitle(top.title);
+        } else {
+            setTitle(top.title);
+        }
         refreshHeaderNavigationState();
 
         if (top.actionText != null && !top.actionText.isEmpty()) {

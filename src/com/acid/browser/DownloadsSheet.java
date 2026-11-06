@@ -511,7 +511,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
             if (holder == null) continue;
 
             if (holder.infoView != null) {
-                holder.infoView.setText(buildDownloadSubtitle(it));
+                holder.infoView.setText(AcidLocale.tr(buildDownloadSubtitle(it)));
                 holder.infoView.setTextColor(downloadSubtitleColor(it));
             }
             if (holder.progressBar != null) {

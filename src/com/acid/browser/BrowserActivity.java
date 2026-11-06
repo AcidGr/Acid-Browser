@@ -848,7 +848,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         mEtUrl = new EditText(this);
         mEtUrl.setSingleLine(true);
-        mEtUrl.setHint("搜索或输入网址...");
+        mEtUrl.setHint(AcidLocale.tr("搜索或输入网址..."));
         mEtUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         mEtUrl.setBackgroundColor(Color.TRANSPARENT);
         mEtUrl.setPadding(dp(6), dp(4), dp(6), dp(4));
@@ -1057,7 +1057,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         bar.addView(mTakeoverIcon);
 
         mTvTakeoverStatus = new TextView(this);
-        mTvTakeoverStatus.setText("AI 请求接管");
+        mTvTakeoverStatus.setText(AcidLocale.tr("AI 请求接管"));
         mTvTakeoverStatus.setTextColor(AcidTheme.COLOR_AMBER);
         mTvTakeoverStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         mTvTakeoverStatus.setSingleLine(true);
@@ -1222,13 +1222,15 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mHttpServer.stop();
                 }
             }
+            updateShieldVisual();
+            if (mSettingsSheet != null) {
+                mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
+            }
             if (langChanged) {
                 applyLanguageHotSwitch();
             } else {
-                updateShieldVisual();
                 updateMenuSheetCards();
                 if (mSettingsSheet != null) {
-                    mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
                     mSettingsSheet.refresh();
                 }
             }
@@ -1897,10 +1899,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        if (mDataStore != null && mDataStore.getLanguageIndex() == AcidSettings.LANG_SYSTEM) {
-            if (AcidLocale.syncFromDataStore(this, mDataStore)) {
-                applyLanguageHotSwitch();
-            }
+        if (AcidLocale.onSystemConfigurationChanged(this, newConfig, mDataStore)) {
+            applyLanguageHotSwitch();
         }
         if (mIsFullscreenMode) {
             applyFullscreenWindowFlags(true);

@@ -70,6 +70,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     private int mLastTotalTokens = 0;
     private int mLastPromptTokens = 0;
     private int mLastCachedTokens = 0;
+    private int mLastLoopStep = 1;
     private final Map<String, ToolCardHolder> mToolCardHolders = new HashMap<String, ToolCardHolder>();
     private final Map<String, ThinkingViewHolder> mThinkingHolders = new HashMap<String, ThinkingViewHolder>();
     private final Map<String, AssistantViewHolder> mAssistantHolders = new HashMap<String, AssistantViewHolder>();
@@ -476,10 +477,10 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mCurrentRenderedSession = session;
 
         if (session != null && mTvAgentSessionTitle != null) {
-            mTvAgentSessionTitle.setText(session.title);
+            mTvAgentSessionTitle.setText(formatSessionTitle(session.title));
         }
-        if (mTvAgentLoopStatus != null && mAgentLoop != null && !mAgentLoop.isRunning()) {
-            mTvAgentLoopStatus.setText(mAgentLoop.getModelStatusDisplay());
+        if (mTvAgentLoopStatus != null && mAgentLoop != null && !mAgentLoop.isRunning() && !mAgentLoop.isPausedForTakeover()) {
+            mTvAgentLoopStatus.setText(AcidLocale.tr(mAgentLoop.getModelStatusDisplay()));
         }
         if (session != null) {
             int tt = session.lastTotalTokens > 0 ? session.lastTotalTokens : (mAgentLoop != null ? mAgentLoop.computeEstimatedTokens(session) : 0);
@@ -1205,14 +1206,25 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         }
     }
 
+    private static String formatSessionTitle(String title) {
+        if (title == null || title.isEmpty() || "新对话".equals(title)) {
+            return AcidLocale.tr("新对话");
+        }
+        return title;
+    }
+
     public void onLoopStateChanged(boolean running, boolean pausedForTakeover, int step) {
+        if (step > 0) {
+            mLastLoopStep = step;
+        }
+        int effectiveStep = mLastLoopStep > 0 ? mLastLoopStep : 1;
         int accent = AcidTheme.accent(mIsDarkMode);
         int muted = AcidTheme.muted(mIsDarkMode);
         int yellow = AcidTheme.COLOR_AMBER;
 
         if (mTvAgentLoopStatus != null) {
             if (running) {
-                mTvAgentLoopStatus.setText(AcidLocale.tr("运行中 · Step " + step));
+                mTvAgentLoopStatus.setText(AcidLocale.tr("运行中 · Step " + effectiveStep));
                 mTvAgentLoopStatus.setTextColor(yellow);
             } else if (pausedForTakeover) {
                 mTvAgentLoopStatus.setText(AcidLocale.tr("等待人工接管协助"));
@@ -1223,7 +1235,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             }
         }
         if (mTvAgentSessionTitle != null && mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
-            mTvAgentSessionTitle.setText(AcidLocale.tr(mAgentLoop.getActiveSession().title));
+            mTvAgentSessionTitle.setText(formatSessionTitle(mAgentLoop.getActiveSession().title));
         }
         if (mBtnAgentSendStop != null) {
             if (running) {
@@ -1279,12 +1291,12 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         if (mEtAgentTaskInput != null) {
             mEtAgentTaskInput.setHint(AcidLocale.tr("向 Acid Agent 发送网页或沙盒任务..."));
         }
-        boolean running = mAgentLoop != null && mAgentLoop.isRunning();
-        boolean paused = mAgentLoop != null && mAgentLoop.isPausedForTakeover();
-        onLoopStateChanged(running, paused, 1);
         if (mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
             renderSessionChatStream(mAgentLoop.getActiveSession());
         }
+        boolean running = mAgentLoop != null && mAgentLoop.isRunning();
+        boolean paused = mAgentLoop != null && mAgentLoop.isPausedForTakeover();
+        onLoopStateChanged(running, paused, mLastLoopStep);
     }
 
     public void triggerAgentSubmitOrStop() {
@@ -1313,7 +1325,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
 
     public void refreshAgentStatusLabel() {
         if (mTvAgentLoopStatus != null && mAgentLoop != null && !mAgentLoop.isRunning() && !mAgentLoop.isPausedForTakeover()) {
-            mTvAgentLoopStatus.setText(mAgentLoop.getModelStatusDisplay());
+            mTvAgentLoopStatus.setText(AcidLocale.tr(mAgentLoop.getModelStatusDisplay()));
         }
     }
 

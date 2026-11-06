@@ -121,7 +121,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
 
             // Row 2: Base URL
             TextView tvUrl = new TextView(ctx);
-            tvUrl.setText("接口: " + (p.baseUrl.isEmpty() ? "(默认地址)" : p.baseUrl));
+            tvUrl.setText(AcidLocale.tr("接口: " + (p.baseUrl.isEmpty() ? "(默认地址)" : p.baseUrl)));
             tvUrl.setTextColor(mutedCol);
             tvUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             tvUrl.setSingleLine(true);
@@ -137,7 +137,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             }
             if (p.models.size() > 4) sb.append(" 等");
             TextView tvModels = new TextView(ctx);
-            tvModels.setText(sb.toString());
+            tvModels.setText(AcidLocale.tr(sb.toString()));
             tvModels.setTextColor(blue);
             tvModels.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             tvModels.setSingleLine(true);
@@ -410,7 +410,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                     ? HideReturnsTransformationMethod.getInstance()
                     : PasswordTransformationMethod.getInstance());
                 if (toggleBtnRef[0] != null) {
-                    toggleBtnRef[0].setText(revealed ? "隐藏密钥" : "显示密钥");
+                    toggleBtnRef[0].setText(AcidLocale.tr(revealed ? "隐藏密钥" : "显示密钥"));
                 }
                 etApiKey.setSelection(etApiKey.getText().length());
             }
@@ -582,7 +582,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
 
         if (draft.models.isEmpty()) {
             TextView empty = new TextView(ctx);
-            empty.setText("当前暂无已装载模型，请点击上方「+ 手动添加」或从接口同步");
+            empty.setText(AcidLocale.tr("当前暂无已装载模型，请点击上方「+ 手动添加」或从接口同步"));
             empty.setTextColor(mutedCol);
             empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             empty.setPadding(0, AcidTheme.dp(ctx, 6), 0, AcidTheme.dp(ctx, 6));

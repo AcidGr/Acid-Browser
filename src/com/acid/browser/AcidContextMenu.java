@@ -102,7 +102,7 @@ public final class AcidContextMenu {
 
         if (!TextUtils.isEmpty(headerTitle)) {
             TextView tvHead = new TextView(context);
-            tvHead.setText(AcidLocale.tr(headerTitle));
+            tvHead.setText(headerTitle);
             tvHead.setTextColor(AcidTheme.muted(dark));
             tvHead.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             tvHead.setTypeface(Typeface.DEFAULT_BOLD);
