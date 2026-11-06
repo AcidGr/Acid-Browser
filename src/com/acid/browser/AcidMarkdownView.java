@@ -1,20 +1,26 @@
 package com.acid.browser;
 
 import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.text.Layout;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.BackgroundColorSpan;
 import android.text.style.ForegroundColorSpan;
+import android.text.style.LeadingMarginSpan;
 import android.text.style.RelativeSizeSpan;
 import android.text.style.StyleSpan;
 import android.text.style.TypefaceSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TableLayout;
@@ -53,6 +59,7 @@ public class AcidMarkdownView extends LinearLayout {
         int codeBlockBorder = AcidTheme.codeBlockBorder(darkTheme);
         int inlineCodeBg = AcidTheme.inlineCodeBg(darkTheme);
         int inlineCodeFg = AcidTheme.inlineCodeFg(darkTheme);
+        int accentColor = AcidTheme.accent(darkTheme);
 
         String[] rawLines = markdown.replace("\r\n", "\n").split("\n");
         StringBuilder paraBuf = new StringBuilder();
@@ -66,7 +73,7 @@ public class AcidMarkdownView extends LinearLayout {
 
             if (trimmed.startsWith("```")) {
                 if (!inCodeBlock) {
-                    flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
+                    flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg, mutedColor, accentColor, d);
                     inCodeBlock = true;
                     codeLang = trimmed.substring(3).trim();
                     codeBuf.setLength(0);
@@ -83,14 +90,9 @@ public class AcidMarkdownView extends LinearLayout {
                 if (codeBuf.length() > 0) codeBuf.append("\n");
                 codeBuf.append(line);
             } else {
-                if (trimmed.isEmpty()) {
-                    flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
-                } else if (trimmed.startsWith("> ")) {
-                    flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
-                    addQuoteView(ctx, container, trimmed.substring(2), darkTheme, mutedColor, inlineCodeBg, inlineCodeFg, d);
-                } else if (isTableRow(trimmed) && i + 1 < rawLines.length && isTableDelimiterRow(rawLines[i + 1])) {
-                    flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
-                    List<String> tableLines = new ArrayList<>();
+                if (isTableRow(trimmed) && i + 1 < rawLines.length && isTableDelimiterRow(rawLines[i + 1])) {
+                    flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg, mutedColor, accentColor, d);
+                    List<String> tableLines = new ArrayList<String>();
                     tableLines.add(line);
                     tableLines.add(rawLines[++i]);
                     while (i + 1 < rawLines.length && isTableRow(rawLines[i + 1])) {
@@ -98,8 +100,7 @@ public class AcidMarkdownView extends LinearLayout {
                     }
                     addTableView(ctx, container, tableLines, darkTheme, textColor, inlineCodeBg, inlineCodeFg, d);
                 } else {
-                    if (paraBuf.length() > 0) paraBuf.append("\n");
-                    paraBuf.append(line);
+                    appendParaLine(paraBuf, line);
                 }
             }
         }
@@ -107,7 +108,28 @@ public class AcidMarkdownView extends LinearLayout {
         if (inCodeBlock && codeBuf.length() > 0) {
             addCodeBlockView(ctx, container, codeLang, codeBuf.toString(), codeBlockBg, codeBlockBorder, d);
         }
-        flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg);
+        flushParagraph(ctx, container, paraBuf, textColor, inlineCodeBg, inlineCodeFg, mutedColor, accentColor, d);
+    }
+
+    static void appendParaLine(StringBuilder paraBuf, String line) {
+        if (line == null) return;
+        String trimmed = line.trim();
+        if (trimmed.isEmpty()) {
+            if (paraBuf.length() > 0) {
+                int len = paraBuf.length();
+                if (len < 2 || paraBuf.charAt(len - 1) != '\n' || paraBuf.charAt(len - 2) != '\n') {
+                    paraBuf.append("\n");
+                }
+            }
+        } else {
+            if (paraBuf.length() > 0) {
+                int len = paraBuf.length();
+                if (paraBuf.charAt(len - 1) != '\n') {
+                    paraBuf.append("\n");
+                }
+            }
+            paraBuf.append(line);
+        }
     }
 
     private static void flushParagraph(
@@ -116,19 +138,33 @@ public class AcidMarkdownView extends LinearLayout {
         StringBuilder buf,
         int textColor,
         int inlineCodeBg,
-        int inlineCodeFg
+        int inlineCodeFg,
+        int mutedColor,
+        int accentColor,
+        float d
     ) {
         if (buf.length() == 0) return;
         String block = buf.toString();
         buf.setLength(0);
 
-        float d = ctx.getResources().getDisplayMetrics().density;
+        int start = 0;
+        while (start < block.length() && (block.charAt(start) == '\r' || block.charAt(start) == '\n')) {
+            start++;
+        }
+        int end = block.length();
+        while (end > start && (block.charAt(end - 1) == '\r' || block.charAt(end - 1) == '\n')) {
+            end--;
+        }
+        if (start >= end) return;
+        block = block.substring(start, end);
+
         TextView tv = new TextView(ctx);
         tv.setTextColor(textColor);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         tv.setLineSpacing(Math.round(3 * d), 1.0f);
         tv.setTextIsSelectable(true);
-        tv.setText(formatRichLines(block, inlineCodeBg, inlineCodeFg));
+        tv.setText(formatRichLines(block, inlineCodeBg, inlineCodeFg, mutedColor, accentColor, d));
+        attachSelectableTouchDisallow(tv);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -214,7 +250,18 @@ public class AcidMarkdownView extends LinearLayout {
         codeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         codeTv.setTypeface(Typeface.MONOSPACE);
         codeTv.setTextIsSelectable(true);
+        attachSelectableTouchDisallow(codeTv);
         hsv.addView(codeTv);
+
+        final Context finalCtx = ctx;
+        final String finalCode = code;
+        card.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                AcidIo.copyToClipboard(finalCtx, "code", finalCode, "已复制代码块到剪贴板");
+                return true;
+            }
+        });
 
         card.addView(hsv, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -357,6 +404,8 @@ public class AcidMarkdownView extends LinearLayout {
             tv.setMinWidth(minCellWidth);
             tv.setMaxWidth(maxCellWidth);
             tv.setText(parseInlineMarkdown(cellText, inlineCodeBg, inlineCodeFg));
+            tv.setTextIsSelectable(true);
+            attachSelectableTouchDisallow(tv);
             headerRow.addView(tv);
         }
         table.addView(headerRow);
@@ -396,6 +445,8 @@ public class AcidMarkdownView extends LinearLayout {
                 tv.setMinWidth(minCellWidth);
                 tv.setMaxWidth(maxCellWidth);
                 tv.setText(parseInlineMarkdown(cellText, inlineCodeBg, inlineCodeFg));
+                tv.setTextIsSelectable(true);
+                attachSelectableTouchDisallow(tv);
                 row.addView(tv);
             }
             table.addView(row);
@@ -438,8 +489,19 @@ public class AcidMarkdownView extends LinearLayout {
         container.addView(card, cardLp);
     }
 
-    private static CharSequence formatRichLines(String text, int inlineCodeBg, int inlineCodeFg) {
-        String[] lines = text.split("\n");
+    static CharSequence formatRichLines(String text, int inlineCodeBg, int inlineCodeFg) {
+        return formatRichLines(text, inlineCodeBg, inlineCodeFg, 0x88888888, 0xFF4A90E2, 1.0f);
+    }
+
+    static CharSequence formatRichLines(
+        String text,
+        int inlineCodeBg,
+        int inlineCodeFg,
+        int mutedColor,
+        int accentColor,
+        float d
+    ) {
+        String[] lines = text.split("\n", -1);
         SpannableStringBuilder ssb = new SpannableStringBuilder();
 
         for (int i = 0; i < lines.length; i++) {
@@ -465,9 +527,25 @@ public class AcidMarkdownView extends LinearLayout {
                 int end = ssb.length();
                 ssb.setSpan(new StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 ssb.setSpan(new RelativeSizeSpan(1.18f), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+            } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) {
                 ssb.append(" • ");
                 ssb.append(parseInlineMarkdown(trimmed.substring(2), inlineCodeBg, inlineCodeFg));
+            } else if (trimmed.startsWith(">")) {
+                int start = ssb.length();
+                String quoteBody = (trimmed.length() > 1 && trimmed.charAt(1) == ' ')
+                    ? trimmed.substring(2)
+                    : (trimmed.length() > 1 ? trimmed.substring(1) : "");
+                if (quoteBody.isEmpty()) {
+                    quoteBody = " ";
+                }
+                ssb.append(parseInlineMarkdown(quoteBody, inlineCodeBg, inlineCodeFg));
+                int end = ssb.length();
+                if (end > start) {
+                    ssb.setSpan(new ForegroundColorSpan(mutedColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+                int stripeWidth = Math.max(1, Math.round(3 * d));
+                int gap = Math.max(1, Math.round(8 * d));
+                ssb.setSpan(new CustomQuoteSpan(accentColor, stripeWidth, gap), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             } else {
                 ssb.append(parseInlineMarkdown(line, inlineCodeBg, inlineCodeFg));
             }
@@ -533,6 +611,65 @@ public class AcidMarkdownView extends LinearLayout {
         }
 
         return ssb;
+    }
+
+    public static void attachSelectableTouchDisallow(final TextView tv) {
+        if (tv == null) return;
+        tv.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                if (tv.hasSelection()) {
+                    ViewParent parent = v.getParent();
+                    if (parent != null) {
+                        parent.requestDisallowInterceptTouchEvent(true);
+                    }
+                }
+                return false;
+            }
+        });
+    }
+
+    public static class CustomQuoteSpan implements LeadingMarginSpan {
+        private final int mColor;
+        private final int mStripeWidth;
+        private final int mGap;
+
+        public CustomQuoteSpan(int color, int stripeWidth, int gap) {
+            mColor = color;
+            mStripeWidth = stripeWidth;
+            mGap = gap;
+        }
+
+        @Override
+        public int getLeadingMargin(boolean first) {
+            return mStripeWidth + mGap;
+        }
+
+        @Override
+        public void drawLeadingMargin(
+            Canvas c,
+            Paint p,
+            int x,
+            int dir,
+            int top,
+            int baseline,
+            int bottom,
+            CharSequence text,
+            int start,
+            int end,
+            boolean first,
+            Layout layout
+        ) {
+            Paint.Style style = p.getStyle();
+            int color = p.getColor();
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(mColor);
+            int left = dir > 0 ? x : x - mStripeWidth;
+            int right = dir > 0 ? x + mStripeWidth : x;
+            c.drawRect(left, top, right, bottom, p);
+            p.setStyle(style);
+            p.setColor(color);
+        }
     }
 
     public AcidMarkdownView(Context context) {

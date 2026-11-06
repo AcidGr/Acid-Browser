@@ -1802,6 +1802,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             tab.webView.goBack();
             return;
         }
+        if (mController != null && mController.getTabs().size() > 1 && tab != null) {
+            if (mController.isTabDrivenByAgent(tab.id)) {
+                AcidFeedback.warn(this, "该标签页正在被 Agent 使用，无法关闭。");
+                return;
+            }
+            mController.closeTab(tab.id);
+            return;
+        }
         super.onBackPressed();
     }
 

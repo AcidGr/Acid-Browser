@@ -833,6 +833,14 @@ public final class TestRunner {
         assertTrue(!masked.contains("**wip**"), "Masked text does not expose asterisks to bold matcher");
         assertTrue(masked.contains("\uE0000\uE001"), "Masked text contains protected placeholder");
 
+        // A2. Multi-paragraph continuous buffer stream (preserves single blank line between paragraphs)
+        StringBuilder pb = new StringBuilder();
+        AcidMarkdownView.appendParaLine(pb, "Paragraph 1");
+        AcidMarkdownView.appendParaLine(pb, "");
+        AcidMarkdownView.appendParaLine(pb, "");
+        AcidMarkdownView.appendParaLine(pb, "Paragraph 2");
+        assertEquals("Paragraph 1\n\nParagraph 2", pb.toString(), "Multi-paragraph preserves exactly one blank line separator");
+
         // B. Desktop Viewport Manager script generation & URL eligibility
         assertTrue(DesktopViewportManager.isEligibleUrl("https://github.com/login"), "https eligible for desktop viewport");
         assertTrue(DesktopViewportManager.isEligibleUrl("http://localhost:3000"), "http eligible for desktop viewport");
