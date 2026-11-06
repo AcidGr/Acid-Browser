@@ -2,13 +2,19 @@ package com.acid.browser;
 
 import android.app.Dialog;
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
+import java.io.InputStream;
 
 /**
  * About & OTA Update Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage} template,
@@ -17,6 +23,9 @@ import android.widget.TextView;
 public class AboutSheet extends AcidBottomSheetView {
 
     public static final String GITHUB_REPO_URL = "https://github.com/AcidGr/Acid-Browser";
+    public static final String PREF_HIDE_BEGGING = "hide_begging_button";
+    private static final String ASSET_WECHAT_QR = "donate/wechat_qr.png";
+    private static final String ASSET_ALIPAY_QR = "donate/alipay_qr.jpg";
 
     public interface OnAboutActionListener {
         void onNavigateToUrl(String url);
@@ -24,6 +33,7 @@ public class AboutSheet extends AcidBottomSheetView {
     }
 
     private final OnAboutActionListener mListener;
+    private boolean mShowingAlipay = false;
 
     public AboutSheet(Context context, OnAboutActionListener listener) {
         super(context);
@@ -110,6 +120,25 @@ public class AboutSheet extends AcidBottomSheetView {
                 );
                 cuLp.leftMargin = AcidTheme.dp(ctx, 8);
                 versionRow.addView(btnCheckUpdate.view, cuLp);
+
+                if (!isBeggingHidden(ctx)) {
+                    TextView btnBeg = AcidWidgets.miniButton(
+                        ctx, mIsDarkMode, "乞讨", AcidTheme.COLOR_ORANGE, false,
+                        new OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                mShowingAlipay = false;
+                                pushPage(buildBeggingPage());
+                            }
+                        }
+                    );
+                    LinearLayout.LayoutParams begLp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    );
+                    begLp.leftMargin = AcidTheme.dp(ctx, 8);
+                    versionRow.addView(btnBeg, begLp);
+                }
+
                 hero.addView(versionRow);
                 container.addView(hero);
 
@@ -140,6 +169,124 @@ public class AboutSheet extends AcidBottomSheetView {
                 container.addView(descCard);
             }
         });
+    }
+
+    private static boolean isBeggingHidden(Context ctx) {
+        if (ctx == null) return false;
+        SharedPreferences sp = ctx.getSharedPreferences(BrowserDataStore.PREF_NAME, Context.MODE_PRIVATE);
+        return sp.getBoolean(PREF_HIDE_BEGGING, false);
+    }
+
+    private static void setBeggingHidden(Context ctx, boolean hidden) {
+        if (ctx == null) return;
+        SharedPreferences sp = ctx.getSharedPreferences(BrowserDataStore.PREF_NAME, Context.MODE_PRIVATE);
+        sp.edit().putBoolean(PREF_HIDE_BEGGING, hidden).apply();
+    }
+
+    private SheetPage buildBeggingPage() {
+        return new SheetPage("乞讨", new FullPageRenderer() {
+            @Override
+            public void render(LinearLayout pinnedHeader, LinearLayout container, LinearLayout pinnedFooter) {
+                final Context ctx = getContext();
+                int text = AcidTheme.text(mIsDarkMode);
+
+                // 1. Top Remark Note
+                LinearLayout noteCard = AcidWidgets.contentCard(ctx, mIsDarkMode, AcidTheme.COLOR_ORANGE);
+                TextView tvNote = new TextView(ctx);
+                tvNote.setText("此为作者的乞讨页面，您可以付款当时您得不到任何好处！");
+                tvNote.setTextColor(text);
+                tvNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
+                tvNote.setTypeface(Typeface.DEFAULT_BOLD);
+                tvNote.setGravity(Gravity.CENTER);
+                tvNote.setLineSpacing(AcidTheme.dp(ctx, 3f), 1f);
+                noteCard.addView(tvNote);
+                container.addView(noteCard);
+
+                // 2. Two Buttons: 微信 & 支付宝
+                final ImageView qrImageView = new ImageView(ctx);
+                qrImageView.setAdjustViewBounds(true);
+                qrImageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                qrImageView.setMaxHeight(AcidTheme.dp(ctx, 360));
+
+                OnClickListener selectWeChat = new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (mShowingAlipay) {
+                            mShowingAlipay = false;
+                            refreshActivePage();
+                        }
+                    }
+                };
+                OnClickListener selectAlipay = new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (!mShowingAlipay) {
+                            mShowingAlipay = true;
+                            refreshActivePage();
+                        }
+                    }
+                };
+
+                TextView btnWeChat = !mShowingAlipay
+                    ? AcidWidgets.primaryButton(ctx, mIsDarkMode, "微信", AcidTheme.COLOR_GREEN, selectWeChat)
+                    : AcidWidgets.secondaryButton(ctx, mIsDarkMode, "微信", text, selectWeChat);
+
+                TextView btnAlipay = mShowingAlipay
+                    ? AcidWidgets.primaryButton(ctx, mIsDarkMode, "支付宝", AcidTheme.COLOR_BLUE, selectAlipay)
+                    : AcidWidgets.secondaryButton(ctx, mIsDarkMode, "支付宝", text, selectAlipay);
+
+                LinearLayout switchRow = AcidWidgets.buttonRow(ctx, btnWeChat, btnAlipay);
+                LinearLayout.LayoutParams switchLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                switchLp.bottomMargin = AcidTheme.dp(ctx, 10);
+                container.addView(switchRow, switchLp);
+
+                // 3. QR Code Image Card
+                LinearLayout qrCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
+                qrCard.setGravity(Gravity.CENTER);
+                Bitmap qrBitmap = loadQrBitmapFromAsset(ctx, mShowingAlipay ? ASSET_ALIPAY_QR : ASSET_WECHAT_QR);
+                if (qrBitmap != null) {
+                    qrImageView.setImageBitmap(qrBitmap);
+                }
+                LinearLayout.LayoutParams qrLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                qrCard.addView(qrImageView, qrLp);
+                container.addView(qrCard);
+
+                // 4. Bottom Action Button to permanently hide the begging button
+                TextView btnHideForever = AcidWidgets.secondaryButton(
+                    ctx, mIsDarkMode, "以后都隐藏乞讨按钮", AcidTheme.muted(mIsDarkMode),
+                    new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            setBeggingHidden(ctx, true);
+                            AcidFeedback.info(ctx, "已隐藏乞讨按钮");
+                            popPage();
+                        }
+                    }
+                );
+                pinnedFooter.addView(btnHideForever, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ));
+            }
+        });
+    }
+
+    private static Bitmap loadQrBitmapFromAsset(Context ctx, String assetPath) {
+        if (ctx == null || assetPath == null) return null;
+        InputStream is = null;
+        try {
+            is = ctx.getAssets().open(assetPath);
+            return BitmapFactory.decodeStream(is);
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (is != null) {
+                try { is.close(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     private void showUpdateDialog(final AppUpdateChecker.UpdateInfo info) {
