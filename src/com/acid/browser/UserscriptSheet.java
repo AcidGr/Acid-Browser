@@ -358,16 +358,21 @@ public class UserscriptSheet extends AcidBottomSheetView {
                         }
                     }
                 );
+                TextView btnUpdate = AcidWidgets.secondaryButton(
+                    ctx, mIsDarkMode, "检查更新", AcidTheme.text(mIsDarkMode),
+                    new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            checkUpdate(meta);
+                        }
+                    }
+                );
+                View secondRow = AcidWidgets.buttonRow(ctx, btnEdit, btnUpdate);
                 LinearLayout.LayoutParams editLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                 );
                 editLp.topMargin = AcidTheme.dp(ctx, 10);
-                footer.addView(btnEdit, editLp);
-            }
-        }).withAction(AcidIcons.ICON_RELOAD, "检查更新", new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                checkUpdate(meta);
+                footer.addView(secondRow, editLp);
             }
         }).withAction(AcidIcons.ICON_TRASH, "删除", AcidTheme.COLOR_RED, new OnClickListener() {
             @Override

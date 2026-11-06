@@ -756,11 +756,36 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         handleIncomingIntent(intent);
     }
 
+    /**
+     * Enforces HTTP(S)-only scheme allowlist for external {@code ACTION_VIEW} Intents so exported
+     * explicit Intents can never inject {@code javascript:}, {@code file://}, or {@code data:} URIs.
+     */
+    public static boolean isSafeExternalViewUri(String rawUri) {
+        if (rawUri == null) return false;
+        String trimmed = rawUri.trim();
+        if (trimmed.isEmpty()) return false;
+        String lower = trimmed.toLowerCase(java.util.Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+
     private void handleIncomingIntent(Intent intent) {
         if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction())) {
             Uri data = intent.getData();
             if (data != null && mController != null) {
-                mController.loadUrl(data.toString());
+                String targetUrl = data.toString();
+                if (!isSafeExternalViewUri(targetUrl)) {
+                    android.util.Log.w("AcidBrowserAct", "Blocked unsafe external Intent URI scheme: " + targetUrl);
+                    return;
+                }
+                BrowserController.TabSession active = mController.getActiveTab();
+                boolean reuseInitialHome = active != null
+                    && mController.getTabs().size() == 1
+                    && mController.isHomeUrl(active.url);
+                if (reuseInitialHome || !BrowserController.canOpenScriptedTab(mController.getTabs().size())) {
+                    mController.loadUrl(targetUrl);
+                } else {
+                    mController.createNewTab(targetUrl, true);
+                }
             }
         }
     }

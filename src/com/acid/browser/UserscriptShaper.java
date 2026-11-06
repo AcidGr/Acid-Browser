@@ -64,7 +64,8 @@ public class UserscriptShaper {
             : "custom_script";
         String guardKey = JSONObject.quote(scriptId);
         String safeScriptId = JSONObject.quote(scriptId);
-        String safeSecret = JSONObject.quote(secret == null ? "" : secret);
+        String effectiveSecret = (secret != null && hasAnyNativeBridgeGrant(meta)) ? secret : "";
+        String safeSecret = JSONObject.quote(effectiveSecret);
 
         JSONObject gmInfo = new JSONObject();
         try {
@@ -114,8 +115,7 @@ public class UserscriptShaper {
             if (requires != null) {
                 for (String dep : requires) {
                     if (dep != null && !dep.trim().isEmpty()) {
-                        sb.append("try {\n").append(dep).append("\n} catch(e) {"
-                            + " console.error('[AcidUserscriptRequireError]', e); }\n");
+                        sb.append(dep).append("\n;\n");
                     }
                 }
             }
@@ -138,9 +138,7 @@ public class UserscriptShaper {
             sb.append("\n    /* === Pre-bundled @require Dependencies === */\n");
             for (String dep : requires) {
                 if (dep != null && !dep.trim().isEmpty()) {
-                    sb.append("    try {\n");
-                    sb.append(dep).append("\n");
-                    sb.append("    } catch(e) { console.error('[AcidUserscriptRequireError]', e); }\n");
+                    sb.append(dep).append("\n;\n");
                 }
             }
         }
@@ -182,6 +180,21 @@ public class UserscriptShaper {
 
     private static String grantedExpr(UserscriptMeta meta, String api) {
         return meta.isGranted(api) ? api : "undefined";
+    }
+
+    private static boolean hasAnyNativeBridgeGrant(UserscriptMeta meta) {
+        if (meta == null) return false;
+        for (String api : APIS) {
+            if ("GM_addStyle".equals(api) || "GM_addElement".equals(api)
+                || "GM_registerMenuCommand".equals(api) || "GM_unregisterMenuCommand".equals(api)
+                || "GM_addValueChangeListener".equals(api) || "GM_removeValueChangeListener".equals(api)) {
+                continue;
+            }
+            if (meta.isGranted(api)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String getTemplate(String relativeAssetPath) {

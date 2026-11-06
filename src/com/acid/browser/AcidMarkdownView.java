@@ -45,6 +45,7 @@ public class AcidMarkdownView extends LinearLayout {
 
     private static final Pattern BOLD_PATTERN = Pattern.compile("\\*\\*(.+?)\\*\\*");
     private static final Pattern CODE_PATTERN = Pattern.compile("`([^`]+)`");
+    private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\uE000(\\d+|E)\uE001");
 
     public static void renderInto(LinearLayout container, String markdown, boolean darkTheme) {
         container.removeAllViews();
@@ -553,19 +554,30 @@ public class AcidMarkdownView extends LinearLayout {
         return ssb;
     }
 
+    private static void appendEscapedNonCode(StringBuilder out, String text, int start, int end) {
+        for (int i = start; i < end; i++) {
+            char c = text.charAt(i);
+            if (c == '\uE000') {
+                out.append("\uE000E\uE001");
+            } else {
+                out.append(c);
+            }
+        }
+    }
+
     static String maskCodeSnippets(String line, List<String> snippetsOut) {
         if (line == null || line.isEmpty()) return "";
         StringBuilder masked = new StringBuilder();
         int lastIdx = 0;
         Matcher cm = CODE_PATTERN.matcher(line);
         while (cm.find()) {
-            masked.append(line, lastIdx, cm.start());
+            appendEscapedNonCode(masked, line, lastIdx, cm.start());
             int placeholderId = snippetsOut.size();
             snippetsOut.add(cm.group(1));
             masked.append("\uE000").append(placeholderId).append("\uE001");
             lastIdx = cm.end();
         }
-        masked.append(line, lastIdx, line.length());
+        appendEscapedNonCode(masked, line, lastIdx, line.length());
         return masked.toString();
     }
 
@@ -590,27 +602,53 @@ public class AcidMarkdownView extends LinearLayout {
         }
         ssb.append(maskedStr, bLastIdx, maskedStr.length());
 
-        // 3. Restore inline code snippets and apply monospace, background, and foreground spans
-        if (!codeSnippets.isEmpty()) {
-            Pattern placeholderPattern = Pattern.compile("\uE000(\\d+)\uE001");
-            Matcher pm = placeholderPattern.matcher(ssb.toString());
-            int adjust = 0;
-            while (pm.find()) {
-                int s = pm.start() - adjust;
-                int e = pm.end() - adjust;
-                int snippetIdx = Integer.parseInt(pm.group(1));
-                String inner = codeSnippets.get(snippetIdx);
-                String displayStr = " " + inner + " ";
-                ssb.replace(s, e, displayStr);
-                int newEnd = s + displayStr.length();
-                ssb.setSpan(new TypefaceSpan("monospace"), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                ssb.setSpan(new BackgroundColorSpan(inlineCodeBg), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                ssb.setSpan(new ForegroundColorSpan(inlineCodeFg), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                adjust += (e - s) - displayStr.length();
-            }
+        // 3. Restore inline code snippets (and any escaped literal \uE000 markers) safely with bounds checking
+        if (!codeSnippets.isEmpty() || maskedStr.indexOf('\uE000') >= 0) {
+            restoreMaskedSnippets(ssb, codeSnippets, true, inlineCodeBg, inlineCodeFg);
         }
 
         return ssb;
+    }
+
+    static void restoreMaskedSnippets(
+        SpannableStringBuilder ssb,
+        List<String> codeSnippets,
+        boolean applyAndroidSpans,
+        int inlineCodeBg,
+        int inlineCodeFg
+    ) {
+        if (ssb == null) return;
+        Matcher pm = PLACEHOLDER_PATTERN.matcher(ssb.toString());
+        int adjust = 0;
+        while (pm.find()) {
+            int s = pm.start() - adjust;
+            int e = pm.end() - adjust;
+            String token = pm.group(1);
+            if ("E".equals(token)) {
+                ssb.replace(s, e, "\uE000");
+                adjust += (e - s) - 1;
+                continue;
+            }
+            int snippetIdx;
+            try {
+                snippetIdx = Integer.parseInt(token);
+            } catch (NumberFormatException nfe) {
+                continue;
+            }
+            if (codeSnippets == null || snippetIdx < 0 || snippetIdx >= codeSnippets.size()) {
+                continue;
+            }
+            String inner = codeSnippets.get(snippetIdx);
+            String displayStr = " " + inner + " ";
+            ssb.replace(s, e, displayStr);
+            int newEnd = s + displayStr.length();
+            if (applyAndroidSpans) {
+                ssb.setSpan(new TypefaceSpan("monospace"), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                ssb.setSpan(new BackgroundColorSpan(inlineCodeBg), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                ssb.setSpan(new ForegroundColorSpan(inlineCodeFg), s, newEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            adjust += (e - s) - displayStr.length();
+        }
     }
 
     public static void attachSelectableTouchDisallow(final TextView tv) {

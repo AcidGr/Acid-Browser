@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLDecoder;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -63,16 +64,23 @@ public final class HttpProbe {
     public static ProbeResult probe(String initialUrl, Map<String, String> headers) throws IOException {
         String currentUrl = initialUrl;
         int redirectCount = 0;
+        Map<String, String> activeHeaders = headers != null
+            ? new java.util.HashMap<String, String>(headers)
+            : null;
 
         while (redirectCount < MAX_REDIRECTS) {
             URL u = new URL(currentUrl);
+            String proto = u.getProtocol() != null ? u.getProtocol().toLowerCase(Locale.ROOT) : "";
+            if (!"http".equals(proto) && !"https".equals(proto)) {
+                throw new IOException("Unsupported download protocol: " + proto);
+            }
             HttpURLConnection conn = (HttpURLConnection) u.openConnection();
             conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
             conn.setReadTimeout(READ_TIMEOUT_MS);
-            conn.setInstanceFollowRedirects(false); // Manually handle to preserve headers
+            conn.setInstanceFollowRedirects(false); // Manually handle to enforce credential & protocol policy
 
-            if (headers != null) {
-                for (Map.Entry<String, String> entry : headers.entrySet()) {
+            if (activeHeaders != null) {
+                for (Map.Entry<String, String> entry : activeHeaders.entrySet()) {
                     conn.setRequestProperty(entry.getKey(), entry.getValue());
                 }
             }
@@ -94,7 +102,14 @@ public final class HttpProbe {
                     throw new IOException("Redirect without Location header (HTTP " + code + ")");
                 }
                 // Handle relative redirect URL
-                URL nextUrl = new URL(new URL(currentUrl), loc);
+                URL nextUrl = new URL(u, loc.trim());
+                String nextProto = nextUrl.getProtocol() != null ? nextUrl.getProtocol().toLowerCase(Locale.ROOT) : "";
+                if (!"http".equals(nextProto) && !"https".equals(nextProto)) {
+                    throw new IOException("Disallowed redirect protocol: " + nextProto);
+                }
+                if (activeHeaders != null && !shouldRetainCredentialsOnRedirect(u, nextUrl)) {
+                    stripSensitiveHeaders(activeHeaders);
+                }
                 currentUrl = nextUrl.toString();
                 redirectCount++;
                 continue;
@@ -273,26 +288,107 @@ public final class HttpProbe {
             s = s.substring(1, s.length() - 1).trim();
         }
 
-        // Decode percent-encoded UTF-8 up to 2 passes (handles single and double encoding)
-        for (int pass = 0; pass < 2; pass++) {
-            if (s.indexOf('%') < 0) break;
+        // Decode percent-encoded UTF-8 in a single pass (prevents double-decoding %252e%252e%252f into ../)
+        if (s.indexOf('%') >= 0) {
             try {
-                String decoded = URLDecoder.decode(s.replace("+", "%2B"), "UTF-8");
-                if (decoded.equals(s)) break;
-                s = decoded;
-            } catch (Exception ignored) {
-                break;
-            }
+                s = URLDecoder.decode(s.replace("+", "%2B"), "UTF-8");
+            } catch (Exception ignored) {}
         }
 
         // Strip any directory components
         int lastSlash = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
-        if (lastSlash >= 0 && lastSlash < s.length() - 1) {
-            s = s.substring(lastSlash + 1);
+        if (lastSlash >= 0) {
+            s = lastSlash < s.length() - 1 ? s.substring(lastSlash + 1) : "";
         }
 
         // Replace filesystem-reserved characters
         s = s.replaceAll("[\\\\/:*?\"<>|;\\r\\n\\t\\x00]", "_").trim();
-        return s.isEmpty() ? null : s;
+        // Reject empty or dot-only directory entries (".", "..", "...")
+        if (s.isEmpty() || s.replace(".", "").isEmpty()) {
+            return null;
+        }
+        return s;
+    }
+
+    /**
+     * Decides whether sensitive request headers ({@code Cookie}, {@code Authorization}) may be
+     * carried across an HTTP redirect from {@code fromUrl} to {@code toUrl}.
+     *
+     * <p>Forbids {@code https -> http} cleartext downgrades and arbitrary cross-domain leaks, while
+     * preserving credentials across same-site subdomains and paired cloud-drive CDN domains
+     * (e.g. {@code d.pcs.baidu.com -> *.baidupcs.com}, {@code *.115.com -> *.115cdn.com}).
+     */
+    public static boolean shouldRetainCredentialsOnRedirect(URL fromUrl, URL toUrl) {
+        if (fromUrl == null || toUrl == null) return false;
+        String fromProto = fromUrl.getProtocol() != null ? fromUrl.getProtocol().toLowerCase(Locale.ROOT) : "";
+        String toProto = toUrl.getProtocol() != null ? toUrl.getProtocol().toLowerCase(Locale.ROOT) : "";
+        if ("https".equals(fromProto) && !"https".equals(toProto)) {
+            return false; // Never leak HTTPS cookies/tokens onto cleartext HTTP
+        }
+        String fromHost = normalizeHost(fromUrl.getHost());
+        String toHost = normalizeHost(toUrl.getHost());
+        if (fromHost.isEmpty() || toHost.isEmpty()) return false;
+        if (fromHost.equals(toHost)) {
+            int fromPort = fromUrl.getPort() != -1 ? fromUrl.getPort() : fromUrl.getDefaultPort();
+            int toPort = toUrl.getPort() != -1 ? toUrl.getPort() : toUrl.getDefaultPort();
+            return fromPort == toPort;
+        }
+        // Same cloud-drive ecosystem CDN groups
+        if (isBaiduDriveHost(fromHost) && isBaiduDriveHost(toHost)) return true;
+        if (is115DriveHost(fromHost) && is115DriveHost(toHost)) return true;
+        if (isSubdomainOf(fromHost, "quark.cn") && isSubdomainOf(toHost, "quark.cn")) return true;
+        if (isSubdomainOf(fromHost, "uc.cn") && isSubdomainOf(toHost, "uc.cn")) return true;
+        // Same registrable parent domain (e.g. files.example.com -> cdn.example.com)
+        if (toHost.endsWith("." + fromHost) || fromHost.endsWith("." + toHost)) return true;
+        String parentFrom = parentDomainIfSafe(fromHost);
+        String parentTo = parentDomainIfSafe(toHost);
+        return parentFrom != null && parentFrom.equals(parentTo);
+    }
+
+    public static void stripSensitiveHeaders(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) return;
+        java.util.Iterator<String> it = headers.keySet().iterator();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (k == null) continue;
+            String lower = k.trim().toLowerCase(Locale.ROOT);
+            if ("cookie".equals(lower) || "authorization".equals(lower) || "proxy-authorization".equals(lower)) {
+                it.remove();
+            }
+        }
+    }
+
+    private static String normalizeHost(String host) {
+        if (host == null) return "";
+        String h = host.trim().toLowerCase(Locale.ROOT);
+        while (h.endsWith(".")) {
+            h = h.substring(0, h.length() - 1).trim();
+        }
+        return h;
+    }
+
+    private static boolean isSubdomainOf(String host, String root) {
+        return host.equals(root) || host.endsWith("." + root);
+    }
+
+    private static boolean isBaiduDriveHost(String host) {
+        return isSubdomainOf(host, "baidu.com") || isSubdomainOf(host, "baidupcs.com");
+    }
+
+    private static boolean is115DriveHost(String host) {
+        return isSubdomainOf(host, "115.com") || isSubdomainOf(host, "115cdn.com") || isSubdomainOf(host, "115cdn.net");
+    }
+
+    private static String parentDomainIfSafe(String host) {
+        int dot = host.indexOf('.');
+        if (dot <= 0 || dot >= host.length() - 1) return null;
+        String parent = host.substring(dot + 1);
+        if (!parent.contains(".")) return null; // Never treat single-label TLD like "com" as shared parent
+        if ("com.cn".equals(parent) || "net.cn".equals(parent) || "org.cn".equals(parent)
+            || "co.uk".equals(parent) || "co.jp".equals(parent) || "com.hk".equals(parent)
+            || "github.io".equals(parent) || "gitlab.io".equals(parent)) {
+            return null;
+        }
+        return parent;
     }
 }

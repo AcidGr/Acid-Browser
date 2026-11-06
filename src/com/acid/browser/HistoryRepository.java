@@ -30,6 +30,7 @@ public class HistoryRepository {
     private BrowserDataStore.OnHistoryChangedListener mHistoryChangedListener;
     private BrowserDataStore.CallbackDispatcher mDispatcher;
     private volatile long mLastSelfSaveTime = 0;
+    private long mHistoryRevision = 0;
 
     public HistoryRepository(Context context) {
         this(context, null, null);
@@ -107,13 +108,14 @@ public class HistoryRepository {
     }
 
     public synchronized void clearHistory() {
+        final long rev = ++mHistoryRevision;
         prefs()
             .edit()
             .putString(PREF_HISTORY, "[]")
             .apply();
 
         if (mHistoryJsonFile != null) {
-            saveHistoryToJsonFile(new JSONArray());
+            saveHistoryToJsonFile(new JSONArray(), rev);
         }
 
         dispatchCallback(new Runnable() {
@@ -127,11 +129,19 @@ public class HistoryRepository {
     }
 
     public synchronized boolean saveHistoryToJsonFile() {
-        return saveHistoryToJsonFile(null);
+        return saveHistoryToJsonFile(null, 0);
     }
 
     public synchronized boolean saveHistoryToJsonFile(JSONArray cachedArr) {
+        return saveHistoryToJsonFile(cachedArr, 0);
+    }
+
+    public synchronized boolean saveHistoryToJsonFile(JSONArray cachedArr, long expectedRevision) {
         if (mHistoryJsonFile == null) return false;
+        if (expectedRevision > 0 && expectedRevision < mHistoryRevision) {
+            // A newer history write or clearHistory() superseded this async snapshot
+            return false;
+        }
         try {
             JSONArray arr = cachedArr;
             if (arr == null) {
@@ -182,6 +192,7 @@ public class HistoryRepository {
                 o.put("time", item.time);
                 next.put(o);
             }
+            ++mHistoryRevision;
             prefs().edit().putString(PREF_HISTORY, next.toString()).apply();
 
             dispatchCallback(new Runnable() {
@@ -246,6 +257,7 @@ public class HistoryRepository {
             Log.w(TAG, "Previous history is unreadable; starting a fresh list", e);
         }
 
+        final long rev = ++mHistoryRevision;
         prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
 
         if (mHistoryJsonFile != null) {
@@ -254,12 +266,12 @@ public class HistoryRepository {
                 AcidAsync.run(new AcidAsync.Task<Void>() {
                     @Override
                     public Void execute() throws Exception {
-                        saveHistoryToJsonFile(snapshot);
+                        saveHistoryToJsonFile(snapshot, rev);
                         return null;
                     }
                 }, null);
             } else {
-                saveHistoryToJsonFile(next);
+                saveHistoryToJsonFile(next, rev);
             }
         }
 

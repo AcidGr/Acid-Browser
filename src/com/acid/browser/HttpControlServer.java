@@ -550,12 +550,19 @@ public class HttpControlServer {
     }
 
     private void sendJsonResponse(OutputStream os, int statusCode, JSONObject json) throws Exception {
+        if (statusCode == 204 || json == null) {
+            String headers = "HTTP/1.1 204 No Content\r\n" +
+                "Access-Control-Allow-Origin: *\r\n" +
+                "Connection: close\r\n\r\n";
+            os.write(headers.getBytes(StandardCharsets.US_ASCII));
+            os.flush();
+            return;
+        }
         byte[] payload = json.toString().getBytes(StandardCharsets.UTF_8);
         String statusText;
         switch (statusCode) {
             case 200: statusText = "OK"; break;
             case 202: statusText = "Accepted"; break;
-            case 204: statusText = "No Content"; break;
             case 400: statusText = "Bad Request"; break;
             case 401: statusText = "Unauthorized"; break;
             case 404: statusText = "Not Found"; break;
@@ -716,7 +723,7 @@ public class HttpControlServer {
         if (rpcResponse != null) {
             sendJsonResponse(os, 200, rpcResponse);
         } else {
-            sendJsonResponse(os, 200, new JSONObject().put("jsonrpc", "2.0").put("result", "acknowledged"));
+            sendJsonResponse(os, 204, null);
         }
     }
 
@@ -732,7 +739,7 @@ public class HttpControlServer {
         Object id = req.opt("id");
         String method = req.optString("method", "");
 
-        if (id == null && method.startsWith("notifications/")) {
+        if (!req.has("id") || method.startsWith("notifications/")) {
             return null;
         }
 
@@ -828,28 +835,37 @@ public class HttpControlServer {
             int b;
             while ((b = is.read()) != -1) {
                 if (b == '\n') break;
-                if (b != '\r') hexSb.append((char) b);
+                if (b != '\r') {
+                    if (hexSb.length() >= 128) {
+                        throw new java.io.IOException("Chunk size line too long");
+                    }
+                    hexSb.append((char) b);
+                }
             }
             String line = hexSb.toString().trim();
             int semi = line.indexOf(';');
             if (semi >= 0) line = line.substring(0, semi).trim();
             if (line.isEmpty()) break;
 
-            int chunkSize;
+            long parsedSize;
             try {
-                chunkSize = Integer.parseInt(line, 16);
+                parsedSize = Long.parseLong(line, 16);
             } catch (NumberFormatException nfe) {
                 throw new java.io.IOException("Invalid chunk-size line: " + line);
             }
-            if (chunkSize <= 0) {
+            if (parsedSize < 0) {
+                throw new java.io.IOException("Invalid negative chunk size: " + line);
+            }
+            if (parsedSize == 0) {
                 while ((b = is.read()) != -1) {
                     if (b == '\n') break;
                 }
                 break;
             }
-            if (baos.size() + chunkSize > maxBytes) {
+            if (parsedSize > maxBytes - baos.size()) {
                 throw new java.io.IOException("Payload Too Large: chunked transfer exceeds limit (" + maxBytes + " bytes)");
             }
+            int chunkSize = (int) parsedSize;
             byte[] chunk = new byte[chunkSize];
             int read = 0;
             while (read < chunkSize) {

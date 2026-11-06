@@ -21,14 +21,41 @@ import java.io.FileNotFoundException;
 public class AcidFileProvider extends ContentProvider {
 
     public static final String AUTHORITY = "com.acid.browser.fileprovider";
+    public static final String BUCKET_PUBLIC = "public";
+    public static final String BUCKET_EXT_PRIVATE = "ext_private";
+    public static final String BUCKET_INT_PRIVATE = "int_private";
 
     public static Uri getUriForFile(File file) {
         if (file == null) return null;
+        String bucket = inferBucketForFile(file);
         return new Uri.Builder()
             .scheme("content")
             .authority(AUTHORITY)
+            .appendPath(bucket)
             .appendPath(file.getName())
             .build();
+    }
+
+    static String inferBucketForFile(File file) {
+        if (file == null) return BUCKET_PUBLIC;
+        String abs = file.getAbsolutePath().replace('\\', '/');
+        if (abs.contains("/Android/data/") && abs.contains("/files/Download/")) {
+            return BUCKET_EXT_PRIVATE;
+        }
+        if ((abs.startsWith("/data/") || abs.contains("/files/Download/")) && !abs.contains("/Android/data/")) {
+            try {
+                File pub = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                if (pub != null) {
+                    String pubPath = pub.getCanonicalPath().replace('\\', '/');
+                    String fileCanon = file.getCanonicalPath().replace('\\', '/');
+                    if (fileCanon.startsWith(pubPath + "/")) {
+                        return BUCKET_PUBLIC;
+                    }
+                }
+            } catch (Throwable ignored) {}
+            return BUCKET_INT_PRIVATE;
+        }
+        return BUCKET_PUBLIC;
     }
 
     @Override
@@ -38,18 +65,67 @@ public class AcidFileProvider extends ContentProvider {
 
     @Override
     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+        if (mode != null && !"r".equals(mode)) {
+            throw new SecurityException("AcidFileProvider only supports read-only access (requested mode: " + mode + ")");
+        }
         File targetFile = resolveSafeFile(uri);
         return ParcelFileDescriptor.open(targetFile, ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
     /**
      * Resolves a Content URI to a local File while strictly verifying that the resolved canonical
-     * path resides exclusively inside an authorized Download directory, preventing path traversal.
+     * path resides exclusively inside the target authorized Download directory, preventing both
+     * path traversal and public-over-private file shadowing.
      */
     private File resolveSafeFile(Uri uri) throws FileNotFoundException {
+        return resolveSafeUri(getContext(), uri);
+    }
+
+    static File resolveSafeUri(Context ctx, Uri uri) throws FileNotFoundException {
         if (uri == null) throw new FileNotFoundException("Null URI");
+        String rawPath = uri.getPath();
         String fileName = uri.getLastPathSegment();
-        return resolveSafeFile(getContext(), fileName);
+        String bucket = extractBucketFromPath(rawPath);
+        if (bucket != null) {
+            return resolveSafeFileInBucket(ctx, bucket, fileName);
+        }
+        return resolveSafeFile(ctx, fileName);
+    }
+
+    static String extractBucketFromPath(String path) {
+        if (path == null || path.isEmpty()) return null;
+        String clean = path;
+        while (clean.startsWith("/")) clean = clean.substring(1);
+        int slash = clean.indexOf('/');
+        if (slash <= 0 || slash >= clean.length() - 1) return null;
+        String first = clean.substring(0, slash);
+        if (BUCKET_PUBLIC.equals(first) || BUCKET_EXT_PRIVATE.equals(first) || BUCKET_INT_PRIVATE.equals(first)) {
+            return first;
+        }
+        return null;
+    }
+
+    static File resolveSafeFileInBucket(Context ctx, String bucket, String fileName) throws FileNotFoundException {
+        if (fileName == null || fileName.trim().isEmpty() || ".".equals(fileName) || "..".equals(fileName)) {
+            throw new FileNotFoundException("Invalid filename: " + fileName);
+        }
+        File baseDir = null;
+        if (BUCKET_PUBLIC.equals(bucket)) {
+            baseDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        } else if (BUCKET_EXT_PRIVATE.equals(bucket)) {
+            if (ctx != null) {
+                baseDir = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+            }
+        } else if (BUCKET_INT_PRIVATE.equals(bucket)) {
+            if (ctx != null && ctx.getFilesDir() != null) {
+                baseDir = new File(ctx.getFilesDir(), Environment.DIRECTORY_DOWNLOADS);
+            }
+        }
+        File targetFile = resolveAndVerifyBoundary(baseDir, fileName);
+        if (targetFile == null || !targetFile.exists()) {
+            throw new FileNotFoundException("File not found or access denied in " + bucket + ": " + fileName);
+        }
+        return targetFile;
     }
 
     /**
@@ -108,7 +184,10 @@ public class AcidFileProvider extends ContentProvider {
         if (fileName != null) {
             int dot = fileName.lastIndexOf('.');
             if (dot >= 0 && dot < fileName.length() - 1) {
-                String ext = fileName.substring(dot + 1).toLowerCase();
+                String ext = fileName.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
+                if ("apk".equals(ext)) {
+                    return "application/vnd.android.package-archive";
+                }
                 String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
                 if (mime != null) return mime;
             }

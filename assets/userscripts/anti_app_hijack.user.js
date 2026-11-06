@@ -4,6 +4,7 @@
 // @version      1.0.0
 // @description  Automatically removes "Open in App" floating banners, unlocks article height limits, and restores clipboard copy on mobile websites.
 // @match        *://*/*
+// @grant        none
 // @run-at       document-idle
 // ==/UserScript==
 

@@ -1,4 +1,5 @@
 (function(){
+'use strict';
 try {
   window.__acidInjectedUserscripts = window.__acidInjectedUserscripts || {};
   if (window.__acidInjectedUserscripts[/*__GUARD_KEY__*/]) return;
@@ -21,9 +22,12 @@ try {
   var _secret = /*__SAFE_SECRET__*/"";
   var _sid = /*__SAFE_SID__*/"";
   var _stringify = JSON.stringify.bind(JSON), _parse = JSON.parse.bind(JSON);
+  var _defProp = Object.defineProperty;
   var _callHost = function(act, obj) {
     if (!_host || !_host.call) return '';
-    obj = obj || {}; obj.secret = _secret; obj.scriptId = _sid;
+    obj = obj || {};
+    _defProp(obj, 'secret', { value: _secret, enumerable: true, configurable: true, writable: true });
+    _defProp(obj, 'scriptId', { value: _sid, enumerable: true, configurable: true, writable: true });
     try { return _host.call(act, _stringify(obj)); } catch(e){ return ''; }
   };
   var _val = function(res, def) {

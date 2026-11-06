@@ -21,15 +21,12 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -62,22 +59,32 @@ public class AdBlockManager {
         return sInstance;
     }
 
+    /**
+     * Immutable-after-publish snapshot of parsed ABP rules so WebView IO threads can read
+     * concurrently with zero locking, zero empty-window flicker, and zero index-bounds races.
+     */
+    static final class RuleSet {
+        final Set<String> blockedDomains = new HashSet<String>();
+        final Set<String> whiteListDomains = new HashSet<String>();
+        final Map<String, List<String>> domainBlockedPaths = new HashMap<String, List<String>>();
+        final Map<String, List<String>> domainWhiteListPaths = new HashMap<String, List<String>>();
+        final List<String> pathPatterns = new ArrayList<String>();
+        final Map<String, List<String>> domainElementHiding = new HashMap<String, List<String>>();
+        final List<String> globalElementHiding = new ArrayList<String>();
+    }
+
     private final Context mContext;
-    private BrowserDataStore mDataStore;
+    private volatile BrowserDataStore mDataStore;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
-    private final Set<String> mBlockedDomains = Collections.synchronizedSet(new HashSet<String>());
-    private final Set<String> mWhiteListDomains = Collections.synchronizedSet(new HashSet<String>());
-    private final List<String> mPathPatterns = new CopyOnWriteArrayList<String>();
-    private final Map<String, List<String>> mDomainElementHiding = new ConcurrentHashMap<String, List<String>>();
-    private final List<String> mGlobalElementHiding = new CopyOnWriteArrayList<String>();
+    private volatile RuleSet mRules = new RuleSet();
 
     private final AtomicInteger mBlockedCount = new AtomicInteger(0);
-    private boolean mEnabled = true;
+    private volatile boolean mEnabled = true;
 
-    private int mBuiltinCount = 0;
-    private int mSubCount = 0;
-    private int mCustomCount = 0;
+    private volatile int mBuiltinCount = 0;
+    private volatile int mSubCount = 0;
+    private volatile int mCustomCount = 0;
 
     private File mAdBlockDir;
     private File mCustomRulesFile;
@@ -234,11 +241,7 @@ public class AdBlockManager {
     }
 
     public synchronized void loadAllRulesSync() {
-        Set<String> newBlocked = new HashSet<String>();
-        Set<String> newWhiteList = new HashSet<String>();
-        List<String> newPaths = new ArrayList<String>();
-        Map<String, List<String>> newDomainHiding = new HashMap<String, List<String>>();
-        List<String> newGlobalHiding = new ArrayList<String>();
+        RuleSet next = new RuleSet();
 
         // 1. Load built-in asset rules
         int builtin = 0;
@@ -247,7 +250,7 @@ public class AdBlockManager {
             BufferedReader br = new BufferedReader(new InputStreamReader(is, "UTF-8"));
             String line;
             while ((line = br.readLine()) != null) {
-                if (parseRuleLine(line, newBlocked, newWhiteList, newPaths, newDomainHiding, newGlobalHiding)) {
+                if (parseRuleLine(line, next)) {
                     builtin++;
                 }
             }
@@ -266,7 +269,7 @@ public class AdBlockManager {
                 BufferedReader br = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
                 String line;
                 while ((line = br.readLine()) != null) {
-                    if (parseRuleLine(line, newBlocked, newWhiteList, newPaths, newDomainHiding, newGlobalHiding)) {
+                    if (parseRuleLine(line, next)) {
                         sub++;
                     }
                 }
@@ -286,7 +289,7 @@ public class AdBlockManager {
                 BufferedReader br = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
                 String line;
                 while ((line = br.readLine()) != null) {
-                    if (parseRuleLine(line, newBlocked, newWhiteList, newPaths, newDomainHiding, newGlobalHiding)) {
+                    if (parseRuleLine(line, next)) {
                         custom++;
                     }
                 }
@@ -298,31 +301,18 @@ public class AdBlockManager {
         }
         mCustomCount = custom;
 
-        // Swap into active collections
-        mBlockedDomains.clear();
-        mBlockedDomains.addAll(newBlocked);
-
-        mWhiteListDomains.clear();
-        mWhiteListDomains.addAll(newWhiteList);
-
-        mPathPatterns.clear();
-        mPathPatterns.addAll(newPaths);
-
-        mDomainElementHiding.clear();
-        mDomainElementHiding.putAll(newDomainHiding);
-
-        mGlobalElementHiding.clear();
-        mGlobalElementHiding.addAll(newGlobalHiding);
+        // Atomic single-reference swap into active snapshot
+        mRules = next;
 
         Log.i(TAG, "AdBlock loaded: " + (mBuiltinCount + mSubCount + mCustomCount) +
               " rules (Built-in: " + mBuiltinCount + ", Sub: " + mSubCount + ", Custom: " + mCustomCount +
-              ", Unique domains: " + mBlockedDomains.size() + ")");
+              ", Unique domains: " + next.blockedDomains.size() + ")");
     }
 
     private static final Set<String> COMMON_PUBLIC_SUFFIXES = new HashSet<String>(Arrays.asList(
         "com", "cn", "net", "org", "edu", "gov", "io", "cc", "me", "info", "top", "xyz", "biz", "app", "dev", "ai",
         "com.cn", "net.cn", "org.cn", "edu.cn", "gov.cn", "co.uk", "org.uk", "co.jp", "ne.jp", "com.hk", "org.hk",
-        "com.tw", "com.sg", "com.au", "co.kr", "github.io", "gitlab.io"
+        "com.tw", "com.sg", "com.au", "co.kr", "co.in", "com.br", "github.io", "gitlab.io", "vercel.app", "pages.dev"
     ));
 
     public static boolean isPublicSuffixOrTld(String domain) {
@@ -332,84 +322,129 @@ public class AdBlockManager {
         return COMMON_PUBLIC_SUFFIXES.contains(d);
     }
 
+    static boolean isSafeCssSelector(String selector) {
+        if (selector == null) return false;
+        String s = selector.trim();
+        if (s.isEmpty() || s.length() > 512) return false;
+        // Reject CSS block breakouts and uBlock/ABP procedural scriptlet extensions
+        if (s.indexOf('{') >= 0 || s.indexOf('}') >= 0 || s.indexOf(';') >= 0
+            || s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0) {
+            return false;
+        }
+        String lower = s.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("+js(") || lower.startsWith("^") || lower.contains(":-abp-")
+            || lower.contains(":has-text(") || lower.contains(":xpath(") || lower.contains(":style(")) {
+            return false;
+        }
+        return true;
+    }
+
+    private static void addScopedEntry(Map<String, List<String>> map, String key, String value) {
+        List<String> list = map.get(key);
+        if (list == null) {
+            list = new ArrayList<String>();
+            map.put(key, list);
+        }
+        list.add(value);
+    }
+
     static boolean parseRuleLine(String rawLine,
                                  Set<String> blocked,
                                  Set<String> whiteList,
                                  List<String> paths,
                                  Map<String, List<String>> domainHiding,
                                  List<String> globalHiding) {
-        if (rawLine == null) return false;
+        RuleSet tmp = new RuleSet();
+        boolean ok = parseRuleLine(rawLine, tmp);
+        if (ok) {
+            if (blocked != null) blocked.addAll(tmp.blockedDomains);
+            if (whiteList != null) whiteList.addAll(tmp.whiteListDomains);
+            if (paths != null) paths.addAll(tmp.pathPatterns);
+            if (domainHiding != null) {
+                for (Map.Entry<String, List<String>> e : tmp.domainElementHiding.entrySet()) {
+                    for (String sel : e.getValue()) {
+                        addScopedEntry(domainHiding, e.getKey(), sel);
+                    }
+                }
+            }
+            if (globalHiding != null) globalHiding.addAll(tmp.globalElementHiding);
+        }
+        return ok;
+    }
+
+    static boolean parseRuleLine(String rawLine, RuleSet out) {
+        if (rawLine == null || out == null) return false;
         String line = rawLine.trim();
         if (line.isEmpty() || line.startsWith("!") || line.startsWith("[")) {
             return false;
         }
 
-        // 1. Whitelist rule @@||...
-        if (line.startsWith("@@||")) {
-            String sub = line.substring(4);
-            int caret = sub.indexOf('^');
-            int slash = sub.indexOf('/');
-            int end = sub.length();
-            if (caret > 0 && caret < end) end = caret;
-            if (slash > 0 && slash < end) end = slash;
-            String domain = sub.substring(0, end).trim().toLowerCase(Locale.ROOT);
-            if (!domain.isEmpty() && !isPublicSuffixOrTld(domain)) {
-                whiteList.add(domain);
-                return true;
-            }
+        // Skip unsupported cosmetic exception / procedural rules (#@#, #?#, #$#)
+        if (line.contains("#@#") || line.contains("#?#") || line.contains("#$#")) {
             return false;
         }
 
-        // 2. Element hiding rule (##)
+        // 1. Element hiding rule (##)
         int hashIdx = line.indexOf("##");
         if (hashIdx >= 0) {
             String domainPart = line.substring(0, hashIdx).trim();
             String selector = line.substring(hashIdx + 2).trim();
-            if (!selector.isEmpty()) {
-                if (domainPart.isEmpty()) {
-                    globalHiding.add(selector);
-                } else {
-                    String[] doms = domainPart.split(",");
-                    for (int i = 0; i < doms.length; i++) {
-                        String d = doms[i].trim().toLowerCase(Locale.ROOT);
-                        if (!d.isEmpty()) {
-                            List<String> list = domainHiding.get(d);
-                            if (list == null) {
-                                list = new ArrayList<String>();
-                                domainHiding.put(d, list);
-                            }
-                            list.add(selector);
-                        }
-                    }
-                }
+            if (!isSafeCssSelector(selector)) {
+                return false;
+            }
+            if (domainPart.isEmpty()) {
+                out.globalElementHiding.add(selector);
                 return true;
             }
-            return false;
+            String[] doms = domainPart.split(",");
+            boolean addedAny = false;
+            boolean hasNegationOnly = true;
+            for (int i = 0; i < doms.length; i++) {
+                String d = doms[i].trim().toLowerCase(Locale.ROOT);
+                if (d.isEmpty()) continue;
+                if (d.startsWith("~")) continue; // Skip negated domain tokens instead of storing "~domain"
+                hasNegationOnly = false;
+                addScopedEntry(out.domainElementHiding, d, selector);
+                addedAny = true;
+            }
+            if (hasNegationOnly) {
+                return false;
+            }
+            return addedAny;
         }
 
-        // 3. Domain block rule ||domain^
-        if (line.startsWith("||")) {
-            String sub = line.substring(2);
-            int caret = sub.indexOf('^');
-            int slash = sub.indexOf('/');
-            int colon = sub.indexOf(':');
-            int end = sub.length();
-            if (caret > 0 && caret < end) end = caret;
-            if (slash > 0 && slash < end) end = slash;
-            if (colon > 0 && colon < end) end = colon;
-            String domain = sub.substring(0, end).trim().toLowerCase(Locale.ROOT);
-            if (!domain.isEmpty() && !isPublicSuffixOrTld(domain)) {
-                blocked.add(domain);
-                return true;
+        // Strip network filter options ($...) and skip context-restricted options ($domain=, $popup, $csp, etc.)
+        // so scoped rules never over-expand into global whole-site blocks or whitelists.
+        if (!(line.startsWith("/") && line.endsWith("/") && line.length() > 2)) {
+            int dollarIdx = line.lastIndexOf('$');
+            if (dollarIdx >= 0) {
+                String opts = line.substring(dollarIdx + 1).trim().toLowerCase(Locale.ROOT);
+                if (opts.contains("domain=") || opts.contains("~") || opts.contains("badfilter")
+                    || opts.contains("elemhide") || opts.contains("generichide") || opts.contains("specifichide")
+                    || opts.contains("csp") || opts.contains("popup") || opts.contains("document")
+                    || opts.contains("rewrite") || opts.contains("redirect")) {
+                    return false;
+                }
+                line = line.substring(0, dollarIdx).trim();
+                if (line.isEmpty()) return false;
             }
-            return false;
+        }
+
+        // 2. Whitelist rule @@||...
+        if (line.startsWith("@@||")) {
+            return parseDomainAnchorRule(line.substring(4), out.whiteListDomains, out.domainWhiteListPaths);
+        }
+
+        // 3. Domain anchor block rule ||...
+        if (line.startsWith("||")) {
+            return parseDomainAnchorRule(line.substring(2), out.blockedDomains, out.domainBlockedPaths);
         }
 
         // 4. Path pattern /pattern/
         if (line.startsWith("/") && line.endsWith("/") && line.length() > 2) {
             // Preserve slash boundaries (e.g. "/ads/") so substring matching never collaterally
             // blocks legitimate URLs containing words like "downloads" or "uploads".
-            paths.add(line.toLowerCase(Locale.ROOT));
+            out.pathPatterns.add(line.toLowerCase(Locale.ROOT));
             return true;
         }
 
@@ -417,12 +452,67 @@ public class AdBlockManager {
         if (!line.contains("/") && !line.contains("*") && line.contains(".")) {
             String domain = line.trim().toLowerCase(Locale.ROOT);
             if (!isPublicSuffixOrTld(domain)) {
-                blocked.add(domain);
+                out.blockedDomains.add(domain);
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static boolean parseDomainAnchorRule(String sub,
+                                                 Set<String> wholeDomainSet,
+                                                 Map<String, List<String>> scopedPathMap) {
+        if (sub == null || sub.isEmpty()) return false;
+        int caret = sub.indexOf('^');
+        int slash = sub.indexOf('/');
+        int colon = sub.indexOf(':');
+        int qmark = sub.indexOf('?');
+        int hostEnd = sub.length();
+        if (caret >= 0 && caret < hostEnd) hostEnd = caret;
+        if (slash >= 0 && slash < hostEnd) hostEnd = slash;
+        if (colon >= 0 && colon < hostEnd) hostEnd = colon;
+        if (qmark >= 0 && qmark < hostEnd) hostEnd = qmark;
+
+        String domain = sub.substring(0, hostEnd).trim().toLowerCase(Locale.ROOT);
+        if (domain.isEmpty() || domain.contains("*") || isPublicSuffixOrTld(domain)) {
+            return false;
+        }
+
+        String remainder = sub.substring(hostEnd).trim();
+        // Strip port if specified (e.g. ":8080/ads.js" -> "/ads.js")
+        if (remainder.startsWith(":")) {
+            int nextSlash = remainder.indexOf('/');
+            int nextCaret = remainder.indexOf('^');
+            int cut = -1;
+            if (nextSlash >= 0 && nextCaret >= 0) cut = Math.min(nextSlash, nextCaret);
+            else if (nextSlash >= 0) cut = nextSlash;
+            else if (nextCaret >= 0) cut = nextCaret;
+            remainder = cut >= 0 ? remainder.substring(cut) : "";
+        }
+
+        // Pure whole-domain rule: "||adserver.com", "||adserver.com^", or "||adserver.com/"
+        if (remainder.isEmpty() || "^".equals(remainder) || "/".equals(remainder) || "^/".equals(remainder)) {
+            wholeDomainSet.add(domain);
+            return true;
+        }
+
+        // Path-scoped rule (e.g. "||youtube.com/get_midroll_info" or "@@||bing.com/fd/ls/GLinkPing.aspx?"):
+        // Never escalate to a whole-domain block/whitelist! Match path prefix under this domain hierarchy.
+        if (remainder.startsWith("^")) {
+            remainder = remainder.substring(1);
+        }
+        while (remainder.endsWith("^")) {
+            remainder = remainder.substring(0, remainder.length() - 1);
+        }
+        if (remainder.isEmpty() || remainder.contains("*")) {
+            return false;
+        }
+        if (!remainder.startsWith("/") && !remainder.startsWith("?")) {
+            return false;
+        }
+        addScopedEntry(scopedPathMap, domain, remainder.toLowerCase(Locale.ROOT));
+        return true;
     }
 
     static boolean matchesDomainHierarchy(String host, Set<String> domainSet) {
@@ -440,20 +530,60 @@ public class AdBlockManager {
         return false;
     }
 
+    private static boolean matchesDomainScopedPath(String host, String pathAndQueryLower, Map<String, List<String>> scopedMap) {
+        if (host == null || pathAndQueryLower == null || scopedMap == null || scopedMap.isEmpty()) return false;
+        String cur = host.toLowerCase(Locale.ROOT);
+        while (cur != null && !cur.isEmpty()) {
+            if (isPublicSuffixOrTld(cur)) break;
+            List<String> prefixes = scopedMap.get(cur);
+            if (prefixes != null) {
+                for (int i = 0; i < prefixes.size(); i++) {
+                    String p = prefixes.get(i);
+                    if (pathAndQueryLower.startsWith(p) || pathAndQueryLower.contains(p)) {
+                        return true;
+                    }
+                }
+            }
+            int dot = cur.indexOf('.');
+            if (dot < 0 || dot == cur.length() - 1) break;
+            cur = cur.substring(dot + 1);
+        }
+        return false;
+    }
+
+    private static boolean equalsHostOrSubdomain(String host, String rootDomain) {
+        return host.equals(rootDomain) || host.endsWith("." + rootDomain);
+    }
+
     public boolean isWhitelisted(String host) {
+        return isHostWhitelisted(host, mRules);
+    }
+
+    static boolean isHostWhitelisted(String host, RuleSet rules) {
         if (host == null) return false;
         String cur = host.toLowerCase(Locale.ROOT).trim();
         while (cur.endsWith(".")) {
             cur = cur.substring(0, cur.length() - 1).trim();
         }
-        if (cur.contains("accounts.google.") || cur.contains("myaccount.google.") || cur.contains("apis.google.com") || cur.contains("gstatic.com") || cur.contains("googleusercontent.com")) {
+        if (equalsHostOrSubdomain(cur, "apis.google.com")
+            || equalsHostOrSubdomain(cur, "gstatic.com")
+            || equalsHostOrSubdomain(cur, "googleusercontent.com")
+            || cur.startsWith("accounts.google.")
+            || cur.contains(".accounts.google.")
+            || cur.startsWith("myaccount.google.")
+            || cur.contains(".myaccount.google.")) {
             return true;
         }
-        return matchesDomainHierarchy(cur, mWhiteListDomains);
+        return rules != null && matchesDomainHierarchy(cur, rules.whiteListDomains);
     }
 
     public boolean isBlocked(Uri uri) {
         if (!mEnabled || uri == null) return false;
+        return isUriBlocked(uri, mRules);
+    }
+
+    static boolean isUriBlocked(Uri uri, RuleSet rules) {
+        if (uri == null || rules == null) return false;
         String host = uri.getHost();
         if (host == null) return false;
         host = host.toLowerCase(Locale.ROOT).trim();
@@ -461,19 +591,32 @@ public class AdBlockManager {
             host = host.substring(0, host.length() - 1).trim();
         }
 
-        if (isWhitelisted(host)) {
+        if (isHostWhitelisted(host, rules)) {
             return false;
         }
 
-        // Check domain hierarchy: e.g. pos.baidu.com -> baidu.com
-        if (matchesDomainHierarchy(host, mBlockedDomains)) {
+        String uriStr = uri.toString().toLowerCase(Locale.ROOT);
+        String pathAndQuery = extractPathAndQueryLower(uriStr);
+
+        // 1. Scoped path exception (e.g. @@||bing.com/fd/ls/GLinkPing.aspx?)
+        if (matchesDomainScopedPath(host, pathAndQuery, rules.domainWhiteListPaths)) {
+            return false;
+        }
+
+        // 2. Whole-domain block hierarchy: e.g. pos.baidu.com -> baidu.com
+        if (matchesDomainHierarchy(host, rules.blockedDomains)) {
             return true;
         }
 
-        // Check URL path patterns
-        String uriStr = uri.toString().toLowerCase();
-        for (int i = 0; i < mPathPatterns.size(); i++) {
-            if (uriStr.contains(mPathPatterns.get(i))) {
+        // 3. Domain-scoped path block: e.g. ||youtube.com/get_midroll_info
+        if (matchesDomainScopedPath(host, pathAndQuery, rules.domainBlockedPaths)) {
+            return true;
+        }
+
+        // 4. Global URL path patterns
+        List<String> patterns = rules.pathPatterns;
+        for (int i = 0; i < patterns.size(); i++) {
+            if (uriStr.contains(patterns.get(i))) {
                 return true;
             }
         }
@@ -481,11 +624,27 @@ public class AdBlockManager {
         return false;
     }
 
+    private static String extractPathAndQueryLower(String lowerUrl) {
+        if (lowerUrl == null) return "/";
+        int schemeIdx = lowerUrl.indexOf("://");
+        int start = schemeIdx >= 0 ? schemeIdx + 3 : 0;
+        int slash = lowerUrl.indexOf('/', start);
+        int qmark = lowerUrl.indexOf('?', start);
+        if (slash >= 0 && (qmark < 0 || slash < qmark)) {
+            return lowerUrl.substring(slash);
+        }
+        if (qmark >= 0) {
+            return "/" + lowerUrl.substring(qmark);
+        }
+        return "/";
+    }
+
     public WebResourceResponse shouldIntercept(Uri uri) {
         if (isBlocked(uri)) {
             int count = mBlockedCount.incrementAndGet();
-            if (count % 5 == 0 || count == 1) {
-                mDataStore.setAdBlockBlockedCount(count);
+            BrowserDataStore store = mDataStore;
+            if (store != null && (count % 5 == 0 || count == 1)) {
+                store.setAdBlockBlockedCount(count);
             }
             Log.d(TAG, "[AdBlock Intercepted #" + count + "] " + uri);
             return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
@@ -493,47 +652,59 @@ public class AdBlockManager {
         return null;
     }
 
+    static String buildIsolatedElementHidingCss(RuleSet rules, String host) {
+        StringBuilder css = new StringBuilder();
+        final String decl = " { display: none !important; height: 0 !important; visibility: hidden !important; pointer-events: none !important; }\n";
+        if (rules != null) {
+            List<String> globals = rules.globalElementHiding;
+            for (int i = 0; i < globals.size(); i++) {
+                String sel = globals.get(i);
+                if (isSafeCssSelector(sel)) {
+                    css.append(sel).append(decl);
+                }
+            }
+            if (host != null) {
+                String cur = host.toLowerCase(Locale.ROOT);
+                while (cur != null && !cur.isEmpty()) {
+                    List<String> list = rules.domainElementHiding.get(cur);
+                    if (list != null) {
+                        for (int i = 0; i < list.size(); i++) {
+                            String sel = list.get(i);
+                            if (isSafeCssSelector(sel)) {
+                                css.append(sel).append(decl);
+                            }
+                        }
+                    }
+                    int dot = cur.indexOf('.');
+                    if (dot < 0 || dot == cur.length() - 1) break;
+                    cur = cur.substring(dot + 1);
+                }
+            }
+        }
+        // General fallback mobile cleanup selectors
+        css.append(".ads, .ad-banner, .advertisement, [id^='ad_'], [id^='ad-'], [class*='app-open']").append(decl);
+        return css.toString();
+    }
+
     public void injectElementHidingCss(WebView view, String pageUrl) {
         if (!mEnabled || view == null || pageUrl == null) return;
         Uri uri = Uri.parse(pageUrl);
         String host = uri.getHost();
-        if (host != null) host = host.toLowerCase();
+        if (host != null) host = host.toLowerCase(Locale.ROOT);
 
-        StringBuilder selectors = new StringBuilder();
-        for (int i = 0; i < mGlobalElementHiding.size(); i++) {
-            if (selectors.length() > 0) selectors.append(", ");
-            selectors.append(mGlobalElementHiding.get(i));
-        }
-
-        if (host != null) {
-            String cur = host;
-            while (cur != null && !cur.isEmpty()) {
-                List<String> list = mDomainElementHiding.get(cur);
-                if (list != null) {
-                    for (int i = 0; i < list.size(); i++) {
-                        if (selectors.length() > 0) selectors.append(", ");
-                        selectors.append(list.get(i));
-                    }
-                }
-                int dot = cur.indexOf('.');
-                if (dot < 0 || dot == cur.length() - 1) break;
-                cur = cur.substring(dot + 1);
-            }
-        }
-
-        // General fallback mobile cleanup selectors (targeted to avoid over-collateral blocking)
-        if (selectors.length() > 0) selectors.append(", ");
-        selectors.append(".ads, .ad-banner, .advertisement, [id^='ad_'], [id^='ad-'], [class*='app-open']");
-
-        String cssRule = selectors.toString() + " { display: none !important; height: 0 !important; visibility: hidden !important; pointer-events: none !important; }";
+        String cssRules = buildIsolatedElementHidingCss(mRules, host);
         String js = "(function() {" +
+            "var root = document.head || document.documentElement;" +
+            "if (!root) return;" +
             "var s = document.getElementById('__acid_adblock_css__');" +
             "if (!s) {" +
             "  s = document.createElement('style');" +
             "  s.id = '__acid_adblock_css__';" +
             "  s.type = 'text/css';" +
-            "  s.appendChild(document.createTextNode(" + JSONObject.quote(cssRule) + "));" +
-            "  (document.head || document.documentElement).appendChild(s);" +
+            "  s.textContent = " + JSONObject.quote(cssRules) + ";" +
+            "  root.appendChild(s);" +
+            "} else {" +
+            "  s.textContent = " + JSONObject.quote(cssRules) + ";" +
             "}" +
             "})();";
         view.evaluateJavascript(js, null);

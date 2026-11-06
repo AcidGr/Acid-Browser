@@ -115,6 +115,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testThemeAndColorContrast(); }
         });
 
+        // 14. Batch 1 Security & Core Bug Fixes Regression
+        run("14. Batch-1 Fixes: Bookmark origin guard, Cloud-drive cookie isolation, Stream 'null' token, AdBlock path scope & Markdown PUA guard", new TestCase() {
+            @Override public void execute() throws Exception { testBatch1SecurityAndCoreFixes(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -884,5 +889,216 @@ public final class TestRunner {
 
         DownloadItem itemZip = new DownloadItem(2L, "data.tar.gz", "http://dl/a.tar.gz", null, 1024, 1024, 8, 0);
         assertEquals(DownloadItem.CAT_ARCHIVE, itemZip.getCategory(), "Classified as Archive");
+    }
+
+    // =========================================================================
+    // 14. Batch 1 Security & Core Bug Fixes Regression
+    // =========================================================================
+
+    private static void testBatch1SecurityAndCoreFixes() throws Exception {
+        // A. P0-1: Local homepage bookmark isolation & request header origin guard
+        File wsDir = new File(System.getProperty("java.io.tmpdir"), "acid_b1_home_" + System.currentTimeMillis());
+        File wsHomeDir = new File(wsDir, "homepage");
+        wsHomeDir.mkdirs();
+        File customHome = new File(wsHomeDir, "index.html");
+        AcidIo.writeFileUtf8(customHome, "<html></html>");
+        try {
+            assertTrue(BrowserController.isTrustedLocalHomepageFileUrl(BrowserController.HOME_URL, wsDir), "Bundled asset homepage trusted");
+            assertTrue(BrowserController.isTrustedLocalHomepageFileUrl("file://" + customHome.getAbsolutePath(), wsDir), "Workspace homepage trusted");
+            assertTrue(!BrowserController.isTrustedLocalHomepageFileUrl("https://evil.com/homepage/index.html", wsDir), "Remote URL ending in /homepage/index.html rejected");
+            assertTrue(!BrowserController.isTrustedLocalHomepageFileUrl("file://" + wsDir.getAbsolutePath() + "/homepage/../settings.json", wsDir), "Path traversal out of homepage/ rejected");
+            assertTrue(!BrowserController.isTrustedLocalHomepageFileUrl("about:blank", wsDir), "about:blank rejected for bookmark injection");
+
+            Map<String, String> localHeaders = new HashMap<String, String>();
+            localHeaders.put("Origin", "null");
+            assertTrue(BrowserController.isAllowedLocalHomeRequestHeaders(localHeaders), "file:// Origin: null allowed");
+
+            Map<String, String> evilHeaders = new HashMap<String, String>();
+            evilHeaders.put("Origin", "https://attacker.example");
+            assertTrue(!BrowserController.isAllowedLocalHomeRequestHeaders(evilHeaders), "External web Origin blocked");
+
+            Map<String, String> evilRef = new HashMap<String, String>();
+            evilRef.put("Referer", "https://attacker.example/index.html");
+            assertTrue(!BrowserController.isAllowedLocalHomeRequestHeaders(evilRef), "External web Referer blocked");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(wsDir);
+        }
+
+        // B. P0-2: Cloud-drive domain boundary & redirect credential stripping
+        assertEquals(DownloadCoordinator.CLOUD_DRIVE_BAIDU,
+            DownloadCoordinator.classifyCloudDriveUrl("https://appall01.baidupcs.com/file/test.apk"), "Authentic Baidu PCS HTTPS matched");
+        assertEquals(DownloadCoordinator.CLOUD_DRIVE_QUARK,
+            DownloadCoordinator.classifyCloudDriveUrl("https://dl.quark.cn/download?auth_key=1"), "Authentic Quark HTTPS matched");
+        assertEquals(DownloadCoordinator.CLOUD_DRIVE_115,
+            DownloadCoordinator.classifyCloudDriveUrl("https://cdn.115cdn.com/obj/1.zip"), "Authentic 115 CDN HTTPS matched");
+        assertEquals(DownloadCoordinator.CLOUD_DRIVE_NONE,
+            DownloadCoordinator.classifyCloudDriveUrl("https://attacker.com/steal.apk?ref=baidupcs.com&x=.quark.cn&y=115.com"),
+            "Substring spoof in query string rejected");
+        assertEquals(DownloadCoordinator.CLOUD_DRIVE_NONE,
+            DownloadCoordinator.classifyCloudDriveUrl("https://evil-baidupcs.com/file/1.apk"),
+            "Lookalike suffix domain rejected");
+        assertEquals(DownloadCoordinator.CLOUD_DRIVE_NONE,
+            DownloadCoordinator.classifyCloudDriveUrl("http://appall01.baidupcs.com/file/test.apk"),
+            "Cleartext HTTP cloud-drive URL rejected for cookie injection");
+        assertTrue(!DownloadCoordinator.isCloudDriveDirectStreamUrl("https://attacker.com/.baidupcs.com/file/a.bin"),
+            "Direct stream detector rejects path substring spoof");
+
+        assertTrue(HttpProbe.shouldRetainCredentialsOnRedirect(
+            new URL("https://d.pcs.baidu.com/file/a"), new URL("https://qd01.baidupcs.com/file/a")),
+            "Baidu ecosystem HTTPS redirect retains credentials");
+        assertTrue(!HttpProbe.shouldRetainCredentialsOnRedirect(
+            new URL("https://d.pcs.baidu.com/file/a"), new URL("http://qd01.baidupcs.com/file/a")),
+            "HTTPS -> HTTP downgrade strips credentials");
+        assertTrue(!HttpProbe.shouldRetainCredentialsOnRedirect(
+            new URL("https://pan.baidu.com/file/a"), new URL("https://attacker.org/collect")),
+            "Cross-origin third-party redirect strips credentials");
+
+        // C. P0-5: External ACTION_VIEW Intent scheme allowlist
+        assertTrue(BrowserActivity.isSafeExternalViewUri("https://github.com/AcidGr"), "HTTPS external intent allowed");
+        assertTrue(BrowserActivity.isSafeExternalViewUri("HTTP://localhost:3000/test"), "Case-insensitive HTTP external intent allowed");
+        assertTrue(!BrowserActivity.isSafeExternalViewUri("javascript:fetch('https://evil.com')"), "javascript: intent blocked");
+        assertTrue(!BrowserActivity.isSafeExternalViewUri("file:///data/user/0/com.acid.browser/shared_prefs/a.xml"), "file:// intent blocked");
+        assertTrue(!BrowserActivity.isSafeExternalViewUri("data:text/html,<script>alert(1)</script>"), "data: intent blocked");
+
+        // D. P0-6: Stream "null" token preservation & strict tool JSON argument parsing
+        AcidAgentLoop.ThinkStreamParser nullParser = new AcidAgentLoop.ThinkStreamParser();
+        nullParser.feedReasoningDelta("check ");
+        nullParser.feedReasoningDelta("null");
+        nullParser.feedContentDelta("if (el !== ");
+        nullParser.feedContentDelta("null");
+        nullParser.feedContentDelta(") return;");
+        nullParser.finish();
+        assertEquals("check null", nullParser.reasoningSb.toString(), "Reasoning 'null' token preserved");
+        assertEquals("if (el !== null) return;", nullParser.contentSb.toString(), "Content 'null' token preserved");
+
+        Map<Integer, AcidAgentLoop.StreamingToolCall> tcMap = new HashMap<Integer, AcidAgentLoop.StreamingToolCall>();
+        AcidAgentLoop.accumulateToolCallsDelta(tcMap, new JSONArray("[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"eval\",\"arguments\":\"{\\\"v\\\":\"}}]"));
+        AcidAgentLoop.accumulateToolCallsDelta(tcMap, new JSONArray("[{\"index\":0,\"function\":{\"arguments\":\"null\"}}]"));
+        AcidAgentLoop.accumulateToolCallsDelta(tcMap, new JSONArray("[{\"index\":0,\"function\":{\"arguments\":\"}\"}}]"));
+        assertEquals("{\"v\":null}", tcMap.get(0).arguments.toString(), "Tool call 'null' argument chunk preserved");
+
+        assertEquals(0, AcidAgentLoop.parseToolArgumentsStrict("").length(), "Empty tool args allowed as {}");
+        boolean rejectedBrokenJson = false;
+        try {
+            AcidAgentLoop.parseToolArgumentsStrict("{\"action\":\"click\",\"ref\":");
+        } catch (Exception expected) {
+            rejectedBrokenJson = true;
+        }
+        assertTrue(rejectedBrokenJson, "Truncated/invalid tool JSON must throw instead of silently becoming {}");
+
+        // E. P0-7 & P1-6: AdBlock path-scoped rules never block/whitelist entire domains + CSS selector isolation
+        AdBlockManager.RuleSet rs = new AdBlockManager.RuleSet();
+        assertTrue(AdBlockManager.parseRuleLine("||youtube.com/get_midroll_info", rs), "Scoped block rule parsed");
+        assertTrue(AdBlockManager.parseRuleLine("@@||bing.com/fd/ls/GLinkPing.aspx?", rs), "Scoped whitelist rule parsed");
+        assertTrue(AdBlockManager.parseRuleLine("||bing.com/ads/", rs), "Scoped bing ad path parsed");
+        assertTrue(!AdBlockManager.parseRuleLine("@@||tencent-cloud.cn^$domain=tencent.com", rs), "$domain= rule not promoted to global whitelist");
+
+        assertTrue(!AdBlockManager.isUriBlocked(android.net.Uri.parse("https://www.youtube.com/watch?v=abc"), rs),
+            "Main YouTube video page must NOT be blocked by path-scoped rule");
+        assertTrue(AdBlockManager.isUriBlocked(android.net.Uri.parse("https://www.youtube.com/get_midroll_info?slot=1"), rs),
+            "Specific YouTube ad path IS blocked");
+        assertTrue(AdBlockManager.isUriBlocked(android.net.Uri.parse("https://www.bing.com/ads/banner.js"), rs),
+            "Bing ad path remains blocked (not globally whitelisted)");
+        assertTrue(!AdBlockManager.isUriBlocked(android.net.Uri.parse("https://www.bing.com/fd/ls/GLinkPing.aspx?p=1"), rs),
+            "Specific Bing whitelisted path is allowed");
+        assertTrue(!AdBlockManager.isHostWhitelisted("gstatic.com.evil-tracker.xyz", rs),
+            "Lookalike gstatic hostname must not bypass AdBlock");
+
+        assertTrue(!AdBlockManager.isSafeCssSelector(".a { display:none } body { background:url(//x) }"), "CSS breakout rejected");
+        assertTrue(!AdBlockManager.isSafeCssSelector("+js(abort-on-property-read, ads)"), "uBlock scriptlet rejected");
+        AdBlockManager.parseRuleLine("example.com##.ad-slot", rs);
+        AdBlockManager.parseRuleLine("##.global-ad", rs);
+        String isolatedCss = AdBlockManager.buildIsolatedElementHidingCss(rs, "sub.example.com");
+        assertTrue(isolatedCss.contains(".global-ad { display: none !important;"), "Global selector emitted as independent CSS rule");
+        assertTrue(isolatedCss.contains(".ad-slot { display: none !important;"), "Domain selector emitted as independent CSS rule");
+
+        // F. P0-8: AcidMarkdownView PUA placeholder injection & bounds guard
+        List<String> mdSnips = new ArrayList<String>();
+        String rawPuaLine = "Inline `code` with rogue \uE00099\uE001, spoofed \uE0000\uE001, and overflow \uE00099999999999999999999\uE001 markers";
+        String maskedPua = AcidMarkdownView.maskCodeSnippets(rawPuaLine, mdSnips);
+        android.text.SpannableStringBuilder puaSsb = new android.text.SpannableStringBuilder(maskedPua);
+        AcidMarkdownView.restoreMaskedSnippets(puaSsb, mdSnips, false, 0, 0);
+        String renderedStr = puaSsb.toString();
+        assertTrue(renderedStr.contains(" code "), "Valid inline code rendered");
+        assertTrue(renderedStr.contains("rogue \uE00099\uE001, spoofed \uE0000\uE001"), "Literal PUA markers escaped & restored verbatim without crash or spoofing");
+        // Direct injection of unescaped out-of-range marker into restoreMaskedSnippets must also never throw
+        android.text.SpannableStringBuilder forgedSsb = new android.text.SpannableStringBuilder("x \uE00042\uE001 \uE000999999999999999999\uE001 y");
+        AcidMarkdownView.restoreMaskedSnippets(forgedSsb, mdSnips, false, 0, 0);
+        assertEquals("x \uE00042\uE001 \uE000999999999999999999\uE001 y", forgedSsb.toString(), "Out-of-bounds/overflow unescaped markers safely ignored");
+
+        // G. P1-8: Filename dot-traversal sanitization & AcidFileProvider bucket isolation
+        assertEquals(null, HttpProbe.decodeAndSanitizeFileName(".."), "Dot-dot filename rejected");
+        assertEquals("download", DownloadCoordinator.sanitizeDownloadFileName("..."), "Multi-dot filename falls back to 'download'");
+        String singleDecoded = HttpProbe.decodeAndSanitizeFileName("%252e%252e%252fpayload.apk");
+        assertTrue(singleDecoded != null && singleDecoded.contains("2e"), "Double-encoded traversal is not double-decoded");
+
+        android.net.Uri intUri = AcidFileProvider.getUriForFile(new File("/data/user/0/com.acid.browser/files/Download/update.apk"));
+        android.net.Uri extUri = AcidFileProvider.getUriForFile(new File("/storage/emulated/0/Android/data/com.acid.browser/files/Download/update.apk"));
+        assertEquals(AcidFileProvider.BUCKET_INT_PRIVATE, AcidFileProvider.extractBucketFromPath(intUri.getPath()), "Internal private Download bucket encoded");
+        assertEquals(AcidFileProvider.BUCKET_EXT_PRIVATE, AcidFileProvider.extractBucketFromPath(extUri.getPath()), "External private Download bucket encoded");
+
+        // H. Release Blocker Fixes (Batch 2):
+        // 1. Userscript @match host boundary & tab-indented @grant & @require ES6 scope
+        assertTrue(!UserscriptMeta.globMatches("*://*.zhihu.com/*", "https://attacker.com?.zhihu.com/"),
+            "Query-before-slash host spoofing must not match *.zhihu.com");
+        assertTrue(!UserscriptMeta.globMatches("*://*.zhihu.com/*", "https://zhihu.com@attacker.com/"),
+            "Userinfo host spoofing must not match *.zhihu.com");
+        assertTrue(!UserscriptMeta.globMatches("*://*/*", "file:///data/user/0/com.acid.browser/shared_prefs/AcidBrowserPrefs.xml"),
+            "*://*/* must only match http/https, not file://");
+        UserscriptMeta tabMeta = UserscriptMeta.parse("tab.user.js",
+            "// ==UserScript==\n// @name\tTabTest\n// @match\thttps://example.com/*\n// @grant\tnone\n// ==/UserScript==\nconsole.log(LIB_CONST);");
+        assertTrue(!tabMeta.isGranted("GM_xmlhttpRequest"), "Tab-indented @grant none must deny GM_xmlhttpRequest");
+        List<String> reqDeps = new ArrayList<String>();
+        reqDeps.add("const LIB_CONST = 42;");
+        String shapedNoGrant = UserscriptShaper.shape(tabMeta, reqDeps, "super_secret_token_999");
+        assertTrue(!shapedNoGrant.contains("super_secret_token_999"), "@grant none script must not embed native bridge secret in JS closure");
+        assertTrue(shapedNoGrant.contains("const LIB_CONST = 42;\n;\n"), "@require dependency injected in function scope without inner try{} block");
+
+        // 2. Sandbox navigation URL validation & password log masking
+        File wsTmp = File.createTempFile("acid_sbx_ws_", "_dir");
+        wsTmp.delete();
+        wsTmp.mkdirs();
+        try {
+            AcidSandboxTools sbx = new AcidSandboxTools(null, wsTmp);
+            assertEquals(null, sbx.resolveAndValidateNavigationUrl("FILE:///data/data/com.acid.browser/shared_prefs/AcidBrowserPrefs.xml"),
+                "Uppercase FILE:// outside workspace must be rejected");
+            assertEquals(null, sbx.resolveAndValidateNavigationUrl("file:///android_asset/../../data/data/com.acid.browser/shared_prefs/AcidBrowserPrefs.xml"),
+                "android_asset .. traversal must be rejected");
+            assertEquals(null, sbx.resolveAndValidateNavigationUrl("content://com.acid.browser.fileprovider/int_private/x"),
+                "content:// URI must be rejected in sandbox navigation");
+            assertEquals("file:///android_asset/homepage.html", sbx.resolveAndValidateNavigationUrl("file:///android_asset/homepage.html"),
+                "Clean android_asset URL remains allowed");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(wsTmp);
+        }
+
+        assertTrue(WebAutomationDriver.shouldMaskFillLog(new JSONObject("{\"ref\":\"e1\"}"), new JSONObject("{\"ok\":true,\"value\":\"***\"}")),
+            "Password receipt with value='***' must mask log");
+        assertTrue(!WebAutomationDriver.shouldMaskFillLog(new JSONObject("{\"ref\":\"e1\"}"), new JSONObject("{\"ok\":true,\"value\":\"hello\"}")),
+            "Normal input receipt must not mask log");
+
+        // 3. Chunked transfer integer overflow guard
+        boolean overflowCaught = false;
+        try {
+            byte[] maliciousChunked = "5\r\nhello\r\n7fffffff\r\n".getBytes(StandardCharsets.US_ASCII);
+            HttpControlServer.readChunkedBody(new java.io.ByteArrayInputStream(maliciousChunked), 1024);
+        } catch (java.io.IOException ioe) {
+            overflowCaught = true;
+        }
+        assertTrue(overflowCaught, "Chunk size 0x7fffffff must throw IOException instead of overflowing baos.size() + chunkSize");
+
+        // 4. HistoryRepository stale async snapshot guard after clearHistory()
+        File histFile = File.createTempFile("acid_hist_race_", ".json");
+        try {
+            HistoryRepository repo = new HistoryRepository(null, new InMemoryPrefs(), histFile);
+            repo.recordHistory("https://example.com/1", "Page 1", false);
+            repo.clearHistory();
+            JSONArray staleSnapshot = new JSONArray("[{\"title\":\"Stale\",\"url\":\"https://stale.example\",\"time\":1}]");
+            boolean staleSaved = repo.saveHistoryToJsonFile(staleSnapshot, 1L);
+            assertTrue(!staleSaved, "Stale revision snapshot must be rejected after clearHistory()");
+            assertEquals(0, Integer.valueOf(repo.loadHistory().size()), "Cleared history remains empty");
+        } finally {
+            histFile.delete();
+        }
     }
 }

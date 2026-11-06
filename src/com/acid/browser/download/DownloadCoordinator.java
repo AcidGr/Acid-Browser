@@ -324,16 +324,26 @@ public class DownloadCoordinator {
     }
 
     public File getDownloadDestinationDir() {
-        File destDir = null;
+        File publicDir = null;
         try {
-            destDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         } catch (Throwable ignored) {}
-        if (destDir == null || (!destDir.exists() && !destDir.mkdirs())) {
-            File extFiles = mContext != null ? mContext.getExternalFilesDir(null) : null;
-            destDir = new File(extFiles != null ? extFiles : (mContext != null ? mContext.getFilesDir() : new File(".")), "Download");
-            destDir.mkdirs();
+        if (publicDir != null && (publicDir.exists() || publicDir.mkdirs()) && publicDir.canWrite()) {
+            return publicDir;
         }
-        return destDir;
+        File extFiles = null;
+        try {
+            if (mContext != null) {
+                extFiles = mContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+            }
+        } catch (Throwable ignored) {}
+        if (extFiles != null && (extFiles.exists() || extFiles.mkdirs()) && extFiles.canWrite()) {
+            return extFiles;
+        }
+        File base = (mContext != null && mContext.getFilesDir() != null) ? mContext.getFilesDir() : new File(".");
+        File internalDir = new File(base, Environment.DIRECTORY_DOWNLOADS);
+        internalDir.mkdirs();
+        return internalDir;
     }
 
     public static String[] splitBaseNameAndExtension(String fileName) {
@@ -491,38 +501,88 @@ public class DownloadCoordinator {
     public static final String UA_115_CLIENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 115Browser/27.0.5.7";
 
+    public static final int CLOUD_DRIVE_NONE = 0;
+    public static final int CLOUD_DRIVE_QUARK = 1;
+    public static final int CLOUD_DRIVE_UC = 2;
+    public static final int CLOUD_DRIVE_BAIDU = 3;
+    public static final int CLOUD_DRIVE_115 = 4;
+
+    /**
+     * Classifies whether {@code url} is an authentic HTTPS endpoint of a supported cloud drive
+     * by parsing the URL scheme and exact domain boundary (never raw substring matching).
+     */
+    public static int classifyCloudDriveUrl(String url) {
+        if (url == null || url.isEmpty()) return CLOUD_DRIVE_NONE;
+        try {
+            java.net.URL parsed = new java.net.URL(url.trim());
+            String proto = parsed.getProtocol();
+            if (proto == null || !"https".equalsIgnoreCase(proto)) {
+                return CLOUD_DRIVE_NONE; // Never attach master cloud-drive cookies over cleartext HTTP
+            }
+            String host = parsed.getHost();
+            if (host == null) return CLOUD_DRIVE_NONE;
+            host = host.trim().toLowerCase(Locale.ROOT);
+            while (host.endsWith(".")) {
+                host = host.substring(0, host.length() - 1).trim();
+            }
+            if (host.isEmpty()) return CLOUD_DRIVE_NONE;
+
+            if (isHostOrSubdomain(host, "quark.cn")) {
+                return CLOUD_DRIVE_QUARK;
+            }
+            if (isHostOrSubdomain(host, "uc.cn")) {
+                return CLOUD_DRIVE_UC;
+            }
+            if (isHostOrSubdomain(host, "baidupcs.com")
+                || isHostOrSubdomain(host, "pcs.baidu.com")
+                || isHostOrSubdomain(host, "d2-ant.baidu.com")) {
+                return CLOUD_DRIVE_BAIDU;
+            }
+            if (isHostOrSubdomain(host, "115.com")
+                || isHostOrSubdomain(host, "115cdn.com")
+                || isHostOrSubdomain(host, "115cdn.net")) {
+                return CLOUD_DRIVE_115;
+            }
+        } catch (Exception ignored) {}
+        return CLOUD_DRIVE_NONE;
+    }
+
+    private static boolean isHostOrSubdomain(String host, String rootDomain) {
+        return host.equals(rootDomain) || host.endsWith("." + rootDomain);
+    }
+
     public static Map<String, String> buildCloudDriveAwareHeaders(String url, String userAgent) {
         Map<String, String> headers = new HashMap<String, String>();
-        String lowerUrl = url != null ? url.toLowerCase() : "";
 
         String cookie = null;
         try {
             cookie = CookieManager.getInstance().getCookie(url);
         } catch (Throwable ignored) {}
 
-        // Enrich cross-subdomain cookies & Referer/UA for cloud drive CDNs
-        if (lowerUrl.contains(".quark.cn")) {
+        // Enrich cross-subdomain cookies & Referer/UA strictly for verified HTTPS cloud-drive hosts
+        int driveType = classifyCloudDriveUrl(url);
+        if (driveType == CLOUD_DRIVE_QUARK) {
             String mainCookie = safeGetCookie("https://pan.quark.cn");
             cookie = mergeCookies(cookie, mainCookie);
             headers.put("Referer", "https://pan.quark.cn/");
             if (userAgent == null || !userAgent.contains("quark-cloud-drive")) {
                 userAgent = UA_QUARK_CLIENT;
             }
-        } else if (lowerUrl.contains(".uc.cn")) {
+        } else if (driveType == CLOUD_DRIVE_UC) {
             String mainCookie = safeGetCookie("https://drive.uc.cn");
             cookie = mergeCookies(cookie, mainCookie);
             headers.put("Referer", "https://drive.uc.cn/");
             if (userAgent == null || !userAgent.contains("uc-cloud-drive")) {
                 userAgent = UA_UC_CLIENT;
             }
-        } else if (lowerUrl.contains("baidupcs.com") || lowerUrl.contains("pcs.baidu.com") || lowerUrl.contains("d2-ant.baidu.com")) {
+        } else if (driveType == CLOUD_DRIVE_BAIDU) {
             String mainCookie = safeGetCookie("https://pan.baidu.com");
             cookie = mergeCookies(cookie, mainCookie);
             headers.put("Referer", "https://pan.baidu.com/");
             if (userAgent == null || !userAgent.contains("netdisk;")) {
                 userAgent = UA_BAIDU_NETDISK;
             }
-        } else if (lowerUrl.contains("115.com") || lowerUrl.contains("115cdn.com")) {
+        } else if (driveType == CLOUD_DRIVE_115) {
             String mainCookie = safeGetCookie("https://115.com");
             cookie = mergeCookies(cookie, mainCookie);
             headers.put("Referer", "https://115.com/");
@@ -546,14 +606,32 @@ public class DownloadCoordinator {
      */
     public static boolean isCloudDriveDirectStreamUrl(String url) {
         if (url == null || url.isEmpty()) return false;
-        String lower = url.toLowerCase();
-        if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false;
-        if (lower.contains(".baidupcs.com/file/") || lower.contains("d.pcs.baidu.com/file/")) {
-            return true;
-        }
-        if (lower.contains("dl-pc-zb.drive.uc.cn/") || (lower.contains(".quark.cn/") && lower.contains("auth_key="))) {
-            return true;
-        }
+        try {
+            java.net.URL parsed = new java.net.URL(url.trim());
+            String proto = parsed.getProtocol();
+            if (proto == null || (!"http".equalsIgnoreCase(proto) && !"https".equalsIgnoreCase(proto))) {
+                return false;
+            }
+            String host = parsed.getHost();
+            if (host == null) return false;
+            host = host.trim().toLowerCase(Locale.ROOT);
+            while (host.endsWith(".")) {
+                host = host.substring(0, host.length() - 1).trim();
+            }
+            String path = parsed.getPath() != null ? parsed.getPath().toLowerCase(Locale.ROOT) : "";
+            String query = parsed.getQuery() != null ? parsed.getQuery().toLowerCase(Locale.ROOT) : "";
+
+            if ((host.endsWith(".baidupcs.com") || "d.pcs.baidu.com".equals(host)) && path.startsWith("/file/")) {
+                return true;
+            }
+            if ("dl-pc-zb.drive.uc.cn".equals(host) && path.length() > 1) {
+                return true;
+            }
+            if (host.endsWith(".quark.cn") && !"pan.quark.cn".equals(host) && !"drive-pc.quark.cn".equals(host)
+                && query.contains("auth_key=")) {
+                return true;
+            }
+        } catch (Exception ignored) {}
         return false;
     }
 
@@ -590,6 +668,7 @@ public class DownloadCoordinator {
         if (fileName == null || fileName.trim().isEmpty()) {
             fileName = smartGuessFileName(url, contentDisposition, mimeType);
         }
+        fileName = sanitizeDownloadFileName(fileName);
         File destDir = getDownloadDestinationDir();
         fileName = generateUniqueFileName(destDir, fileName);
         String effectiveMime = resolveMimeType(fileName, mimeType);
@@ -682,9 +761,11 @@ public class DownloadCoordinator {
             return;
         }
 
-        // Single choke point for every download path (confirm sheet, OTA, GM_download, agent).
-        // The name reaches `new File(destDir, name)` untouched further down, so a name carrying
-        // "../" would otherwise write outside the Download directory.
+        // Guess filename from URL / Content-Disposition / MIME first when omitted, then sanitize
+        // into a safe leaf name so `new File(destDir, name)` can never escape Download/.
+        if (fileName == null || fileName.trim().isEmpty()) {
+            fileName = smartGuessFileName(url, contentDisposition, mimeType);
+        }
         fileName = sanitizeDownloadFileName(fileName);
 
         if (getDownloaderEngine() == AcidSettings.DOWNLOADER_SYSTEM) {
@@ -753,8 +834,14 @@ public class DownloadCoordinator {
                 }
             }
 
-            Log.i(TAG, "[DOWNLOAD] Enqueued multi-thread task: " + safeFileName + " (id=" + task.id + ") -> /Download/");
-            AcidFeedback.ok(mContext, "已开始内置下载: " + safeFileName + "\n保存至手机 Download 目录");
+            Log.i(TAG, "[DOWNLOAD] Enqueued multi-thread task: " + safeFileName + " (id=" + task.id + ") -> " + destDir.getAbsolutePath());
+            boolean isPublicDir = false;
+            try {
+                File pub = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                isPublicDir = pub != null && pub.getCanonicalPath().equals(destDir.getCanonicalPath());
+            } catch (Throwable ignored) {}
+            String locHint = isPublicDir ? "保存至手机 Download 目录" : "保存至应用专属 Download 目录（可在下载管理中直接打开或分享）";
+            AcidFeedback.ok(mContext, "已开始内置下载: " + safeFileName + "\n" + locHint);
         } catch (Exception e) {
             Log.e(TAG, "[DOWNLOAD] Failed to enqueue builtin: " + e.getMessage(), e);
             AcidFeedback.error(mContext, "内置下载发起失败: " + e.getMessage());
@@ -893,6 +980,7 @@ public class DownloadCoordinator {
         if (it == null || it.url == null || it.url.isEmpty()) return false;
         try {
             File destDir = getDownloadDestinationDir();
+            it.fileName = sanitizeDownloadFileName(it.fileName);
 
             // Ownership & collision verification:
             File targetFile = new File(destDir, it.fileName);
@@ -1185,7 +1273,6 @@ public class DownloadCoordinator {
             intent.setDataAndType(uri, mime);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
 
             if (forceChooser) {
                 Intent chooser = Intent.createChooser(intent, "选择打开方式: " + it.fileName);

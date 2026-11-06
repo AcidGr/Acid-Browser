@@ -465,7 +465,20 @@ public final class FaviconManager {
     public static Bitmap decodeFaviconBitmap(byte[] b) {
         if (b == null || b.length < 32) return null;
         try {
+            BitmapFactory.Options boundsOpts = new BitmapFactory.Options();
+            boundsOpts.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(b, 0, b.length, boundsOpts);
+            if (boundsOpts.outWidth <= 1 || boundsOpts.outHeight <= 1
+                || boundsOpts.outWidth > 4096 || boundsOpts.outHeight > 4096) {
+                return null; // Guard against invalid icons and PNG decompression bombs
+            }
+            int sampleSize = 1;
+            int maxEdge = Math.max(boundsOpts.outWidth, boundsOpts.outHeight);
+            while (maxEdge / sampleSize > 192) {
+                sampleSize *= 2;
+            }
             BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sampleSize;
             opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
             Bitmap bmp = BitmapFactory.decodeByteArray(b, 0, b.length, opts);
             if (bmp != null && bmp.getWidth() > 1 && bmp.getHeight() > 1) {
@@ -509,8 +522,9 @@ public final class FaviconManager {
 
     public WebResourceResponse interceptFaviconWebRequest(Uri reqUri) {
         try {
-            String host = reqUri.getQueryParameter("host");
+            String rawHost = reqUri.getQueryParameter("host");
             String targetUrl = reqUri.getQueryParameter("url");
+            String host = (rawHost != null && !rawHost.isEmpty()) ? extractHost(rawHost) : null;
             if ((host == null || host.isEmpty()) && targetUrl != null) {
                 host = extractHost(targetUrl);
             }
@@ -553,7 +567,8 @@ public final class FaviconManager {
         if (Build.VERSION.SDK_INT >= 21) {
             Map<String, String> headers = new HashMap<String, String>();
             headers.put("Cache-Control", "public, max-age=31536000, immutable");
-            headers.put("Access-Control-Allow-Origin", "*");
+            headers.put("Content-Security-Policy", "default-src 'none'; sandbox");
+            headers.put("X-Content-Type-Options", "nosniff");
             resp.setResponseHeaders(headers);
         }
         return resp;
