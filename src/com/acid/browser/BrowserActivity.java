@@ -1829,7 +1829,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         }
         if (mController != null && mController.getTabs().size() > 1 && tab != null) {
             if (mController.isTabDrivenByAgent(tab.id)) {
-                AcidFeedback.warn(this, "该标签页正在被 Agent 使用，无法关闭。");
+                if (mController.switchToPreviousTab(tab.id)) {
+                    AcidFeedback.info(this, "Agent 仍在后台继续操作原标签页");
+                    return;
+                }
+                super.onBackPressed();
                 return;
             }
             mController.closeTab(tab.id);

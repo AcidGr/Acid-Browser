@@ -26,6 +26,7 @@ try {
   var _callHost = function(act, obj) {
     if (!_host || !_host.call) return '';
     obj = obj || {};
+    _defProp(obj, 'toJSON', { value: undefined, enumerable: false, configurable: true, writable: true });
     _defProp(obj, 'secret', { value: _secret, enumerable: true, configurable: true, writable: true });
     _defProp(obj, 'scriptId', { value: _sid, enumerable: true, configurable: true, writable: true });
     try { return _host.call(act, _stringify(obj)); } catch(e){ return ''; }

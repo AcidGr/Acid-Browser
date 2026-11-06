@@ -1272,7 +1272,7 @@
 
             if (actualValue === expectedText || normActual === normExpected) {
                 verified = true;
-            } else if (compactActual === compactExpected || compactActual.includes(compactExpected)) {
+            } else if (compactExpected.length > 0 && (compactActual === compactExpected || compactActual.includes(compactExpected))) {
                 verified = true;
             } else if (normActual.includes(normExpected) || actualValue.includes(expectedText)) {
                 verified = true;
