@@ -1132,7 +1132,37 @@ public final class TestRunner {
             assertEquals(
                 "[Archive] Downloading 5.0 MB",
                 AcidLocale.tr("[压缩包] 正在下载 5.0 MB"),
-                "Download category subtitle translated to English"
+                "Download category subtitle (bracket format) translated to English"
+            );
+            assertEquals(
+                "Archive · Downloading 50% · 2.5 MB / 5.0 MB",
+                AcidLocale.tr("压缩包 · 正在下载 50% · 2.5 MB / 5.0 MB"),
+                "DownloadsSheet real separator subtitle translated to English"
+            );
+            assertEquals(
+                "APK · Saved · Unknown size · Tap to start",
+                AcidLocale.tr("安装包 · 待下载 · 未知大小 · 点击开始下载"),
+                "DownloadsSheet saved subtitle translated to English"
+            );
+            assertEquals(
+                "Delete chat \"New Chat\"? This cannot be undone.",
+                AcidLocale.tr("确定删除对话「新对话」吗？删除后无法恢复。"),
+                "Default session title in delete confirmation translated to New Chat"
+            );
+            assertEquals(
+                "Load skill · skills/cloud_drive_download.md",
+                AcidLocale.tr("加载技能 · skills/cloud_drive_download.md"),
+                "Agent skill load summary translated to English"
+            );
+            assertEquals(
+                "Edit: custom_skill.md",
+                AcidLocale.tr("编辑: custom_skill.md"),
+                "Skill editor dialog title with colon translated to English"
+            );
+            assertEquals(
+                "Cleaned AI workspace (3 temp items removed, configs & scripts kept)",
+                AcidLocale.tr("已清理 AI 工作区 (3 个临时项，settings.json 与脚本已保留)"),
+                "Standalone AI workspace cleanup toast translated to English"
             );
             assertEquals(
                 "[用户笔记] 正在下载 5.0 MB",

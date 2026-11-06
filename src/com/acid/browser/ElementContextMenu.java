@@ -143,7 +143,7 @@ public final class ElementContextMenu {
             Intent intent = new Intent(Intent.ACTION_SEND);
             intent.setType("text/plain");
             intent.putExtra(Intent.EXTRA_TEXT, text);
-            context.startActivity(Intent.createChooser(intent, "分享"));
+            context.startActivity(Intent.createChooser(intent, AcidLocale.tr("分享")));
         } catch (Exception e) {
             AcidFeedback.warn(context, "无法发起分享");
         }
