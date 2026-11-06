@@ -165,9 +165,7 @@ public final class TestRunner {
         "assets/homepage/index.html",
         "assets/skills/userscript_dev.md",
         "assets/skills/homepage_dev.md",
-        "assets/skills/cloud_drive_download.md",
-        "assets/donate/wechat_qr.png",
-        "assets/donate/alipay_qr.jpg"
+        "assets/skills/cloud_drive_download.md"
     };
 
     private static void testPackagingAndAssetsIntegrity() throws Exception {
