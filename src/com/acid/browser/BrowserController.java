@@ -104,6 +104,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private final DownloadCoordinator mDownloadCoordinator;
 
     private final List<TabSession> mTabs = new CopyOnWriteArrayList<TabSession>();
+    private final List<Integer> mTabHistory = new CopyOnWriteArrayList<Integer>();
     private int mNextTabId = 1;
     private TabSession mActiveTab = null;
     private int mAgentBoundTabId = -1;
@@ -368,6 +369,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         target.webView.bringToFront();
         mActiveTab = target;
 
+        mTabHistory.remove(Integer.valueOf(tabId));
+        mTabHistory.add(tabId);
+
         if (mOverlayView != null) {
             if (!mOverviewShowing) {
                 mOverlayView.bringToFront();
@@ -420,6 +424,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         toRemove.webView.stopLoading();
         toRemove.webView.destroy();
         mTabs.remove(removeIndex);
+        mTabHistory.remove(Integer.valueOf(tabId));
 
         if (mTabs.isEmpty()) {
             // Fallback: the browser must always own one tab. Closing the last tab destroys it completely
@@ -429,8 +434,25 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
 
         if (wasActive) {
-            int newActiveIndex = Math.min(removeIndex, mTabs.size() - 1);
-            switchToTab(mTabs.get(newActiveIndex).id);
+            int targetTabId = -1;
+            for (int i = mTabHistory.size() - 1; i >= 0; i--) {
+                int id = mTabHistory.get(i);
+                for (TabSession t : mTabs) {
+                    if (t.id == id) {
+                        targetTabId = id;
+                        break;
+                    }
+                }
+                if (targetTabId != -1) {
+                    break;
+                }
+            }
+            if (targetTabId != -1) {
+                switchToTab(targetTabId);
+            } else {
+                int newActiveIndex = Math.max(0, Math.min(removeIndex - 1, mTabs.size() - 1));
+                switchToTab(mTabs.get(newActiveIndex).id);
+            }
         } else if (mListener != null) {
             mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
         }
@@ -459,6 +481,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 t.webView.stopLoading();
                 t.webView.destroy();
                 mTabs.remove(i);
+                mTabHistory.remove(Integer.valueOf(t.id));
             }
         }
         switchToTab(keepTabId);

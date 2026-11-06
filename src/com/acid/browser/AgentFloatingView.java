@@ -761,6 +761,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         bubble.setBackground(AcidTheme.pillBg(ctx, AcidTheme.COLOR_BLUE, 0, AcidTheme.RADIUS_CARD));
         bubble.setMaxWidth(AcidTheme.dp(ctx, 280));
         bubble.setTextIsSelectable(true);
+        AcidMarkdownView.attachSelectableTouchDisallow(bubble);
 
         row.addView(bubble, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -866,7 +867,21 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         streamingTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         streamingTv.setLineSpacing(0f, 1.25f);
         streamingTv.setTextIsSelectable(true);
+        AcidMarkdownView.attachSelectableTouchDisallow(streamingTv);
         streamingTv.setText(item.text != null ? item.text : "");
+
+        final Context finalCtx = ctx;
+        final AcidSessionStore.UiMessageItem finalItem = item;
+        card.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                if (finalItem != null && finalItem.text != null && !finalItem.text.isEmpty()) {
+                    AcidIo.copyToClipboard(finalCtx, "agent_reply", finalItem.text, "已复制回答内容到剪贴板");
+                    return true;
+                }
+                return false;
+            }
+        });
 
         if (item.isRunning) {
             card.addView(streamingTv);
@@ -902,6 +917,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         errTv.setTextColor(AcidTheme.COLOR_RED);
         errTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         errTv.setTextIsSelectable(true);
+        AcidMarkdownView.attachSelectableTouchDisallow(errTv);
         LinearLayout.LayoutParams eLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         eLp.leftMargin = AcidTheme.dp(ctx, 8);
         row.addView(errTv, eLp);
