@@ -688,11 +688,14 @@ public class AdBlockManager {
 
     public void injectElementHidingCss(WebView view, String pageUrl) {
         if (!mEnabled || view == null || pageUrl == null) return;
+        if (pageUrl.startsWith("file://") || pageUrl.startsWith("about:")) return;
         Uri uri = Uri.parse(pageUrl);
         String host = uri.getHost();
         if (host != null) host = host.toLowerCase(Locale.ROOT);
+        if (host != null && isWhitelisted(host)) return;
 
         String cssRules = buildIsolatedElementHidingCss(mRules, host);
+        String quotedCss = JSONObject.quote(cssRules);
         String js = "(function() {" +
             "var root = document.head || document.documentElement;" +
             "if (!root) return;" +
@@ -701,10 +704,10 @@ public class AdBlockManager {
             "  s = document.createElement('style');" +
             "  s.id = '__acid_adblock_css__';" +
             "  s.type = 'text/css';" +
-            "  s.textContent = " + JSONObject.quote(cssRules) + ";" +
+            "  s.textContent = " + quotedCss + ";" +
             "  root.appendChild(s);" +
             "} else {" +
-            "  s.textContent = " + JSONObject.quote(cssRules) + ";" +
+            "  s.textContent = " + quotedCss + ";" +
             "}" +
             "})();";
         view.evaluateJavascript(js, null);

@@ -306,6 +306,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         final int tabId = mNextTabId++;
         WebView wv = new WebView(mContext);
         final TabSession tab = new TabSession(tabId, wv);
+        tab.url = "about:blank";
         configureWebView(tab);
 
         mTabs.add(tab);
@@ -366,6 +367,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         for (TabSession t : mTabs) {
             t.webView.setVisibility(t.id == tabId ? android.view.View.VISIBLE : android.view.View.INVISIBLE);
         }
+        try {
+            target.webView.onResume();
+        } catch (Throwable ignored) {}
         target.webView.bringToFront();
         mActiveTab = target;
 
@@ -385,6 +389,37 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             mListener.onProgressChanged(mActiveTab.progress, mActiveTab.isLoading);
         }
         return true;
+    }
+
+    /**
+     * Switches away from {@code currentTabId} to the most recently visited remaining tab
+     * without closing {@code currentTabId}.
+     */
+    public boolean switchToPreviousTab(int currentTabId) {
+        int targetTabId = -1;
+        for (int i = mTabHistory.size() - 1; i >= 0; i--) {
+            int id = mTabHistory.get(i);
+            if (id == currentTabId) continue;
+            for (TabSession t : mTabs) {
+                if (t.id == id) {
+                    targetTabId = id;
+                    break;
+                }
+            }
+            if (targetTabId != -1) break;
+        }
+        if (targetTabId == -1) {
+            for (int i = mTabs.size() - 1; i >= 0; i--) {
+                TabSession t = mTabs.get(i);
+                if (t.id != currentTabId) {
+                    targetTabId = t.id;
+                    break;
+                }
+            }
+        }
+        if (targetTabId == -1) return false;
+        mTabHistory.remove(Integer.valueOf(currentTabId));
+        return switchToTab(targetTabId);
     }
 
     public boolean closeTab(int tabId) {
@@ -722,6 +757,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (request != null && request.getUrl() != null) {
                     Uri u = request.getUrl();
                     if ("acid-favicon.local".equalsIgnoreCase(u.getHost())) {
+                        boolean refererTrusted = false;
                         if (Build.VERSION.SDK_INT >= 21) {
                             if (request.isForMainFrame()) {
                                 return FaviconManager.buildEmpty404Response();
@@ -730,8 +766,17 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                             if (!isAllowedLocalHomeRequestHeaders(reqHeaders)) {
                                 return FaviconManager.buildEmpty404Response();
                             }
+                            if (reqHeaders != null) {
+                                for (Map.Entry<String, String> e : reqHeaders.entrySet()) {
+                                    if ("referer".equalsIgnoreCase(e.getKey())
+                                            && isTrustedLocalHomepageFileUrl(e.getValue(), getWorkspaceDir())) {
+                                        refererTrusted = true;
+                                        break;
+                                    }
+                                }
+                            }
                         }
-                        if (!isTrustedLocalHomepageFileUrl(tab.url, getWorkspaceDir())) {
+                        if (!refererTrusted && !isTrustedLocalHomepageFileUrl(tab.url, getWorkspaceDir())) {
                             return FaviconManager.buildEmpty404Response();
                         }
                         return interceptFaviconRequest(u);
@@ -773,7 +818,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     return true;
                 }
                 if (url != null && (url.startsWith("http://") || url.startsWith("https://"))
-                        && (isLocalHomeUrl(view != null ? view.getUrl() : null) || isLocalHomeUrl(tab.url))) {
+                        && (isTrustedLocalHomepageFileUrl(view != null ? view.getUrl() : null, getWorkspaceDir())
+                            || isTrustedLocalHomepageFileUrl(tab.url, getWorkspaceDir()))) {
                     final String targetUrl = url;
                     mMainHandler.post(new Runnable() {
                         @Override
@@ -785,7 +831,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     });
                     return true;
                 }
-                return handleUrlIntercept(url);
+                return handleUrlIntercept(tab, url);
             }
 
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -798,8 +844,12 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         }
                         return true;
                     }
+                    if (!request.isForMainFrame()) {
+                        return false;
+                    }
                     if ((u.startsWith("http://") || u.startsWith("https://"))
-                            && (isLocalHomeUrl(view != null ? view.getUrl() : null) || isLocalHomeUrl(tab.url))) {
+                            && (isTrustedLocalHomepageFileUrl(view != null ? view.getUrl() : null, getWorkspaceDir())
+                                || isTrustedLocalHomepageFileUrl(tab.url, getWorkspaceDir()))) {
                         final String targetUrl = u;
                         mMainHandler.post(new Runnable() {
                             @Override
@@ -811,7 +861,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         });
                         return true;
                     }
-                    return handleUrlIntercept(u);
+                    return handleUrlIntercept(tab, u);
                 }
                 return false;
             }
@@ -1099,11 +1149,20 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
-    private boolean handleUrlIntercept(String url) {
+    private boolean handleUrlIntercept(final TabSession tab, String url) {
         if (url == null) return false;
         String lower = url.toLowerCase();
         if (lower.startsWith("acid://")) {
-            loadUrl(normalizeUrl(url));
+            final String normalized = normalizeUrl(url);
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    TabSession target = tab != null ? tab : mActiveTab;
+                    if (target != null) {
+                        loadUrlWithTab(target, normalized, true);
+                    }
+                }
+            });
             return true;
         }
         // Intercept known cloud-drive direct CDN file streams before WebView sends Chrome UA (which gets HTTP 403)
@@ -1154,7 +1213,16 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         android.content.pm.ResolveInfo ri = (intent != null && pm != null) ? pm.resolveActivity(intent, 0) : null;
         if (ri == null) {
             if (fallbackUrl != null && (fallbackUrl.startsWith("http://") || fallbackUrl.startsWith("https://"))) {
-                loadUrl(fallbackUrl);
+                final String fb = fallbackUrl;
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        TabSession target = tab != null ? tab : mActiveTab;
+                        if (target != null) {
+                            loadUrlWithTab(target, fb, false);
+                        }
+                    }
+                });
                 return true;
             }
             recordBlockedDeepLink(url);
@@ -1358,7 +1426,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             "  if(!el){" +
             "    el=document.createElement('style');" +
             "    el.id='__acid_dark_mode';" +
-            "    el.textContent='@media(prefers-color-scheme:light){:root{color-scheme:dark!important;}}html,body{background-color:#000000!important;}';" +
+            "    el.textContent=':root{color-scheme:dark light!important;}html,body{background-color:#000000;color:#e5e7eb;}a{color:#60a5fa;}';" +
             "    (document.head||document.documentElement).appendChild(el);" +
             "  }" +
             "}else{" +
@@ -1773,6 +1841,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void loadUrlWithTab(TabSession tab, String url, boolean userInitiated) {
         if (tab == null || tab.webView == null || url == null) return;
+        tab.url = url;
         tab.webView.loadUrl(url);
     }
 

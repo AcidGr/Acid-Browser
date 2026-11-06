@@ -118,7 +118,9 @@ public class AcidMarkdownView extends LinearLayout {
         if (trimmed.isEmpty()) {
             if (paraBuf.length() > 0) {
                 int len = paraBuf.length();
-                if (len < 2 || paraBuf.charAt(len - 1) != '\n' || paraBuf.charAt(len - 2) != '\n') {
+                if (paraBuf.charAt(len - 1) != '\n') {
+                    paraBuf.append("\n\n");
+                } else if (len < 2 || paraBuf.charAt(len - 2) != '\n') {
                     paraBuf.append("\n");
                 }
             }

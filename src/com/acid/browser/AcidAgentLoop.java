@@ -895,7 +895,7 @@ public class AcidAgentLoop {
                 }
             }
 
-            if (line.startsWith("Page Text Excerpt:")) {
+            if (line.startsWith("Page Text Excerpt")) {
                 sb.append(line).append("\n");
                 keptLines++;
                 continue;
@@ -1447,15 +1447,12 @@ public class AcidAgentLoop {
         if (session == null) return 0;
         if (session.lastTotalTokens > 0) return session.lastTotalTokens;
         int chars = 0;
-        synchronized (session) {
-            for (int i = 0; i < session.apiMessages.size(); i++) {
-                JSONObject m = session.apiMessages.get(i);
-                if (m != null) {
-                    chars += m.optString("content", "").length();
-                    chars += m.optString("reasoning_content", "").length();
-                    JSONArray tc = m.optJSONArray("tool_calls");
-                    if (tc != null) chars += tc.toString().length();
-                }
+        for (JSONObject m : session.apiMessages) {
+            if (m != null) {
+                chars += m.optString("content", "").length();
+                chars += m.optString("reasoning_content", "").length();
+                JSONArray tc = m.optJSONArray("tool_calls");
+                if (tc != null) chars += tc.toString().length();
             }
         }
         return Math.max(1, (int) Math.round(chars / 2.0));

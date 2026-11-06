@@ -839,6 +839,12 @@ public final class TestRunner {
         assertTrue(masked.contains("\uE0000\uE001"), "Masked text contains protected placeholder");
 
         // A2. Multi-paragraph continuous buffer stream (preserves single blank line between paragraphs)
+        StringBuilder pbSingle = new StringBuilder();
+        AcidMarkdownView.appendParaLine(pbSingle, "Paragraph 1");
+        AcidMarkdownView.appendParaLine(pbSingle, "");
+        AcidMarkdownView.appendParaLine(pbSingle, "Paragraph 2");
+        assertEquals("Paragraph 1\n\nParagraph 2", pbSingle.toString(), "Single blank line between paragraphs preserved as \\n\\n");
+
         StringBuilder pb = new StringBuilder();
         AcidMarkdownView.appendParaLine(pb, "Paragraph 1");
         AcidMarkdownView.appendParaLine(pb, "");
