@@ -502,6 +502,21 @@
         }
 
         // 1. 首屏第 0 毫秒同步渲染 <head> 中 preload.js 注入的真实书签与本地已缓存的 Base64 图标（0 延迟、0 闪烁）
+        window.__updateAcidLanguage = function(lang) {
+            const isEn = (lang === 'en') || (!lang && (navigator.language || '').toLowerCase().indexOf('en') === 0);
+            const q = document.getElementById('quote-text');
+            if (q && (q.textContent === '你可以让Agent帮你自定义主页' || q.textContent === 'Ask Agent to customize your homepage')) {
+                q.textContent = isEn ? 'Ask Agent to customize your homepage' : '你可以让Agent帮你自定义主页';
+            }
+            const s = document.getElementById('search-input');
+            if (s) {
+                s.placeholder = isEn ? 'Search or enter URL...' : '搜索或输入网址...';
+            }
+        };
+        if (window.__ACID_LANG) {
+            window.__updateAcidLanguage(window.__ACID_LANG);
+        }
+
         (function initFirstPaint() {
             if (Array.isArray(window.__INITIAL_BOOKMARKS) && window.__INITIAL_BOOKMARKS.length > 0) {
                 window.__INITIAL_BOOKMARKS.forEach(it => {

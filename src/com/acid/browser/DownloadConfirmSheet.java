@@ -121,7 +121,7 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 // Size & MIME
                 TextView tvSize = new TextView(ctx);
                 String mimeInfo = !TextUtils.isEmpty(mPendingMimeType) ? (" · " + mPendingMimeType) : "";
-                tvSize.setText("预估大小: " + DownloadItem.formatSize(mPendingContentLength) + mimeInfo);
+                tvSize.setText(AcidLocale.tr("预估大小: " + DownloadItem.formatSize(mPendingContentLength)) + mimeInfo);
                 tvSize.setTextColor(muted);
                 tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 infoCard.addView(tvSize);
@@ -133,7 +133,7 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 pathRow.setPadding(0, AcidTheme.dp(ctx, 8), 0, 0);
 
                 TextView tvPath = new TextView(ctx);
-                tvPath.setText("保存目录: /Download/");
+                tvPath.setText(AcidLocale.tr("保存目录: /Download/"));
                 tvPath.setTextColor(muted);
                 tvPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 pathRow.addView(tvPath, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -152,7 +152,7 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 int curEngine = (mDownloads != null) ? mDownloads.getDownloaderEngine() : 0;
                 String engineName = (curEngine == 1) ? "系统下载器" : "内置下载器";
                 TextView tvEngine = new TextView(ctx);
-                tvEngine.setText("下载引擎: " + engineName);
+                tvEngine.setText(AcidLocale.tr("下载引擎: " + engineName));
                 tvEngine.setTextColor(muted);
                 tvEngine.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvEngine.setPadding(0, AcidTheme.dp(ctx, 6), 0, 0);
@@ -165,7 +165,7 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 urlRow.setPadding(0, AcidTheme.dp(ctx, 8), 0, 0);
 
                 TextView tvUrl = new TextView(ctx);
-                tvUrl.setText("来源: " + mPendingUrl);
+                tvUrl.setText(AcidLocale.tr("来源: " + mPendingUrl));
                 tvUrl.setTextColor(muted);
                 tvUrl.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvUrl.setSingleLine(true);

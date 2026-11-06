@@ -175,7 +175,7 @@ public class AboutSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "内核简介"));
                 LinearLayout descCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
                 TextView tvDesc = new TextView(ctx);
-                tvDesc.setText("Acid Browser 是一款零第三方依赖、原生内嵌自主 Agent Loop、本地 MCP 控制网关、油猴脚本引擎与 ABP 广告拦截器的超轻量现代 AI 浏览器。");
+                tvDesc.setText(AcidLocale.tr("Acid Browser 是一款零第三方依赖、原生内嵌自主 Agent Loop、本地 MCP 控制网关、油猴脚本引擎与 ABP 广告拦截器的超轻量现代 AI 浏览器。"));
                 tvDesc.setTextColor(muted);
                 tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvDesc.setLineSpacing(AcidTheme.dp(ctx, 3f), 1f);
@@ -206,7 +206,7 @@ public class AboutSheet extends AcidBottomSheetView {
 
                 // 1. Top Remark Note (borderless plain text)
                 TextView tvNote = new TextView(ctx);
-                tvNote.setText("此为作者的乞讨页面，您可以付款但是您得不到任何好处！");
+                tvNote.setText(AcidLocale.tr("此为作者的乞讨页面，您可以付款但是您得不到任何好处！"));
                 tvNote.setTextColor(text);
                 tvNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
                 tvNote.setTypeface(Typeface.DEFAULT_BOLD);
@@ -385,7 +385,7 @@ public class AboutSheet extends AcidBottomSheetView {
         box.setOrientation(LinearLayout.VERTICAL);
 
         TextView tvSize = new TextView(ctx);
-        tvSize.setText("安装包大小: " + (info.apkSize.isEmpty() ? "未知" : info.apkSize));
+        tvSize.setText(AcidLocale.tr("安装包大小: " + (info.apkSize.isEmpty() ? "未知" : info.apkSize)));
         tvSize.setTextColor(AcidTheme.text(mIsDarkMode));
         tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         tvSize.setTypeface(Typeface.DEFAULT_BOLD);

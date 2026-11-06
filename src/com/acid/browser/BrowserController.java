@@ -1714,7 +1714,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (reqUri == null) return null;
         String path = reqUri.getPath();
         if (path != null && path.endsWith("/preload.js")) {
-            String js = "window.__INITIAL_BOOKMARKS=" + buildBookmarksJsonWithCachedIcons().toString() + ";";
+            String lang = AcidLocale.isEn() ? "en" : "zh";
+            String js = "window.__ACID_LANG=\"" + lang + "\";window.__INITIAL_BOOKMARKS=" + buildBookmarksJsonWithCachedIcons().toString() + ";";
             byte[] jsBytes = js.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             WebResourceResponse resp = new WebResourceResponse(
                 "application/javascript", "UTF-8", new java.io.ByteArrayInputStream(jsBytes)
@@ -1755,7 +1756,38 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void pushBookmarksToActiveHomeTabs() {
         if (mDataStore == null) return;
         org.json.JSONArray arr = buildBookmarksJsonWithCachedIcons();
-        final String js = "try{if(window.__updateAcidBookmarks){window.__updateAcidBookmarks(" + arr.toString() + ");}}catch(e){}";
+        final String lang = AcidLocale.isEn() ? "en" : "zh";
+        final String js = "try{if(window.__updateAcidLanguage){window.__updateAcidLanguage('" + lang + "');}if(window.__updateAcidBookmarks){window.__updateAcidBookmarks(" + arr.toString() + ");}}catch(e){}";
+        mMainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                for (TabSession t : mTabs) {
+                    if (t != null && t.webView != null
+                            && isTrustedLocalHomepageFileUrl(t.url, getWorkspaceDir())) {
+                        if (Build.VERSION.SDK_INT >= 19) {
+                            t.webView.evaluateJavascript(js, null);
+                        } else {
+                            t.webView.loadUrl("javascript:" + js);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    public void pushLanguageToActiveHomeTabs() {
+        final boolean en = AcidLocale.isEn();
+        final String lang = en ? "en" : "zh";
+        final String quote = en ? "Ask Agent to customize your homepage" : "你可以让Agent帮你自定义主页";
+        final String ph = en ? "Search or enter URL..." : "搜索或输入网址...";
+        final String js = "try{"
+            + "window.__ACID_LANG='" + lang + "';"
+            + "if(window.__updateAcidLanguage){window.__updateAcidLanguage('" + lang + "');}"
+            + "else{"
+            + "var q=document.getElementById('quote-text');if(q&&(q.textContent==='你可以让Agent帮你自定义主页'||q.textContent==='Ask Agent to customize your homepage'))q.textContent='" + quote + "';"
+            + "var s=document.getElementById('search-input');if(s)s.placeholder='" + ph + "';"
+            + "}"
+            + "}catch(e){}";
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {

@@ -751,7 +751,7 @@ public class AcidIcons {
             addView(mIconView);
 
             mTextView = new TextView(context);
-            mTextView.setText(text);
+            mTextView.setText(AcidLocale.tr(text));
             mTextView.setTextColor(accentColor);
             mTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             mTextView.setTypeface(Typeface.DEFAULT_BOLD);
@@ -799,7 +799,7 @@ public class AcidIcons {
         public void update(int iconId, String text, int accentColor) {
             mIconView.setIcon(iconId);
             mIconView.setColor(accentColor);
-            mTextView.setText(text);
+            mTextView.setText(AcidLocale.tr(text));
             mTextView.setTextColor(accentColor);
             applyFrame(accentColor);
         }

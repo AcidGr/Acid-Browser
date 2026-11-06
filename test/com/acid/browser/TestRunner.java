@@ -1106,5 +1106,23 @@ public final class TestRunner {
         } finally {
             histFile.delete();
         }
+
+        // 5. Language Settings & AcidLocale Hot-Switching (System / Simplified Chinese / English)
+        assertEquals(Integer.valueOf(AcidSettings.LANG_SYSTEM), AcidSettings.LANGUAGE.defaultValue, "Default language is Follow System (0)");
+        assertEquals(AcidSettings.LANG_EN, AcidSettings.LANGUAGE.codeToIndex("en"), "Language code 'en' maps to LANG_EN");
+        assertEquals(AcidSettings.LANG_ZH, AcidSettings.LANGUAGE.codeToIndex("zh-CN"), "Language alias 'zh-CN' maps to LANG_ZH");
+        try {
+            AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_EN);
+            assertTrue(AcidLocale.isEn(), "AcidLocale switches to English");
+            assertEquals("Settings", AcidLocale.tr("设置"), "Static label translated to English");
+            assertEquals("Blocked 42 times", AcidLocale.tr("已拦截 42 次"), "Dynamic counter translated to English");
+            assertEquals("All Chats (5)", AcidLocale.tr("全部会话 (5)"), "Section count header translated to English");
+
+            AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_ZH);
+            assertTrue(!AcidLocale.isEn(), "AcidLocale switches back to Simplified Chinese");
+            assertEquals("设置", AcidLocale.tr("设置"), "Static label preserved in Simplified Chinese");
+        } finally {
+            AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_SYSTEM);
+        }
     }
 }

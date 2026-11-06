@@ -1,4 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Acid</string>
+
+    <!-- Language Settings -->
+    <string name="setting_language_title">界面语言</string>
+    <string name="setting_language_dialog_title">选择界面语言</string>
+    <string name="lang_follow_system">跟随系统</string>
+    <string name="lang_zh_cn">简体中文</string>
+    <string name="lang_en">English</string>
+    <string name="toast_language_switched">界面语言已切换为: %1$s</string>
+
+    <!-- Main Menu Tiles -->
+    <string name="menu_title">功能</string>
+    <string name="menu_day_mode">日间模式</string>
+    <string name="menu_night_mode">夜间模式</string>
+    <string name="menu_incognito">无痕模式</string>
+    <string name="menu_bookmarks">书签收藏</string>
+    <string name="menu_history">历史浏览</string>
+    <string name="menu_desktop_mode">电脑模式</string>
+    <string name="menu_mobile_mode">手机模式</string>
+    <string name="menu_downloads">下载管理</string>
+    <string name="menu_settings">设置</string>
+    <string name="menu_model_config">模型配置</string>
+    <string name="menu_adblock">广告拦截</string>
+    <string name="menu_userscripts">脚本管理</string>
+    <string name="menu_skills">技能管理</string>
+    <string name="menu_fullscreen">全屏模式</string>
+    <string name="menu_about">关于</string>
+
+    <!-- Address Bar & Takeover Banner -->
+    <string name="address_hint_normal">搜索或输入网址...</string>
+    <string name="address_hint_incognito">无痕模式 · 搜索或输入网址...</string>
+    <string name="takeover_request_title">AI 请求接管</string>
+    <string name="takeover_btn_return_ai">交还AI</string>
+    <string name="takeover_btn_takeover">点此接管</string>
+    <string name="takeover_btn_view">点击查看</string>
+    <string name="takeover_status_fg">自动化运行中 · 页面触控已锁定</string>
+    <string name="takeover_status_bg">后台自动化进行中 · 当前页可自由浏览</string>
+    <string name="takeover_resume_prompt">我已完成手动操作，请观察当前最新页面并继续完成任务。</string>
+
+    <!-- Agent Floating Drawer & Quick Samples -->
+    <string name="agent_new_session">新对话</string>
+    <string name="agent_sessions">会话</string>
+    <string name="agent_input_hint">向 Acid Agent 发送网页或沙盒任务...</string>
+    <string name="agent_btn_send">发送</string>
+    <string name="agent_btn_stop">停止</string>
+    <string name="agent_btn_continue">继续</string>
+    <string name="agent_welcome_title">Acid Agent 自主智能体</string>
+    <string name="agent_welcome_desc">内置 browser (网页感知与操控)、read、write、edit、bash 五大沙盒工具。您可以直接发送指令让它跨网页调研、填写表单、编写油猴脚本或生成本地数据报告。</string>
+    <string name="agent_sample_1">帮我下载网盘里的这个文件</string>
+    <string name="agent_sample_2">帮我做一个贪吃蛇游戏并直接展示在页面上</string>
+    <string name="agent_sample_3">帮我去掉当前页面上的广告</string>
+    <string name="agent_sample_4">帮我下载当前页面上的媒体内容</string>
+
+    <!-- Common Dialog Actions -->
+    <string name="action_confirm">确定</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_save">保存</string>
+    <string name="action_delete">删除</string>
+    <string name="action_close">关闭</string>
 </resources>

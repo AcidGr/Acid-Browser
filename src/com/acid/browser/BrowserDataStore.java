@@ -598,6 +598,9 @@ public class BrowserDataStore {
     public int getDownloaderEngine() { return get(AcidSettings.DOWNLOADER_ENGINE).intValue(); }
     public void setDownloaderEngine(int engine) { set(AcidSettings.DOWNLOADER_ENGINE, Integer.valueOf(engine)); }
 
+    public int getLanguageIndex() { return get(AcidSettings.LANGUAGE).intValue(); }
+    public void setLanguageIndex(int langIndex) { set(AcidSettings.LANGUAGE, Integer.valueOf(langIndex)); }
+
     public String getCustomHomeUrl() { return get(AcidSettings.HOME_CUSTOM_URL); }
     public void setCustomHomeUrl(String url) { set(AcidSettings.HOME_CUSTOM_URL, url); }
 

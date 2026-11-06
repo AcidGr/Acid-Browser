@@ -102,7 +102,7 @@ public final class AcidContextMenu {
 
         if (!TextUtils.isEmpty(headerTitle)) {
             TextView tvHead = new TextView(context);
-            tvHead.setText(headerTitle);
+            tvHead.setText(AcidLocale.tr(headerTitle));
             tvHead.setTextColor(AcidTheme.muted(dark));
             tvHead.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             tvHead.setTypeface(Typeface.DEFAULT_BOLD);
@@ -150,7 +150,7 @@ public final class AcidContextMenu {
             }
 
             TextView tv = new TextView(context);
-            tv.setText(item.label);
+            tv.setText(AcidLocale.tr(item.label));
             tv.setTextColor(fg);
             tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
             tv.setTypeface(item.isDanger ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);

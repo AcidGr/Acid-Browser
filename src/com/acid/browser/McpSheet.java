@@ -108,14 +108,14 @@ public class McpSheet extends AcidBottomSheetView {
                 tLp.rightMargin = AcidTheme.dp(ctx, 8);
 
                 TextView tvTitle = new TextView(ctx);
-                tvTitle.setText(isRunning ? "MCP 服务运行中" : "MCP 服务已停止");
+                tvTitle.setText(AcidLocale.tr(isRunning ? "MCP 服务运行中" : "MCP 服务已停止"));
                 tvTitle.setTextColor(textColor);
                 tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
                 tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
                 titleCol.addView(tvTitle);
 
                 TextView tvDesc = new TextView(ctx);
-                tvDesc.setText("允许外部 AI 工具连接并协同遥控浏览器。请开启时确保你知道 MCP 是什么。");
+                tvDesc.setText(AcidLocale.tr("允许外部 AI 工具连接并协同遥控浏览器。请开启时确保你知道 MCP 是什么。"));
                 tvDesc.setTextColor(mutedColor);
                 tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvDesc.setPadding(0, AcidTheme.dp(ctx, 3), 0, 0);
