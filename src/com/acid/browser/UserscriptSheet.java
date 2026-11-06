@@ -612,7 +612,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 scopeSb.append(meta.grants.get(i));
             }
         }
-        scopeSb.append(en ? "\nSource: " : "\n脚本来源: ").append(sourceLabel);
+        scopeSb.append(en ? "\nSource: " : "\n脚本来源: ").append(AcidLocale.tr(sourceLabel));
 
         TextView tvScope = new TextView(ctx);
         tvScope.setText(scopeSb.toString());

@@ -918,7 +918,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         row.addView(icon);
 
         TextView errTv = new TextView(ctx);
-        errTv.setText(item.text);
+        errTv.setText(AcidLocale.tr(item.text));
         errTv.setTextColor(AcidTheme.COLOR_RED);
         errTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
         errTv.setTextIsSelectable(true);
@@ -1141,7 +1141,11 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mTvToolName.setText(tName);
             mTvToolName.setTextColor(toolColor);
 
-            mTvSummary.setText(item.toolSummary != null ? item.toolSummary : "");
+            String summaryText = item.toolSummary != null ? item.toolSummary : "";
+            if (summaryText.startsWith("加载技能 · ")) {
+                summaryText = AcidLocale.tr(summaryText);
+            }
+            mTvSummary.setText(summaryText);
             mTvSummary.setTextColor(textCol);
 
             if (item.isRunning) {
@@ -1172,8 +1176,16 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mTvResultCode.setBackground(AcidTheme.pillBg(ctx, AcidTheme.codeBlockBg(dark), AcidTheme.codeBlockBorder(dark), AcidTheme.RADIUS_BADGE));
             mTvArgsCode.setText(item.toolArgsJson != null ? item.toolArgsJson : "{}");
             String resText = item.toolResult != null ? item.toolResult : "";
+            if ("正在执行...".equals(resText)
+                || "[任务已由用户手动停止]".equals(resText)
+                || "[用户接管，任务等待]".equals(resText)
+                || "[执行结束]".equals(resText)) {
+                resText = AcidLocale.tr(resText);
+            }
             if (resText.length() > 3500) {
-                resText = resText.substring(0, 3500) + "\n... [内容已截断，共 " + item.toolResult.length() + " 字符]";
+                resText = resText.substring(0, 3500) + (AcidLocale.isEn()
+                    ? ("\n... [Truncated, " + item.toolResult.length() + " chars total]")
+                    : ("\n... [内容已截断，共 " + item.toolResult.length() + " 字符]"));
             }
             mTvResultCode.setText(resText);
         }

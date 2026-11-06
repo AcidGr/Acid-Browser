@@ -287,6 +287,22 @@ public final class AcidLocale {
         if (s.startsWith("异常: ")) {
             return "Error: " + s.substring(4);
         }
+        if (s.startsWith("加载技能 · ")) {
+            return "Load skill · " + s.substring(7);
+        }
+        if (s.startsWith("当前供应商 [") && s.contains("] 尚未配置 API Key！")) {
+            int close = s.indexOf("] 尚未配置 API Key！");
+            String pName = s.substring(7, close);
+            return "Provider [" + pName + "] has no API Key configured! Please set it in [Menu -> Model Configuration] or switch to another configured model.";
+        }
+        if (s.startsWith("已达到单次任务最大自主执行步数上限 (") && s.contains(" 步)")) {
+            int close = s.indexOf(" 步)");
+            String steps = s.substring(19, close);
+            return "Reached maximum autonomous step limit (" + steps + " steps). Agent paused to prevent infinite loops. Send a new message to continue.";
+        }
+        if (s.startsWith("请求异常: ")) {
+            return "Request error: " + s.substring(6);
+        }
         if (s.startsWith("请人工协助: ")) {
             String r = s.substring(7);
             return "Human Takeover: " + ("请完成页面操作".equals(r) ? "Please complete the action on page" : r);
@@ -337,6 +353,7 @@ public final class AcidLocale {
         }
         if (s.startsWith("确定删除对话「") && s.endsWith("」吗？删除后无法恢复。")) {
             String name = s.substring(7, s.length() - 11);
+            if ("新对话".equals(name)) name = "New Chat";
             return "Delete chat \"" + name + "\"? This cannot be undone.";
         }
         if (s.startsWith("默认搜索引擎已切换为: ")) {
@@ -388,6 +405,9 @@ public final class AcidLocale {
         if (s.startsWith("已保存供应商: ")) {
             return "Saved provider: " + s.substring(8);
         }
+        if (s.startsWith("编辑: ")) {
+            return "Edit: " + s.substring(4);
+        }
         if (s.startsWith("编辑 ")) {
             return "Edit " + s.substring(3);
         }
@@ -428,16 +448,15 @@ public final class AcidLocale {
             String rawCat = s.substring(1, close);
             if (isDownloadCategoryLabel(rawCat)) {
                 String cat = tr(rawCat);
-                String rest = s.substring(close + 2);
-                rest = rest.replace("待下载 · ", "Saved · ")
-                           .replace(" · 点击开始下载", " · Tap to start")
-                           .replace("正在下载 ", "Downloading ")
-                           .replace("已暂停 · ", "Paused · ")
-                           .replace("排队等待下载...", "Queued...")
-                           .replace("下载失败 · ", "Failed · ")
-                           .replace("已完成 · ", "Completed · ")
-                           .replace("未知大小", "Unknown size");
-                return "[" + cat + "] " + rest;
+                return "[" + cat + "] " + translateDownloadStatusRest(s.substring(close + 2));
+            }
+        }
+        int firstDownloadSep = s.indexOf(" · ");
+        if (firstDownloadSep > 0) {
+            String rawCat = s.substring(0, firstDownloadSep);
+            if (isDownloadCategoryLabel(rawCat)) {
+                String cat = tr(rawCat);
+                return cat + " · " + translateDownloadStatusRest(s.substring(firstDownloadSep + 3));
             }
         }
         if (s.startsWith("已停用 · ") || s.startsWith("[官方核心] ") || s.startsWith("[技能包")
@@ -457,6 +476,21 @@ public final class AcidLocale {
         if (s.startsWith("安装失败: ")) {
             return "Install failed: " + s.substring(6);
         }
+        if (s.startsWith("下载失败: ")) {
+            return "Download failed: " + s.substring(6);
+        }
+        if (s.startsWith("保存失败: ")) {
+            return "Save failed: " + s.substring(6);
+        }
+        if (s.startsWith("更新失败: ")) {
+            return "Update failed: " + s.substring(6);
+        }
+        if (s.startsWith("复制失败: ")) {
+            return "Copy failed: " + s.substring(6);
+        }
+        if (s.startsWith("正在拉取脚本: ")) {
+            return "Fetching userscript: " + s.substring(8);
+        }
         if (s.startsWith("正在多线程下载: ")) {
             return s.replace("正在多线程下载: ", "Multi-thread downloading: ").replace(" · 剩余 ", " · ETA ");
         }
@@ -474,6 +508,27 @@ public final class AcidLocale {
         }
         if (s.startsWith("已通过系统下载器开始下载: ")) {
             return "Started via System Downloader: " + s.substring(14);
+        }
+        if (s.startsWith("当前暂不支持下载此协议资源: ")) {
+            return "Unsupported download protocol: " + s.substring(15);
+        }
+        if (s.startsWith("内置下载发起失败: ")) {
+            return "Failed to start built-in download: " + s.substring(10);
+        }
+        if (s.startsWith("未找到下载文件: ")) {
+            return "Downloaded file not found: " + s.substring(9);
+        }
+        if (s.startsWith("系统未找到可打开此类型文件的应用 (") && s.endsWith(")")) {
+            return "No app found to open this file (" + s.substring(18);
+        }
+        if (s.startsWith("无法打开文件: ")) {
+            return "Cannot open file: " + s.substring(8);
+        }
+        if (s.startsWith("存储目录: ")) {
+            return "Storage folder: " + s.substring(6);
+        }
+        if (s.startsWith("选择打开方式: ")) {
+            return "Open with: " + s.substring(8);
         }
         if (s.startsWith("规则更新成功！当前活跃规则共 ") && s.endsWith(" 条")) {
             String n = s.substring(15, s.length() - 2).trim();
@@ -500,6 +555,15 @@ public final class AcidLocale {
         if (s.startsWith("编辑「") && s.endsWith("」")) {
             return "Edit \"" + s.substring(3, s.length() - 1) + "\"";
         }
+        if (s.startsWith("「") && s.contains("」v") && s.endsWith("，是否更新？")) {
+            return "Update \"" + s.substring(1, s.length() - 6).replace("」v", "\" v") + "?";
+        }
+        if (s.startsWith("「") && s.contains("」不适用于当前页面 (") && s.endsWith(")")) {
+            int idx = s.indexOf("」不适用于当前页面 (");
+            String name = s.substring(1, idx);
+            String scope = tr(s.substring(idx + 11, s.length() - 1));
+            return "\"" + name + "\" does not match current page (" + scope + ")";
+        }
         if (s.startsWith("确定删除用户脚本「")) {
             return s.replace("确定删除用户脚本「", "Delete userscript \"").replace("」(", "\" (").replace(") 吗？", ")?");
         }
@@ -511,6 +575,20 @@ public final class AcidLocale {
         }
         if (s.startsWith("已删除技能「") && s.endsWith("」")) {
             return "Deleted skill \"" + s.substring(6, s.length() - 1) + "\"";
+        }
+        if (s.startsWith("已导入技能包「") && s.endsWith(" 个文件)")) {
+            return s.replace("已导入技能包「", "Imported skill package \"")
+                    .replace("」(共 ", "\" (")
+                    .replace(" 个文件)", " files)");
+        }
+        if (s.startsWith("已导入技能「") && s.endsWith("」")) {
+            return "Imported skill \"" + s.substring(6, s.length() - 1) + "\"";
+        }
+        if (s.startsWith("技能「") && s.endsWith("」已保存")) {
+            return "Skill \"" + s.substring(3, s.length() - 4) + "\" saved";
+        }
+        if (s.startsWith("已更新 ")) {
+            return "Updated " + s.substring(4);
         }
         if (s.startsWith("确定删除技能")) {
             return s.replace("确定删除技能包「", "Delete skill package \"")
@@ -529,6 +607,10 @@ public final class AcidLocale {
                     .replace(" 个工作区临时项", " temp workspace items")
                     .replace("工作区无临时残留", "no temp files")
                     .replace("，配置与脚本已保留)", ", configs & scripts kept)");
+        }
+        if (s.startsWith("已清理 AI 工作区 (") && s.endsWith(" 个临时项，settings.json 与脚本已保留)")) {
+            String n = s.substring(12, s.length() - 27).trim();
+            return "Cleaned AI workspace (" + n + " temp items removed, configs & scripts kept)";
         }
         if (s.startsWith("已清除所选浏览数据 (") && s.endsWith(" 类)")) {
             return "Cleared selected browsing data (" + s.substring(11, s.length() - 3) + " types)";
@@ -552,6 +634,17 @@ public final class AcidLocale {
             return "Copied to clipboard";
         }
         return s;
+    }
+
+    private static String translateDownloadStatusRest(String rest) {
+        return rest.replace("待下载 · ", "Saved · ")
+                   .replace(" · 点击开始下载", " · Tap to start")
+                   .replace("正在下载 ", "Downloading ")
+                   .replace("已暂停 · ", "Paused · ")
+                   .replace("排队等待下载...", "Queued...")
+                   .replace("下载失败 · ", "Failed · ")
+                   .replace("已完成 · ", "Completed · ")
+                   .replace("未知大小", "Unknown size");
     }
 
     private static boolean isDownloadCategoryLabel(String cat) {
@@ -746,6 +839,13 @@ public final class AcidLocale {
         EN_MAP.put("失败", "Failed");
         EN_MAP.put("完成", "Done");
         EN_MAP.put("正在执行...", "Running...");
+        EN_MAP.put("[任务已由用户手动停止]", "[Task stopped by user]");
+        EN_MAP.put("[用户接管，任务等待]", "[Paused for user takeover]");
+        EN_MAP.put("[执行结束]", "[Execution finished]");
+        EN_MAP.put("[思考结束]", "[Thinking finished]");
+        EN_MAP.put("[回答结束]", "[Reply finished]");
+        EN_MAP.put("Agent 正在运行中，请先点击停止按钮中断当前任务。", "Agent is already running. Please tap Stop to interrupt the current task first.");
+        EN_MAP.put("尚未装载任何可用模型！请点击浏览器右下角 [功能 -> 模型配置] 添加供应商与模型。", "No model loaded! Tap [Menu -> Model Configuration] at bottom-right to add a provider and model.");
         EN_MAP.put("等待人工接管协助", "Waiting for human takeover");
         EN_MAP.put("已停止当前 Agent 任务", "Stopped current Agent task");
         EN_MAP.put("请输入要让 Agent 执行的任务指令", "Please enter a task for the Agent");
@@ -888,6 +988,7 @@ public final class AcidLocale {
         EN_MAP.put("浏览目录", "Browse");
         EN_MAP.put("复制链接", "Copy Link");
         EN_MAP.put("已复制到剪贴板", "Copied to clipboard");
+        EN_MAP.put("系统下载器不可用，自动转为内置下载", "System downloader unavailable, switched to built-in downloader");
 
         // AdBlock Sheet
         EN_MAP.put("防护已开启", "Protection Active");
@@ -907,6 +1008,18 @@ public final class AcidLocale {
         EN_MAP.put("已切换为「一级：完全拦截第三方 APP」", "Switched to Level 1: Block All External Apps");
         EN_MAP.put("已切换为「二级：唤起第三方 APP 时弹窗询问」", "Switched to Level 2: Ask Before Opening External Apps");
         EN_MAP.put("已切换为「三级：允许直接打开第三方 APP」", "Switched to Level 3: Allow External Apps");
+        EN_MAP.put(
+            "当前为「一级：完全拦截」—— 严禁网页自动拉起任何外部应用，强制留在浏览器内浏览。\n注：当 AI Agent 处于运行接管状态时，将自动临时锁定为「完全拦截」，任务结束后恢复您的设置。",
+            "Current: Level 1 (Block All) — Prevents web pages from launching any external apps and keeps browsing inside Acid Browser.\nNote: Automatically locked to \"Block All\" while AI Agent is active, and restored when finished."
+        );
+        EN_MAP.put(
+            "当前为「二级：弹窗询问」—— 当网页试图打开外部应用时，弹出小窗口询问，由您选择「确定」或「取消」。\n注：当 AI Agent 处于运行接管状态时，将自动临时锁定为「完全拦截」，任务结束后恢复您的设置。",
+            "Current: Level 2 (Ask First) — Prompts for confirmation whenever a web page attempts to open an external app.\nNote: Automatically locked to \"Block All\" while AI Agent is active, and restored when finished."
+        );
+        EN_MAP.put(
+            "当前为「三级：完全不拦截」—— 允许网页直接唤起手机上已安装的第三方客户端。\n注：当 AI Agent 处于运行接管状态时，将自动临时锁定为「完全拦截」，任务结束后恢复您的设置。",
+            "Current: Level 3 (Allow All) — Allows web pages to directly launch installed third-party apps.\nNote: Automatically locked to \"Block All\" while AI Agent is active, and restored when finished."
+        );
         EN_MAP.put("在线规则订阅", "Filter Subscription");
         EN_MAP.put("ABP / EasyList 订阅地址", "ABP / EasyList Subscription URL");
         EN_MAP.put("拉取并更新订阅规则", "Fetch & Update Rules");
@@ -914,12 +1027,14 @@ public final class AcidLocale {
         EN_MAP.put("请输入有效的订阅规则 URL", "Please enter a valid subscription URL");
         EN_MAP.put("自定义拦截规则", "Custom Filter Rules");
         EN_MAP.put("规则列表 (支持 ||domain^ 域名拦截与 ##selector 元素隐藏)", "Rules (||domain^ network block & ##selector element hiding)");
+        EN_MAP.put("例如:\n||ads.example.com^\nexample.com##.floating-banner", "e.g.:\n||ads.example.com^\nexample.com##.floating-banner");
         EN_MAP.put("保存自定义规则", "Save Custom Rules");
         EN_MAP.put("自定义拦截规则已保存生效", "Custom rules saved and applied");
 
         // Userscripts Sheet
         EN_MAP.put("尚未安装任何用户脚本，点击右上角可导入", "No userscripts installed. Tap top-right to import.");
         EN_MAP.put("导入脚本", "Import");
+        EN_MAP.put("手动导入", "Manual Import");
         EN_MAP.put("所有网站", "All Sites");
         EN_MAP.put("在当前页运行一次", "Run Once on Current Page");
         EN_MAP.put("在当前页运行", "Run on Page");
@@ -943,6 +1058,7 @@ public final class AcidLocale {
         EN_MAP.put("发现新版本", "Update Available");
         EN_MAP.put("导入用户脚本", "Import Userscript");
         EN_MAP.put("在线脚本 URL (.user.js) 或完整脚本源码", "Script URL (.user.js) or full script source");
+        EN_MAP.put("https://.../script.user.js 或 // ==UserScript==...", "https://.../script.user.js or // ==UserScript==...");
         EN_MAP.put("解析并安装", "Parse & Install");
         EN_MAP.put("请输入脚本链接或源码", "Please enter a script URL or source code");
         EN_MAP.put("未检测到有效 URL 或 ==UserScript== 元数据头", "No valid URL or ==UserScript== header detected");
@@ -970,8 +1086,13 @@ public final class AcidLocale {
         EN_MAP.put("复制内容", "Copy Content");
         EN_MAP.put("已复制附属文件内容", "Copied companion file content");
         EN_MAP.put("编辑文件", "Edit File");
+        EN_MAP.put("编辑文件内容...", "Edit file content...");
         EN_MAP.put("重置内置技能", "Reset Built-in Skill");
         EN_MAP.put("已重置为官方默认版本", "Reset to default version");
+        EN_MAP.put("重置失败", "Reset failed");
+        EN_MAP.put("删除失败", "Delete failed");
+        EN_MAP.put("保存技能失败", "Failed to save skill");
+        EN_MAP.put("保存失败", "Save failed");
         EN_MAP.put("从 GitHub / 外部链接导入 (支持文件夹/单文件/ZIP)", "Import from GitHub / URL (Folder / File / ZIP)");
         EN_MAP.put("手动粘贴 / 编写 Markdown 技能", "Paste / Write Markdown Skill Manually");
         EN_MAP.put("添加或导入技能", "Add or Import Skill");
@@ -984,10 +1105,15 @@ public final class AcidLocale {
         EN_MAP.put("添加自定义技能 (Markdown)", "Add Custom Skill (Markdown)");
         EN_MAP.put("支持标准 YAML Frontmatter (--- name / description ---) 或 Markdown 标题格式...",
             "Supports YAML Frontmatter (--- name / description ---) or Markdown headings...");
+        EN_MAP.put(
+            "---\nname: my-skill\ndescription: 简短描述何时触发该技能...\n---\n\n# 技能详细指南\n...",
+            "---\nname: my-skill\ndescription: Briefly describe when to use this skill...\n---\n\n# Skill Guide\n..."
+        );
         EN_MAP.put("内容不能为空", "Content cannot be empty");
         EN_MAP.put("输入技能路径或名称", "Enter Skill Path or Name");
         EN_MAP.put("支持单文件名 (如 my_skill.md) 或技能包路径 (如 my-skill/SKILL.md)",
             "Supports flat file (my_skill.md) or package path (my-skill/SKILL.md)");
+        EN_MAP.put("custom_skill.md 或 my-skill/SKILL.md", "custom_skill.md or my-skill/SKILL.md");
         EN_MAP.put("技能名不能为空", "Skill name cannot be empty");
         EN_MAP.put("保存修改", "Save Changes");
 

@@ -17,6 +17,7 @@ import android.webkit.URLUtil;
 import com.acid.browser.AcidFeedback;
 import com.acid.browser.AcidFileProvider;
 import com.acid.browser.AcidIo;
+import com.acid.browser.AcidLocale;
 import com.acid.browser.AcidSettings;
 import com.acid.browser.BrowserDataStore;
 
@@ -1275,7 +1276,7 @@ public class DownloadCoordinator {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
             if (forceChooser) {
-                Intent chooser = Intent.createChooser(intent, "选择打开方式: " + it.fileName);
+                Intent chooser = Intent.createChooser(intent, AcidLocale.tr("选择打开方式: " + it.fileName));
                 chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 mContext.startActivity(chooser);
             } else {
