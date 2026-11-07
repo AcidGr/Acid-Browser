@@ -2,7 +2,9 @@
 
 **Acid Browser** 是一款专为 Android 打造的超轻量、零第三方依赖的智能浏览器。
 
-它基于系统原生 `WebView` 构建，不依赖 AndroidX 或任何外部重量级 SDK，安装包体积仅约 **345 KB**。在提供干净、流畅的日常网页浏览体验的同时，原生内嵌了自主 AI Agent 循环、本地沙盒工作区、油猴用户脚本引擎、ABP 广告拦截器以及标准 MCP 控制网关。
+[English](README_EN.md) | [中文说明](README.md)
+
+它基于系统原生 `WebView` 构建，不依赖 AndroidX 或任何外部重量级 SDK，安装包体积仅约 **520 KB**。在提供干净、流畅的日常网页浏览体验的同时，原生内嵌了自主 AI Agent 循环、本地沙盒工作区、油猴用户脚本引擎、ABP 广告拦截器以及标准 MCP 控制网关。
 
 <p align="center">
   <img src="docs/screenshots/01-home.jpg" width="250" alt="Acid Browser 主页" />
