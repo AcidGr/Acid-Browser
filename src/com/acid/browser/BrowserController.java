@@ -1,5 +1,6 @@
 package com.acid.browser;
 
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -19,6 +20,8 @@ import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
+import android.webkit.MimeTypeMap;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -75,6 +78,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         void onSettingsReloaded();
         void onShowCustomView(View view, WebChromeClient.CustomViewCallback callback);
         void onHideCustomView();
+        /** 网页(input type=file)请求选文件：宿主 Activity 负责 startActivityForResult。 */
+        void onFileChooserRequested(Intent intent, int requestCode);
     }
 
     public static class TabSession {
@@ -132,6 +137,12 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private volatile String mLastTriggeredDownloadInfo = "";
     private View mCustomView = null;
     private WebChromeClient.CustomViewCallback mCustomViewCallback = null;
+
+    /** 文件选择器请求码：宿主 Activity 用它把结果路由回 onFileChooserResult。 */
+    public static final int REQUEST_CODE_FILE_CHOOSER = 0x4643;
+    /** WebView 的未决文件选择回调：同一时刻只能有一个，旧的必须收到 null 否则页面永久挂起。 */
+    private ValueCallback<Uri[]> mFileChooserCallback = null;
+    private boolean mFileChooserAllowMultiple = false;
     private BrowserDataStore mDataStore = null;
     private boolean mApplyingHotReload = false;
     /**
@@ -1041,6 +1052,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public void onHideCustomView() {
                 hideCustomView();
+            }
+
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                return handleFileChooserRequest(view, filePathCallback, fileChooserParams);
             }
         });
 
@@ -2048,7 +2064,136 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     /**
      * Cascading lifecycle teardown for all browser subsystems, WebViews, and native Chromium contexts.
      */
+    // ===================== 文件选择器（网页 <input type="file">） =====================
+
+    /**
+     * 网页触发文件选择的入口：把 WebView 的请求转成系统文件选择器。
+     * 返回 true 表示已接管——WebView 不会再自己尝试打开任何东西。
+     */
+    public boolean handleFileChooserRequest(WebView view, ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+        if (callback == null) return false;
+        // 上一次请求若还悬着，先给它 null 收尾，否则 WebView 会两边都不回。
+        cancelPendingFileChooser("superseded");
+
+        if (getControlMode() == AgentOverlayView.MODE_AGENT) {
+            // Agent 无人值守地驱动页面；弹系统选择器会让它卡死在等结果那一步。
+            emitLog("[FILE_CHOOSER] 网页请求选择文件，Agent 模式自动取消（需要上传请切回人工模式再点）");
+            try {
+                callback.onReceiveValue(null);
+            } catch (Exception ignored) {}
+            return true;
+        }
+
+        mFileChooserCallback = callback;
+        mFileChooserAllowMultiple = (params != null
+            && params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);
+
+        Intent intent = buildFileChooserIntent(params);
+        emitLog("[FILE_CHOOSER] 网页请求选择文件 -> 打开系统文件选择器");
+        if (mListener == null) {
+            cancelPendingFileChooser("no-listener");
+            return true;
+        }
+        try {
+            mListener.onFileChooserRequested(intent, REQUEST_CODE_FILE_CHOOSER);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to launch file chooser", e);
+            cancelPendingFileChooser("launch-failed");
+        }
+        return true;
+    }
+
+    /** 宿主 Activity 在 onActivityResult 里把结果交回来。 */
+    public void onFileChooserResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != REQUEST_CODE_FILE_CHOOSER) return;
+        ValueCallback<Uri[]> callback = mFileChooserCallback;
+        boolean allowMultiple = mFileChooserAllowMultiple;
+        mFileChooserCallback = null;
+        mFileChooserAllowMultiple = false;
+        if (callback == null) return;
+
+        Uri[] picked = null;
+        if (resultCode == android.app.Activity.RESULT_OK) {
+            picked = extractChosenUris(data, allowMultiple);
+        }
+        emitLog("[FILE_CHOOSER] 回传 " + (picked == null ? 0 : picked.length) + " 个文件给网页");
+        try {
+            callback.onReceiveValue(picked);
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to deliver file chooser result", e);
+        }
+    }
+
+    /** 收尾未决请求（页面被关、Activity 销毁、被新请求顶替时）。 */
+    public void cancelPendingFileChooser(String reason) {
+        ValueCallback<Uri[]> callback = mFileChooserCallback;
+        mFileChooserCallback = null;
+        mFileChooserAllowMultiple = false;
+        if (callback == null) return;
+        try {
+            callback.onReceiveValue(null);
+        } catch (Exception ignored) {}
+        emitLog("[FILE_CHOOSER] 取消未决请求: " + reason);
+    }
+
+    private Uri[] extractChosenUris(Intent data, boolean allowMultiple) {
+        if (data == null) return null;
+        ArrayList<Uri> picked = new ArrayList<Uri>();
+        ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri uri = clip.getItemAt(i).getUri();
+                if (uri != null) picked.add(uri);
+            }
+        }
+        if (picked.isEmpty() && data.getData() != null) {
+            picked.add(data.getData());
+        }
+        if (picked.isEmpty()) return null;
+        if (!allowMultiple && picked.size() > 1) {
+            return new Uri[] { picked.get(0) };
+        }
+        return picked.toArray(new Uri[picked.size()]);
+    }
+
+    private Intent buildFileChooserIntent(WebChromeClient.FileChooserParams params) {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+
+        ArrayList<String> mimes = new ArrayList<String>();
+        String[] acceptTypes = (params != null) ? params.getAcceptTypes() : null;
+        if (acceptTypes != null) {
+            for (int i = 0; i < acceptTypes.length; i++) {
+                String mime = normalizeAcceptType(acceptTypes[i]);
+                if (mime != null && !mimes.contains(mime)) mimes.add(mime);
+            }
+        }
+        if (mimes.size() == 1) {
+            intent.setType(mimes.get(0));
+        } else if (mimes.size() > 1) {
+            intent.setType("*/*");
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, mimes.toArray(new String[mimes.size()]));
+        }
+        if (params != null && params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        }
+        return intent;
+    }
+
+    /** accept 可能是 "image/*"、".png"、"application/pdf"；认不出来的按「不限」处理。 */
+    private String normalizeAcceptType(String accept) {
+        if (accept == null) return null;
+        String value = accept.trim();
+        if (value.isEmpty()) return null;
+        if (value.indexOf('/') >= 0) return value;
+        String ext = value.startsWith(".") ? value.substring(1) : value;
+        if (ext.isEmpty()) return null;
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.toLowerCase());
+    }
+
     public void destroy() {
+        cancelPendingFileChooser("destroy");
         if (isCustomViewShowing()) {
             hideCustomView();
         }
