@@ -1855,6 +1855,36 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         });
     }
 
+    /**
+     * 网页 <input type="file"> 落到这里：拉起系统文件选择器（SAF），结果在 onActivityResult 交回 controller。
+     */
+    @Override
+    public void onFileChooserRequested(final Intent intent, final int requestCode) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    startActivityForResult(intent, requestCode);
+                } catch (Exception e) {
+                    Log.w(TAG, "No activity can handle the file chooser intent", e);
+                    AcidFeedback.warn(BrowserActivity.this, "没有找到可用的文件选择器");
+                    if (mController != null) {
+                        mController.onFileChooserResult(requestCode, RESULT_CANCELED, null);
+                    }
+                }
+            }
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (mController != null && requestCode == BrowserController.REQUEST_CODE_FILE_CHOOSER) {
+            mController.onFileChooserResult(requestCode, resultCode, data);
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
     @Override
     public void onBackPressed() {
         if (mController != null && mController.isCustomViewShowing()) {
