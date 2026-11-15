@@ -30,6 +30,7 @@ public class HistoryRepository {
     private BrowserDataStore.OnHistoryChangedListener mHistoryChangedListener;
     private BrowserDataStore.CallbackDispatcher mDispatcher;
     private volatile long mLastSelfSaveTime = 0;
+    private volatile String mLastSyncedJson = null;
     private long mHistoryRevision = 0;
 
     public HistoryRepository(Context context) {
@@ -164,6 +165,7 @@ public class HistoryRepository {
                 formatted = arr.toString();
             }
             AcidIo.writeFileUtf8(mHistoryJsonFile, formatted);
+            mLastSyncedJson = formatted.trim();
             return true;
         } catch (Exception e) {
             Log.w(TAG, "Failed to save history to " + mHistoryJsonFile, e);
@@ -171,11 +173,23 @@ public class HistoryRepository {
         }
     }
 
+    public boolean reloadHistoryFromObserver() {
+        if (mHistoryJsonFile == null || !mHistoryJsonFile.exists()) return false;
+        try {
+            String trimmed = AcidIo.readFileUtf8(mHistoryJsonFile).trim();
+            if (trimmed.isEmpty() || trimmed.equals(mLastSyncedJson)) {
+                return false;
+            }
+        } catch (Exception ignored) {}
+        return reloadHistoryFromJsonFile();
+    }
+
     public synchronized boolean reloadHistoryFromJsonFile() {
         if (mHistoryJsonFile == null || !mHistoryJsonFile.exists()) return false;
         try {
             String jsonStr = AcidIo.readFileUtf8(mHistoryJsonFile).trim();
             if (jsonStr.isEmpty()) return false;
+            mLastSyncedJson = jsonStr;
 
             JSONArray arr = new JSONArray(jsonStr);
             List<BrowserDataStore.EntryItem> list = new ArrayList<BrowserDataStore.EntryItem>();

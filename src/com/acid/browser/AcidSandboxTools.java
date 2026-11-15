@@ -171,7 +171,7 @@ public class AcidSandboxTools {
 
             @Override
             public ToolExecResult execute(AcidSandboxTools host, JSONObject args, ToolSource source) throws Exception {
-                return host.executeBrowserTool(args);
+                return host.executeBrowserTool(args, source);
             }
         });
 
@@ -436,7 +436,7 @@ public class AcidSandboxTools {
         return "";
     }
 
-    private ToolExecResult executeBrowserTool(final JSONObject args) throws Exception {
+    private ToolExecResult executeBrowserTool(final JSONObject args, ToolSource source) throws Exception {
         String action = args.optString("action", "observe").toLowerCase().trim();
         final WebAutomationDriver driver = mController != null ? mController.getAutomationDriver() : null;
         final int dlBefore = mController != null ? mController.getTriggeredDownloadsCount() : 0;
@@ -466,10 +466,7 @@ public class AcidSandboxTools {
             String rawUrl = args.optString("url", "");
             String url = resolveAndValidateNavigationUrl(rawUrl);
             if (url == null) {
-                String msgPrefix = rawUrl.toLowerCase(Locale.US).startsWith("workspace://")
-                    ? "Error: Access denied: path escapes sandbox workspace ("
-                    : "Error: Access denied: file:// URL escapes sandbox workspace (";
-                return new ToolExecResult(msgPrefix + rawUrl + ")", false, null);
+                return new ToolExecResult(formatBlockedNavigationError(rawUrl), false, null);
             }
             if (driver == null) {
                 return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
@@ -572,6 +569,9 @@ public class AcidSandboxTools {
             }
             String customFileName = args.optString("file_name", "").trim();
             if (customFileName.isEmpty()) customFileName = null;
+            if (source != ToolSource.AGENT_UI && isUserscriptDownloadTarget(url, customFileName)) {
+                return new ToolExecResult("Error: downloading userscripts is not permitted through the MCP gateway.", false, null);
+            }
             String customUa = args.optString("user_agent", "").trim();
             if (customUa.isEmpty()) customUa = null;
             long contentLength = args.optLong("size", -1);
@@ -617,7 +617,7 @@ public class AcidSandboxTools {
                 } else {
                     validatedNewTabUrl = resolveAndValidateNavigationUrl(rawNewUrl);
                     if (validatedNewTabUrl == null) {
-                        return new ToolExecResult("Error: Access denied: file:// URL escapes sandbox workspace (" + rawNewUrl + ")", false, null);
+                        return new ToolExecResult(formatBlockedNavigationError(rawNewUrl), false, null);
                     }
                 }
             } else {
@@ -784,7 +784,9 @@ public class AcidSandboxTools {
             if (f == null) return null;
             return "file://" + f.getAbsolutePath();
         }
-        if (lower.startsWith("content:") || lower.startsWith("intent:")) {
+        if (lower.startsWith("content:") || lower.startsWith("intent:")
+            || lower.startsWith("javascript:") || lower.startsWith("data:")
+            || lower.startsWith("vbscript:")) {
             return null;
         }
         if (lower.startsWith("file:")) {
@@ -905,13 +907,14 @@ public class AcidSandboxTools {
         if (f == null) {
             return "Error: Access denied: path escapes sandbox workspace (" + pathStr + ")";
         }
+        String mcpPermErr = checkMcpWritePermission(f, source, "writing");
+        if (mcpPermErr != null) {
+            return mcpPermErr;
+        }
 
         // Writing into userscripts/ is an install, not a plain write: it must go through
         // validation so a script without @match cannot silently end up running everywhere.
         if (isInsideUserscripts(f)) {
-            if (source != ToolSource.AGENT_UI) {
-                return "Error: installing userscripts is only available from the in-app agent chat, not through the MCP gateway.";
-            }
             String error = mController.installUserscript(f.getName(), content);
             if (error != null) {
                 return "Error: " + error;
@@ -985,40 +988,90 @@ public class AcidSandboxTools {
         }
     }
 
-    /** True when {@code f} lives inside the userscripts directory. */
-    private boolean isInsideUserscripts(File f) {
-        if (f == null) return false;
+    private static String formatBlockedNavigationError(String rawUrl) {
+        String lower = rawUrl != null ? rawUrl.trim().toLowerCase(Locale.US) : "";
+        if (lower.startsWith("workspace://")) {
+            return "Error: Access denied: path escapes sandbox workspace (" + rawUrl + ")";
+        }
+        if (lower.startsWith("file:")) {
+            return "Error: Access denied: file:// URL escapes sandbox workspace (" + rawUrl + ")";
+        }
+        return "Error: Access denied: unsafe or disallowed URL scheme (" + rawUrl + ")";
+    }
+
+    private static boolean isUserscriptDownloadTarget(String url, String customFileName) {
+        if (customFileName != null && customFileName.toLowerCase(Locale.US).endsWith(".user.js")) {
+            return true;
+        }
+        if (url != null) {
+            String pathPart = url.toLowerCase(Locale.US);
+            int q = pathPart.indexOf('?');
+            if (q >= 0) pathPart = pathPart.substring(0, q);
+            int h = pathPart.indexOf('#');
+            if (h >= 0) pathPart = pathPart.substring(0, h);
+            return pathPart.endsWith(".user.js");
+        }
+        return false;
+    }
+
+    private String checkMcpWritePermission(File f, ToolSource source, String actionVerb) {
+        if (source == ToolSource.AGENT_UI || f == null) return null;
+        if (isInsideUserscripts(f)) {
+            String msg = "installing".equals(actionVerb) || "writing".equals(actionVerb)
+                ? "installing userscripts" : "editing userscripts";
+            return "Error: " + msg + " is only available from the in-app agent chat, not through the MCP gateway.";
+        }
+        if (isInsideSkills(f)) {
+            return "Error: modifying skills/ is only available from the in-app agent chat, not through the MCP gateway.";
+        }
+        if (isInsideHomepage(f)) {
+            return "Error: modifying homepage/ is only available from the in-app agent chat, not through the MCP gateway.";
+        }
+        if (isSettingsJsonFile(f)) {
+            return "Error: modifying settings.json is only available from the in-app agent chat, not through the MCP gateway.";
+        }
+        return null;
+    }
+
+    private boolean isInsideDir(File f, File dir) {
+        if (f == null || dir == null) return false;
         try {
-            File dir = (mController != null && mController.getUserscriptManager() != null)
-                ? mController.getUserscriptManager().getUserscriptsDir().getCanonicalFile()
-                : new File(mWorkspaceDir, "userscripts").getCanonicalFile();
-            File target = f.getCanonicalFile();
-            return target.getParentFile() != null && target.getParentFile().equals(dir);
+            String dirCanon = dir.getCanonicalPath();
+            String targetCanon = f.getCanonicalPath();
+            return targetCanon.equals(dirCanon) || targetCanon.startsWith(dirCanon + File.separator);
         } catch (Exception e) {
-            Log.w(TAG, "Could not resolve userscripts directory for " + f, e);
             return false;
         }
     }
 
-    /** True when {@code f} lives inside the adblock directory. */
+    /** True when {@code f} lives inside the userscripts directory (including subdirectories). */
+    private boolean isInsideUserscripts(File f) {
+        File dir = (mController != null && mController.getUserscriptManager() != null)
+            ? mController.getUserscriptManager().getUserscriptsDir()
+            : new File(mWorkspaceDir, "userscripts");
+        return isInsideDir(f, dir);
+    }
+
+    /** True when {@code f} lives inside the adblock directory (including subdirectories). */
     private boolean isInsideAdBlock(File f) {
-        if (f == null) return false;
-        try {
-            File dir = new File(mWorkspaceDir, "adblock").getCanonicalFile();
-            File target = f.getCanonicalFile();
-            return target.getParentFile() != null && target.getParentFile().equals(dir);
-        } catch (Exception e) {
-            return false;
-        }
+        return isInsideDir(f, new File(mWorkspaceDir, "adblock"));
     }
 
     /** True when {@code f} lives inside the skills directory (including subdirectories). */
     private boolean isInsideSkills(File f) {
+        return isInsideDir(f, new File(mWorkspaceDir, "skills"));
+    }
+
+    /** True when {@code f} lives inside the homepage directory. */
+    private boolean isInsideHomepage(File f) {
+        return isInsideDir(f, new File(mWorkspaceDir, "homepage"));
+    }
+
+    /** True when {@code f} is the workspace settings.json file. */
+    private boolean isSettingsJsonFile(File f) {
         if (f == null) return false;
         try {
-            String skillsCanon = new File(mWorkspaceDir, "skills").getCanonicalPath();
-            String targetCanon = f.getCanonicalPath();
-            return targetCanon.equals(skillsCanon) || targetCanon.startsWith(skillsCanon + File.separator);
+            return f.getCanonicalFile().equals(new File(mWorkspaceDir, "settings.json").getCanonicalFile());
         } catch (Exception e) {
             return false;
         }
@@ -1034,16 +1087,15 @@ public class AcidSandboxTools {
         if (f == null) {
             return "Error: Access denied: path escapes sandbox workspace (" + pathStr + ")";
         }
+        String mcpPermErr = checkMcpWritePermission(f, source, "editing");
+        if (mcpPermErr != null) {
+            return mcpPermErr;
+        }
         if (!f.exists() || !f.isFile()) {
             return "Error: File not found: " + f.getAbsolutePath();
         }
         if (oldStr.isEmpty()) {
             return "Error: old_string cannot be empty.";
-        }
-        if (isInsideUserscripts(f)) {
-            if (source != ToolSource.AGENT_UI) {
-                return "Error: editing userscripts is only available from the in-app agent chat, not through the MCP gateway.";
-            }
         }
         try {
             String content = AcidIo.readFileUtf8(f);

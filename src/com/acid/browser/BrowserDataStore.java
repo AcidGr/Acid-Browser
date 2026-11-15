@@ -107,12 +107,10 @@ public class BrowserDataStore {
     private final BookmarkRepository mBookmarkRepo;
     private final HistoryRepository mHistoryRepo;
     private OnSettingsChangedListener mSettingsChangedListener = null;
-    private OnBookmarksChangedListener mBookmarksChangedListener = null;
-    private Runnable mBookmarksMutatedListener = null;
-    private OnHistoryChangedListener mHistoryChangedListener = null;
     private CallbackDispatcher mDispatcher = null;
     private FileObserver mFileObserver = null;
     private volatile long mLastSelfSaveTime = 0;
+    private volatile String mLastSyncedSettingsJson = null;
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
@@ -195,7 +193,7 @@ public class BrowserDataStore {
         }
     }
 
-    public void startWatchingSettingsFile() {
+    public synchronized void startWatchingSettingsFile() {
         if (mSettingsJsonFile == null && mBookmarksJsonFile == null && mHistoryJsonFile == null) return;
         if (mFileObserver != null) {
             try { mFileObserver.stopWatching(); } catch (Exception e) {}
@@ -214,20 +212,17 @@ public class BrowserDataStore {
                             if (System.currentTimeMillis() - mLastSelfSaveTime < 800) {
                                 return; // Ignore own writes
                             }
-                            mLastSelfSaveTime = System.currentTimeMillis();
-                            reloadFromJsonFile();
+                            reloadSettingsFromObserver();
                         } else if (path.endsWith("bookmarks.json")) {
                             if (System.currentTimeMillis() - mBookmarkRepo.getLastSelfSaveTime() < 800) {
                                 return; // Ignore own writes
                             }
-                            mBookmarkRepo.setLastSelfSaveTime(System.currentTimeMillis());
-                            reloadBookmarksFromJsonFile();
+                            mBookmarkRepo.reloadBookmarksFromObserver();
                         } else if (path.endsWith("history.json")) {
                             if (System.currentTimeMillis() - mHistoryRepo.getLastSelfSaveTime() < 800) {
                                 return; // Ignore own writes
                             }
-                            mHistoryRepo.setLastSelfSaveTime(System.currentTimeMillis());
-                            reloadHistoryFromJsonFile();
+                            mHistoryRepo.reloadHistoryFromObserver();
                         }
                     }
                 };
@@ -255,17 +250,14 @@ public class BrowserDataStore {
     }
 
     public void setOnBookmarksChangedListener(OnBookmarksChangedListener l) {
-        mBookmarksChangedListener = l;
         mBookmarkRepo.setOnBookmarksChangedListener(l);
     }
 
     public void setOnBookmarksMutatedListener(Runnable l) {
-        mBookmarksMutatedListener = l;
         mBookmarkRepo.setOnBookmarksMutatedListener(l);
     }
 
     public void setOnHistoryChangedListener(OnHistoryChangedListener l) {
-        mHistoryChangedListener = l;
         mHistoryRepo.setOnHistoryChangedListener(l);
     }
 
@@ -470,10 +462,23 @@ public class BrowserDataStore {
         try {
             mLastSelfSaveTime = System.currentTimeMillis();
             JSONObject o = exportToJson();
-            AcidIo.writeFileUtf8(mSettingsJsonFile, o.toString(2));
+            String jsonText = o.toString(2);
+            mLastSyncedSettingsJson = jsonText;
+            AcidIo.writeFileUtf8(mSettingsJsonFile, jsonText);
         } catch (Exception e) {
             Log.w(TAG, "Failed to save settings.json", e);
         }
+    }
+
+    private void reloadSettingsFromObserver() {
+        if (mSettingsJsonFile == null || !mSettingsJsonFile.exists()) return;
+        try {
+            String content = AcidIo.readFileUtf8(mSettingsJsonFile);
+            if (content.equals(mLastSyncedSettingsJson)) {
+                return;
+            }
+        } catch (Exception ignored) {}
+        reloadFromJsonFile();
     }
 
     private static final class ChangedKeyEntry<T> {
@@ -508,6 +513,7 @@ public class BrowserDataStore {
         try {
             String content = AcidIo.readFileUtf8(mSettingsJsonFile);
             JSONObject o = new JSONObject(content);
+            mLastSyncedSettingsJson = content;
 
             SharedPreferences.Editor ed = prefs().edit();
             final List<ChangedKeyEntry<?>> changedEntries = new ArrayList<ChangedKeyEntry<?>>();
@@ -733,6 +739,11 @@ public class BrowserDataStore {
         if (clearCache) {
             if (controller != null) {
                 controller.clearAllCache();
+            }
+            try {
+                FaviconManager.getInstance(mContext).clearAllCaches();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to clear favicon cache", e);
             }
             try {
                 deleteDirRecursively(mContext.getCacheDir());

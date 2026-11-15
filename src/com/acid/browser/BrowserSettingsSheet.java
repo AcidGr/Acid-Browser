@@ -15,7 +15,6 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
     public interface OnSettingsActionListener {
         void onOpenModelConfig();
         void onOpenMcp();
-        void onToggleMcpServer();
         void onOpenAgentFloatingWindow();
         void onOpenAdBlock();
         void onOpenUserscripts();
@@ -248,7 +247,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 Context ctx = getContext();
                 int accent = AcidTheme.accent(mIsDarkMode);
                 boolean abEnabled = mDataStore.get(AcidSettings.ADBLOCK_ENABLED).booleanValue();
-                int blockedCount = mDataStore.get(AcidSettings.ADBLOCK_BLOCKED_COUNT).intValue();
+                int blockedCount = AdBlockManager.getInstance(ctx).getBlockedCount();
 
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "内容净化与脚本引擎"));
                 container.addView(AcidWidgets.groupCard(

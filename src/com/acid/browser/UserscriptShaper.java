@@ -92,20 +92,11 @@ public class UserscriptShaper {
             .replace("/*__SAFE_SECRET__*/\"\"", safeSecret)
             .replace("/*__GM_INFO__*/{}", gmInfoJson);
 
-        if (meta.unwrap) {
+        if (meta.unwrap && !hasAnyNativeBridgeGrant(meta)) {
             StringBuilder sb = new StringBuilder();
             sb.append(shimHeader);
-            sb.append("\n  window.__acid_expose_unwrapped = function() {\n");
-            for (String api : APIS) {
-                if (meta.isGranted(api)) {
-                    sb.append("    try { window.").append(api).append(" = ").append(api).append("; } catch(e){}\n");
-                }
-            }
-            sb.append("    try { window.GM = GM; window.GM_info = GM_info;"
+            sb.append("\n  try { window.GM_info = GM_info;"
                 + " window.unsafeWindow = window; window.wrappedJSObject = window; } catch(e){}\n");
-            sb.append("  };\n");
-            sb.append("  window.__acid_expose_unwrapped();\n");
-            sb.append("  try { delete window.__acid_expose_unwrapped; } catch(e){}\n");
             sb.append("} catch(e) {\n");
             sb.append("  console.error('[AcidUserscriptError in ")
                 .append(scriptId.replace("'", "\\'")).append("]', e);\n");

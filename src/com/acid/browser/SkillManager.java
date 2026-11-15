@@ -6,17 +6,10 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -25,8 +18,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
  * Manages on-demand Agent Skills stored under {@code acid_workspace/skills/}.
@@ -56,8 +47,6 @@ public class SkillManager {
     private static final String SYNC_STATE_FILE = "skills_sync.json";
 
     private static final String DISABLED_STATE_FILE = ".disabled_skills.json";
-    private static final int MAX_IMPORT_FILES = 50;
-    private static final long MAX_IMPORT_TOTAL_BYTES = 8L * 1024L * 1024L; // 8 MB safety cap
 
     private static final Set<String> BUILTIN_SKILLS = new HashSet<String>();
     static {
@@ -413,32 +402,41 @@ public class SkillManager {
 
         Set<String> seenKeys = new HashSet<String>();
 
-        // 1. Scan directory skill packages first (or flat files)
+        // 1. Scan directory skill packages first so <slug>/SKILL.md takes precedence over flat <slug>.md
         for (File f : files) {
             String fname = f.getName();
-            if (fname.startsWith(".")) continue;
+            if (fname.startsWith(".") || !f.isDirectory()) continue;
 
-            if (f.isFile() && fname.toLowerCase(Locale.US).endsWith(".md")) {
-                SkillMeta meta = parseSkillMeta(f, null, fname, Collections.<String>emptyList(), f.length(), f.lastModified());
+            File entryMd = findDirectorySkillEntry(f);
+            if (entryMd != null) {
+                String key = normalizeSkillKey(fname);
+                if (seenKeys.contains(key)) continue;
+                List<String> companions = new ArrayList<String>();
+                long[] sizeAndMod = new long[] { 0L, entryMd.lastModified() };
+                collectDirectoryFiles(f, f, entryMd, companions, sizeAndMod);
+                Collections.sort(companions);
+                String relEntry = fname + "/" + entryMd.getName();
+                SkillMeta meta = parseSkillMeta(
+                    entryMd, fname, relEntry, companions,
+                    Math.max(entryMd.length(), sizeAndMod[0]),
+                    sizeAndMod[1]
+                );
                 result.add(meta);
-                seenKeys.add(normalizeSkillKey(fname));
-            } else if (f.isDirectory()) {
-                File entryMd = findDirectorySkillEntry(f);
-                if (entryMd != null) {
-                    List<String> companions = new ArrayList<String>();
-                    long[] sizeAndMod = new long[] { 0L, entryMd.lastModified() };
-                    collectDirectoryFiles(f, f, entryMd, companions, sizeAndMod);
-                    Collections.sort(companions);
-                    String relEntry = fname + "/" + entryMd.getName();
-                    SkillMeta meta = parseSkillMeta(
-                        entryMd, fname, relEntry, companions,
-                        Math.max(entryMd.length(), sizeAndMod[0]),
-                        sizeAndMod[1]
-                    );
-                    result.add(meta);
-                    seenKeys.add(normalizeSkillKey(fname));
-                }
+                seenKeys.add(key);
             }
+        }
+
+        // 2. Scan flat single-file .md skills, skipping any duplicate normalized key
+        for (File f : files) {
+            String fname = f.getName();
+            if (fname.startsWith(".") || !f.isFile()) continue;
+            if (!fname.toLowerCase(Locale.US).endsWith(".md")) continue;
+
+            String key = normalizeSkillKey(fname);
+            if (seenKeys.contains(key)) continue;
+            SkillMeta meta = parseSkillMeta(f, null, fname, Collections.<String>emptyList(), f.length(), f.lastModified());
+            result.add(meta);
+            seenKeys.add(key);
         }
 
         Collections.sort(result, new Comparator<SkillMeta>() {

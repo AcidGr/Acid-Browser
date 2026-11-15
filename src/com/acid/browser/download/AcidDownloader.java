@@ -354,7 +354,6 @@ public class AcidDownloader {
                             || t.status == DownloadTask.STATUS_SUCCESSFUL) {
                             return;
                         }
-                        t.saveCheckpoint();
                         int rem = remainingChunks.decrementAndGet();
                         if (rem <= 0 && !t.isPaused && !t.isCanceled
                             && t.status != DownloadTask.STATUS_FAILED
@@ -363,6 +362,8 @@ public class AcidDownloader {
                             t.completedAt = System.currentTimeMillis();
                             t.cleanCheckpointFile();
                             dispatchCompleted(t);
+                        } else {
+                            t.saveCheckpoint();
                         }
                     }
                 }

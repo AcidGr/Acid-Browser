@@ -158,7 +158,7 @@ try {
   GM_xmlhttpRequest.UNSENT = 0; GM_xmlhttpRequest.OPENED = 1;
   GM_xmlhttpRequest.HEADERS_RECEIVED = 2; GM_xmlhttpRequest.LOADING = 3; GM_xmlhttpRequest.DONE = 4;
 
-  window.__acid_dispatch_http_cb = window.__acid_dispatch_http_cb || function(name, obj, last) {
+  window.__acid_dispatch_http_cb = function(name, obj, last) {
     try {
       if (obj && obj.responseType) {
         var type = obj.responseType;

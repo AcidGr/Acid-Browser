@@ -201,6 +201,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         registerReceiver(mDownloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
 
         applyTheme(mIsDarkMode);
+        if (mDataStore != null && mDataStore.isFullscreenEnabled()) {
+            setFullscreenMode(true);
+        }
         if (mAgentLoop != null && mAgentFloatingView != null) {
             mAgentFloatingView.renderSessionChatStream(mAgentLoop.getActiveSession());
         }
@@ -516,15 +519,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
 
                 @Override
-                public void onToggleMcpServer() {
-                    toggleMcpServer();
-                    if (mSettingsSheet != null) {
-                        mSettingsSheet.setMcpRunning(mHttpServer != null && mHttpServer.isRunning());
-                        mSettingsSheet.refresh();
-                    }
-                }
-
-                @Override
                 public void onOpenAgentFloatingWindow() {
                     mOverlayStack.dismissAllModals();
                     mAgentFloatingView.show();
@@ -568,7 +562,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     int cleaned = mDataStore.clearBrowsingData(
                         mController, clearCache, clearCookies, clearHistory, clearStorage, false
                     );
-                    if (clearWorkspace) {
+                    if (clearWorkspace && mController != null) {
                         cleaned++;
                     }
                     if (mSettingsSheet != null) mSettingsSheet.refresh();
@@ -709,11 +703,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mMcpSheet.renderContent();
                     mOverlayStack.openRootModal(mMcpSheet);
                 }
-            }
-
-            @Override
-            public void onToggleMcpServer() {
-                toggleMcpServer();
             }
 
             @Override
@@ -1092,8 +1081,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     }
                     return;
                 }
-                int next = (cur == AgentOverlayView.MODE_AGENT) ? AgentOverlayView.MODE_HUMAN : AgentOverlayView.MODE_AGENT;
-                mController.setControlMode(next, "");
+                boolean hasActiveAutomation = (mAgentLoop != null && mAgentLoop.isRunning())
+                    || (mHttpServer != null && mHttpServer.isRunning());
+                mController.setControlMode(
+                    hasActiveAutomation ? AgentOverlayView.MODE_AGENT : AgentOverlayView.MODE_HUMAN,
+                    ""
+                );
             }
         });
         bar.addView(mBtnTakeoverAction);
@@ -1214,6 +1207,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 mIsDarkMode = storeDark;
                 applyTheme(mIsDarkMode);
             }
+            boolean storeFullscreen = mDataStore.isFullscreenEnabled();
+            if (mIsFullscreenMode != storeFullscreen) {
+                setFullscreenMode(storeFullscreen);
+            }
             if (mHttpServer != null) {
                 boolean wantMcp = mDataStore.isMcpServerEnabled();
                 if (wantMcp && !mHttpServer.isRunning()) {
@@ -1263,8 +1260,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mModelSelectorSheet, mProviderConfigSheet
         };
         for (AcidBottomSheetView s : allSheets) {
-            if (s != null && s.isShowing()) {
+            if (s == null) continue;
+            if (s.isShowing()) {
                 s.refreshActivePage();
+            } else {
+                s.markNeedsRenderOnShow();
             }
         }
         if (mController != null) {
@@ -1299,7 +1299,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     public void setFullscreenMode(boolean enabled) {
         mIsFullscreenMode = enabled;
-        if (mDataStore != null) {
+        if (mDataStore != null && mDataStore.isFullscreenEnabled() != enabled) {
             mDataStore.setFullscreenEnabled(enabled);
         }
         applyFullscreenWindowFlags(enabled);
@@ -1418,16 +1418,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         updateMenuSheetCards();
         if (mMcpSheet != null) {
             mMcpSheet.renderContent();
-        }
-    }
-
-    private void toggleMcpServer() {
-        if (mHttpServer == null) return;
-        boolean currentlyRunning = mHttpServer.isRunning();
-        if (currentlyRunning) {
-            stopMcpServerInternal();
-        } else {
-            startMcpServerInternal();
         }
     }
 

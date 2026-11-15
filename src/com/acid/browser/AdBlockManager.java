@@ -87,16 +87,47 @@ public class AdBlockManager {
     private volatile int mCustomCount = 0;
 
     private File mAdBlockDir;
+    public static synchronized AdBlockManager init(Context context, File workspaceDir, BrowserDataStore dataStore) {
+        if (sInstance == null) {
+            Context appCtx = context.getApplicationContext();
+            sInstance = new AdBlockManager(appCtx != null ? appCtx : context, workspaceDir, dataStore);
+        } else {
+            if (workspaceDir != null) {
+                sInstance.setWorkspaceDir(workspaceDir);
+            }
+            if (dataStore != null) {
+                sInstance.bindDataStore(dataStore);
+            }
+        }
+        return sInstance;
+    }
+
     private File mCustomRulesFile;
     private File mSubscriptionFile;
 
     private AdBlockManager(Context context) {
-        mContext = context;
-        mDataStore = new BrowserDataStore(context);
-        mEnabled = mDataStore.isAdBlockEnabled();
-        mBlockedCount.set(mDataStore.getAdBlockBlockedCount());
+        this(context, null, null);
+    }
 
-        initDirectories();
+    private AdBlockManager(Context context, File workspaceDir, BrowserDataStore dataStore) {
+        mContext = context;
+        if (dataStore != null) {
+            mDataStore = dataStore;
+            mDataStore.observe(AcidSettings.ADBLOCK_ENABLED, mEnabledSettingObserver);
+            mEnabled = mDataStore.isAdBlockEnabled();
+            mBlockedCount.set(mDataStore.getAdBlockBlockedCount());
+        } else {
+            BrowserDataStore initialStore = new BrowserDataStore(context);
+            mEnabled = initialStore.isAdBlockEnabled();
+            mBlockedCount.set(initialStore.getAdBlockBlockedCount());
+        }
+
+        if (workspaceDir != null && workspaceDir.exists()) {
+            initDirectories();
+            setWorkspaceDirInternal(workspaceDir, false);
+        } else {
+            initDirectories();
+        }
         loadAllRulesAsync(null);
     }
 
@@ -117,6 +148,12 @@ public class AdBlockManager {
     }
 
     public synchronized void setWorkspaceDir(File workspaceDir) {
+        if (setWorkspaceDirInternal(workspaceDir, true)) {
+            loadAllRulesAsync(null);
+        }
+    }
+
+    private boolean setWorkspaceDirInternal(File workspaceDir, boolean checkChanged) {
         if (workspaceDir != null && workspaceDir.exists()) {
             File wsAdblock = new File(workspaceDir, "adblock");
             if (!wsAdblock.exists()) {
@@ -130,10 +167,9 @@ public class AdBlockManager {
             mAdBlockDir = wsAdblock;
             mCustomRulesFile = wsCustom;
             mSubscriptionFile = new File(wsAdblock, "subscriptions.txt");
-            if (dirChanged) {
-                loadAllRulesAsync(null);
-            }
+            return checkChanged && dirChanged;
         }
+        return false;
     }
 
     private static void copyFile(File src, File dst) {
@@ -413,20 +449,13 @@ public class AdBlockManager {
             return addedAny;
         }
 
-        // Strip network filter options ($...) and skip context-restricted options ($domain=, $popup, $csp, etc.)
-        // so scoped rules never over-expand into global whole-site blocks or whitelists.
+        // Reject network filter options ($...) such as $domain=, $third-party/$3p, $image, $script,
+        // $subdocument, $popup, $csp, etc., because WebView shouldIntercept(Uri) lacks page/resource context
+        // and stripping options would falsely expand conditional filters into unconditional domain blocks.
         if (!(line.startsWith("/") && line.endsWith("/") && line.length() > 2)) {
             int dollarIdx = line.lastIndexOf('$');
             if (dollarIdx >= 0) {
-                String opts = line.substring(dollarIdx + 1).trim().toLowerCase(Locale.ROOT);
-                if (opts.contains("domain=") || opts.contains("~") || opts.contains("badfilter")
-                    || opts.contains("elemhide") || opts.contains("generichide") || opts.contains("specifichide")
-                    || opts.contains("csp") || opts.contains("popup") || opts.contains("document")
-                    || opts.contains("rewrite") || opts.contains("redirect")) {
-                    return false;
-                }
-                line = line.substring(0, dollarIdx).trim();
-                if (line.isEmpty()) return false;
+                return false;
             }
         }
 
@@ -539,7 +568,7 @@ public class AdBlockManager {
             if (prefixes != null) {
                 for (int i = 0; i < prefixes.size(); i++) {
                     String p = prefixes.get(i);
-                    if (pathAndQueryLower.startsWith(p) || pathAndQueryLower.contains(p)) {
+                    if (pathAndQueryLower.startsWith(p)) {
                         return true;
                     }
                 }
@@ -666,6 +695,7 @@ public class AdBlockManager {
             if (host != null) {
                 String cur = host.toLowerCase(Locale.ROOT);
                 while (cur != null && !cur.isEmpty()) {
+                    if (isPublicSuffixOrTld(cur)) break;
                     List<String> list = rules.domainElementHiding.get(cur);
                     if (list != null) {
                         for (int i = 0; i < list.size(); i++) {

@@ -38,3 +38,6 @@ java -cp "build/test-stubs:build/classes:build/test-classes:$ANDROID_JAR" \
 
 echo "[AcidTests] Running JS bridge fill readback regression tests..."
 node test/test_fill_readback.js
+
+echo "[AcidTests] Running Batch-1 JS bridge & runtime shim regression tests..."
+node test/test_bridge_batch1.js

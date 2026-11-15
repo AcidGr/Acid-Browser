@@ -159,18 +159,23 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void setDataStore(BrowserDataStore dataStore) {
         mDataStore = dataStore;
-        mDownloadCoordinator.setDataStore(dataStore);
-        if (mDataStore != null) {
-            mDataStore.setOnBookmarksMutatedListener(new Runnable() {
-                @Override
-                public void run() {
-                    pushBookmarksToActiveHomeTabs();
-                }
-            });
+        if (mDownloadCoordinator != null) {
+            mDownloadCoordinator.setDataStore(dataStore);
         }
-        if (mDataStore != null && Build.VERSION.SDK_INT >= 19) {
+        bindDataStoreSideEffects(dataStore);
+    }
+
+    private void bindDataStoreSideEffects(BrowserDataStore dataStore) {
+        if (dataStore == null) return;
+        dataStore.setOnBookmarksMutatedListener(new Runnable() {
+            @Override
+            public void run() {
+                pushBookmarksToActiveHomeTabs();
+            }
+        });
+        if (Build.VERSION.SDK_INT >= 19) {
             try {
-                WebView.setWebContentsDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
+                WebView.setWebContentsDebuggingEnabled(dataStore.isWebDebuggingEnabled());
             } catch (Exception e) {
                 Log.w(TAG, "Failed to set web contents debugging", e);
             }
@@ -214,14 +219,13 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mUserscriptManager = new UserscriptManager(context);
         mUserscriptManager.setHost(new UserscriptHostBridge(this, mUserscriptManager, mMainHandler, context));
         mSkillManager = new SkillManager(context, getWorkspaceDir());
-        AdBlockManager adBlock = AdBlockManager.getInstance(context);
-        adBlock.setWorkspaceDir(getWorkspaceDir());
         if (mDataStore != null) {
             mDataStore.setWorkspaceDir(getWorkspaceDir());
-            adBlock.bindDataStore(mDataStore);
         }
+        AdBlockManager.init(context, getWorkspaceDir(), mDataStore);
         mAutomationDriver = new WebAutomationDriver(context, this);
         mDownloadCoordinator = new DownloadCoordinator(context, mDataStore);
+        bindDataStoreSideEffects(mDataStore);
 
         if (mOverlayView != null) {
             mOverlayView.setTabStateProvider(new AgentOverlayView.TabStateProvider() {

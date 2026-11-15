@@ -58,6 +58,7 @@ public class HttpControlServer {
     public static final int MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB body limit
 
     public static final int MAX_WORKER_THREADS = 24;
+    public static final int MAX_SSE_SESSIONS = 16;
     private final BrowserController mController;
     private final AcidSandboxTools mSandboxTools;
     private final int mPort;
@@ -202,6 +203,54 @@ public class HttpControlServer {
             }
         } catch (Exception ignored) {}
         return null;
+    }
+
+    public static boolean isLocalOrTrustedHost(String hostHeader, boolean lanBound) {
+        if (hostHeader == null) return false;
+        String h = hostHeader.trim().toLowerCase(Locale.ROOT);
+        if (h.isEmpty()) return false;
+        if (h.startsWith("[")) {
+            int close = h.indexOf(']');
+            if (close < 0) return false;
+            h = h.substring(1, close);
+        } else {
+            int colon = h.indexOf(':');
+            if (colon >= 0) {
+                h = h.substring(0, colon);
+            }
+        }
+        if ("localhost".equals(h)
+            || "::1".equals(h)
+            || "::ffff:127.0.0.1".equals(h)
+            || isLoopbackIpv4(h)
+            || "0.0.0.0".equals(h)) {
+            return true;
+        }
+        if (lanBound) {
+            String lanIp = getLocalIpAddress();
+            if (lanIp != null && lanIp.equalsIgnoreCase(h)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isLoopbackIpv4(String h) {
+        if (h == null || !h.startsWith("127.")) return false;
+        String[] parts = h.split("\\.", -1);
+        if (parts.length != 4) return false;
+        for (int i = 0; i < 4; i++) {
+            String seg = parts[i];
+            if (seg.isEmpty() || seg.length() > 3) return false;
+            int val = 0;
+            for (int j = 0; j < seg.length(); j++) {
+                char c = seg.charAt(j);
+                if (c < '0' || c > '9') return false;
+                val = val * 10 + (c - '0');
+            }
+            if (val > 255) return false;
+        }
+        return "127".equals(parts[0]);
     }
 
     public static boolean isLocalOrTrustedOrigin(String origin) {
@@ -377,14 +426,7 @@ public class HttpControlServer {
 
             // CORS preflight
             if ("OPTIONS".equals(method)) {
-                String origin = headers.get("origin");
-                if (!authEnabled && origin != null && !isLocalOrTrustedOrigin(origin)) {
-                    sendJsonResponse(os, 403, new JSONObject()
-                        .put("jsonrpc", "2.0")
-                        .put("error", new JSONObject()
-                            .put("code", -32000)
-                            .put("message", "Forbidden: Cross-origin preflight from external web pages is blocked when MCP token authentication is disabled.")
-                        ));
+                if (!authEnabled && !validateUnauthenticatedHeaders(os, headers)) {
                     socket.close();
                     return;
                 }
@@ -411,14 +453,7 @@ public class HttpControlServer {
                     return;
                 }
             } else {
-                String origin = headers.get("origin");
-                if (origin != null && !isLocalOrTrustedOrigin(origin)) {
-                    sendJsonResponse(os, 403, new JSONObject()
-                        .put("jsonrpc", "2.0")
-                        .put("error", new JSONObject()
-                            .put("code", -32000)
-                            .put("message", "Forbidden: Cross-origin requests from external web pages are blocked when MCP token authentication is disabled.")
-                        ));
+                if (!validateUnauthenticatedHeaders(os, headers)) {
                     socket.close();
                     return;
                 }
@@ -580,6 +615,30 @@ public class HttpControlServer {
         os.flush();
     }
 
+    private boolean validateUnauthenticatedHeaders(OutputStream os, Map<String, String> headers) throws Exception {
+        String host = headers.get("host");
+        if (!isLocalOrTrustedHost(host, mLanBound)) {
+            sendJsonResponse(os, 403, new JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("error", new JSONObject()
+                    .put("code", -32000)
+                    .put("message", "Forbidden: Untrusted Host header blocked when MCP token authentication is disabled.")
+                ));
+            return false;
+        }
+        String origin = headers.get("origin");
+        if (origin != null && !isLocalOrTrustedOrigin(origin)) {
+            sendJsonResponse(os, 403, new JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("error", new JSONObject()
+                    .put("code", -32000)
+                    .put("message", "Forbidden: Cross-origin requests from external web pages are blocked when MCP token authentication is disabled.")
+                ));
+            return false;
+        }
+        return true;
+    }
+
     private void handleMcpStatusGet(OutputStream os) throws Exception {
         JSONObject status = new JSONObject();
         status.put("ok", true);
@@ -618,6 +677,17 @@ public class HttpControlServer {
     }
 
     private void handleSseConnection(Socket socket, OutputStream os) throws Exception {
+        pruneDeadSseSessions();
+        if (mSseSessions.size() >= MAX_SSE_SESSIONS) {
+            sendJsonResponse(os, 503, new JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("error", new JSONObject()
+                    .put("code", -32000)
+                    .put("message", "Service Unavailable: Too many active MCP SSE connections (limit " + MAX_SSE_SESSIONS + ").")
+                ));
+            socket.close();
+            return;
+        }
         socket.setKeepAlive(true);
         socket.setSoTimeout(0);
 
@@ -643,6 +713,17 @@ public class HttpControlServer {
         // Return immediately: this frees the worker thread back to mPool instantly!
         // The SSE stream stays active on its socket, and dead connections / periodic pings
         // are pruned and dispatched by mHeartbeatExecutor without tying up worker threads.
+    }
+
+    private void pruneDeadSseSessions() {
+        for (Map.Entry<String, SseSession> entry : mSseSessions.entrySet()) {
+            String sid = entry.getKey();
+            SseSession session = entry.getValue();
+            if (session.socket.isClosed() || session.socket.isInputShutdown() || session.socket.isOutputShutdown()) {
+                mSseSessions.remove(sid);
+                try { session.socket.close(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     public void sweepAndPingSseSessions() {

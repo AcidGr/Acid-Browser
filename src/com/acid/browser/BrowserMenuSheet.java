@@ -45,7 +45,6 @@ public class BrowserMenuSheet extends AcidBottomSheetView {
         void onOpenModelProviderConfig();
         void onOpenAbout();
         void onOpenMcp();
-        void onToggleMcpServer();
         void onOpenUserscripts();
         void onOpenSkills();
         void onOpenAdBlock();

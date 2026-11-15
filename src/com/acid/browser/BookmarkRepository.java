@@ -29,6 +29,7 @@ public class BookmarkRepository {
     private Runnable mBookmarksMutatedListener;
     private BrowserDataStore.CallbackDispatcher mDispatcher;
     private volatile long mLastSelfSaveTime = 0;
+    private volatile String mLastSyncedJson = null;
 
     public BookmarkRepository(Context context) {
         this(context, null, null);
@@ -185,11 +186,23 @@ public class BookmarkRepository {
                 formatted = arr.toString();
             }
             AcidIo.writeFileUtf8(mBookmarksJsonFile, formatted);
+            mLastSyncedJson = formatted.trim();
             return true;
         } catch (Exception e) {
             Log.w(TAG, "Failed to save bookmarks to " + mBookmarksJsonFile + ": " + e.getMessage(), e);
             return false;
         }
+    }
+
+    public boolean reloadBookmarksFromObserver() {
+        if (mBookmarksJsonFile == null || !mBookmarksJsonFile.exists()) return false;
+        try {
+            String trimmed = AcidIo.readFileUtf8(mBookmarksJsonFile).trim();
+            if (trimmed.isEmpty() || trimmed.equals(mLastSyncedJson)) {
+                return false;
+            }
+        } catch (Exception ignored) {}
+        return reloadBookmarksFromJsonFile();
     }
 
     public synchronized boolean reloadBookmarksFromJsonFile() {
@@ -206,6 +219,7 @@ public class BookmarkRepository {
             }
 
             saveBookmarks(list, false);
+            mLastSyncedJson = jsonStr;
 
             dispatchCallback(new Runnable() {
                 @Override

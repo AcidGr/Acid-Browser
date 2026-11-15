@@ -66,7 +66,8 @@ public final class FaviconManager {
 
     public static synchronized FaviconManager getInstance(Context context) {
         if (sInstance == null) {
-            sInstance = new FaviconManager(context.getApplicationContext());
+            Context appCtx = context.getApplicationContext();
+            sInstance = new FaviconManager(appCtx != null ? appCtx : context);
         }
         return sInstance;
     }
@@ -104,6 +105,26 @@ public final class FaviconManager {
 
     public File getCacheDir() {
         return mCacheDir;
+    }
+
+    /**
+     * Clears in-memory bitmaps, negative-lookup cooldowns, and disk-cached favicons.
+     */
+    public void clearAllCaches() {
+        synchronized (mMemCache) {
+            mMemCache.evictAll();
+        }
+        mNegativeCache.clear();
+        if (mCacheDir != null && mCacheDir.isDirectory()) {
+            File[] files = mCacheDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f != null && f.isFile()) {
+                        f.delete();
+                    }
+                }
+            }
+        }
     }
 
     // =========================================================================

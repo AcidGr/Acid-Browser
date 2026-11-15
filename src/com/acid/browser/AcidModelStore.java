@@ -440,6 +440,7 @@ public class AcidModelStore {
         mSelectedEffort = EFFORT_DEFAULT;
         ensureValidSelection();
         saveToPrefs();
+        legacy.edit().clear().apply();
     }
 
     private void ensureValidSelection() {
@@ -482,18 +483,6 @@ public class AcidModelStore {
             .putString(KEY_SELECTED_MODEL, mSelectedModelId)
             .putString(KEY_SELECTED_EFFORT, mSelectedEffort)
             .apply();
-
-        // Keep legacy preferences synced for any external caller
-        ConfiguredProvider activeP = getActiveProvider();
-        ModelEntry activeM = getActiveModel();
-        if (activeP != null && activeM != null) {
-            mContext.getSharedPreferences(LEGACY_PREF_AGENT, Context.MODE_PRIVATE)
-                .edit()
-                .putString(LEGACY_KEY_BASE_URL, activeP.baseUrl)
-                .putString(LEGACY_KEY_API_KEY, activeP.apiKey)
-                .putString(LEGACY_KEY_MODEL, activeM.id)
-                .apply();
-        }
     }
 
     // =========================================================================

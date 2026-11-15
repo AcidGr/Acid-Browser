@@ -317,37 +317,15 @@ public class UserscriptMeta {
             if ("*".equals(hostPart)) {
                 sb.append("[^/?#@]+");
             } else if (hostPart.startsWith("*.")) {
-                String domain = hostPart.substring(2);
-                sb.append("(?:[^/?#@]+\\.)?").append(Pattern.quote(domain));
+                sb.append("(?:[^/?#@]+\\.)?");
+                appendHostGlob(sb, hostPart.substring(2));
             } else {
-                for (int i = 0; i < hostPart.length(); i++) {
-                    char c = hostPart.charAt(i);
-                    if (c == '*') {
-                        sb.append("[^/?#@]*");
-                    } else if (c == '?') {
-                        sb.append("[^/?#@]");
-                    } else if ("()+[]{}^$|\\.".indexOf(c) >= 0) {
-                        sb.append('\\').append(c);
-                    } else {
-                        sb.append(c);
-                    }
-                }
+                appendHostGlob(sb, hostPart);
             }
 
             // 3. Path part: '*' matches anything within path and query string
             if (!pathPart.isEmpty()) {
-                for (int i = 0; i < pathPart.length(); i++) {
-                    char c = pathPart.charAt(i);
-                    if (c == '*') {
-                        sb.append(".*");
-                    } else if (c == '?') {
-                        sb.append('.');
-                    } else if ("()+[]{}^$|\\.".indexOf(c) >= 0) {
-                        sb.append('\\').append(c);
-                    } else {
-                        sb.append(c);
-                    }
-                }
+                appendGlobChars(sb, pathPart, ".*", ".");
             }
             sb.append("$");
             return sb.toString();
@@ -355,20 +333,28 @@ public class UserscriptMeta {
 
         // Fallback for non-three-part legacy includes
         StringBuilder sb = new StringBuilder("^");
+        appendGlobChars(sb, glob, ".*", ".");
+        sb.append("$");
+        return sb.toString();
+    }
+
+    private static void appendHostGlob(StringBuilder sb, String glob) {
+        appendGlobChars(sb, glob, "[^/?#@]*", "[^/?#@]");
+    }
+
+    private static void appendGlobChars(StringBuilder sb, String glob, String starRegex, String qRegex) {
         for (int i = 0; i < glob.length(); i++) {
             char c = glob.charAt(i);
             if (c == '*') {
-                sb.append(".*");
+                sb.append(starRegex);
             } else if (c == '?') {
-                sb.append('.');
+                sb.append(qRegex);
             } else if ("()+[]{}^$|\\.".indexOf(c) >= 0) {
                 sb.append('\\').append(c);
             } else {
                 sb.append(c);
             }
         }
-        sb.append("$");
-        return sb.toString();
     }
 
     /** Human-readable scope, used by the management sheet and the install dialog. */

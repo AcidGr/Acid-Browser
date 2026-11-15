@@ -153,8 +153,17 @@ public final class AppUpdateChecker {
         if (clean.startsWith("v") || clean.startsWith("V")) {
             clean = clean.substring(1);
         }
+        int sep = -1;
         int dash = clean.indexOf('-');
-        if (dash > 0) clean = clean.substring(0, dash);
+        int plus = clean.indexOf('+');
+        if (dash > 0 && plus > 0) {
+            sep = Math.min(dash, plus);
+        } else if (dash > 0) {
+            sep = dash;
+        } else if (plus > 0) {
+            sep = plus;
+        }
+        if (sep > 0) clean = clean.substring(0, sep);
         String[] segs = clean.split("\\.");
         int[] res = new int[segs.length];
         for (int i = 0; i < segs.length; i++) {

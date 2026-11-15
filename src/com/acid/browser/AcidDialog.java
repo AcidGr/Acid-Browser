@@ -43,10 +43,6 @@ public final class AcidDialog {
         void onItemSelected(Dialog dialog, int which);
     }
 
-    public interface OnMultiChoiceConfirmListener {
-        void onConfirmed(boolean[] checkedItems);
-    }
-
     private static final class CappedScrollView extends ScrollView {
         private final int mMaxHeightPx;
 

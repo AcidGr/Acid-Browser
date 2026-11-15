@@ -120,6 +120,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testBatch1SecurityAndCoreFixes(); }
         });
 
+        // 15. Audit Batch-1 Fixes Regression
+        run("15. Audit Batch-1: SemVer build meta, Userscript glob/header/@unwrap/traversal, Skill dedup, AdBlock $3p, DOM prune, Sandbox MCP/XSS & Host guard", new TestCase() {
+            @Override public void execute() throws Exception { testAuditBatch1Fixes(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -1191,5 +1196,238 @@ public final class TestRunner {
         } finally {
             AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_SYSTEM);
         }
+    }
+
+    // =========================================================================
+    // 15. Audit Batch-1 Fixes Regression
+    // =========================================================================
+
+    private static void testAuditBatch1Fixes() throws Exception {
+        // 1. SemVer build metadata (+build) comparison
+        assertEquals(Integer.valueOf(0), Integer.valueOf(AppUpdateChecker.compareSemVer("0.5.2+fp1", "0.5.2")),
+            "SemVer +build metadata must compare equal to base version");
+        assertTrue(AppUpdateChecker.compareSemVer("0.5.2+fp1", "0.5.3") < 0,
+            "0.5.2+fp1 must be older than 0.5.3");
+        assertTrue(AppUpdateChecker.compareSemVer("0.5.2+2026", "0.5.10") < 0,
+            "0.5.2+2026 must be older than 0.5.10");
+        assertEquals(Integer.valueOf(0), Integer.valueOf(AppUpdateChecker.compareSemVer("v0.5.2-alpha.1+fp2", "0.5.2")),
+            "Pre-release and +build suffixes stripped consistently");
+
+        // 2. UserscriptMeta *.domain.* internal globs
+        assertTrue(UserscriptMeta.globMatches("*://*.google.*/*", "https://www.google.com/search?q=1"),
+            "*.google.* must match www.google.com");
+        assertTrue(UserscriptMeta.globMatches("*://*.google.*/*", "https://mail.google.co.jp/mail"),
+            "*.google.* must match mail.google.co.jp");
+        assertTrue(!UserscriptMeta.globMatches("*://*.google.*/*", "https://evilgoogle.com/"),
+            "*.google.* must not match evilgoogle.com");
+
+        // 3. UserscriptManager header-only @acid-enabled edit + path traversal guard
+        String scriptWithBodyMarker =
+            "// ==UserScript==\n"
+            + "// @name         TestScript\n"
+            + "// @match        https://example.com/*\n"
+            + "// @acid-enabled  true\n"
+            + "// ==/UserScript==\n"
+            + "const marker = \"// @acid-enabled  true\";\n"
+            + "console.log(marker);\n";
+        String disabledContent = UserscriptManager.setAcidEnabledDirective(scriptWithBodyMarker, false);
+        assertTrue(disabledContent.contains("// @acid-enabled  false"), "Header directive toggled to false");
+        assertTrue(disabledContent.contains("const marker = \"// @acid-enabled  true\";"),
+            "Identical @acid-enabled string inside JS body must remain untouched");
+
+        String scriptNoDirective =
+            "// ==UserScript==\n"
+            + "// @name         NoDir\n"
+            + "// @match        https://example.com/*\n"
+            + "// ==/UserScript==\n"
+            + "console.log(1);\n";
+        String insertedDisabled = UserscriptManager.setAcidEnabledDirective(scriptNoDirective, false);
+        assertTrue(insertedDisabled.indexOf("// @acid-enabled  false") > insertedDisabled.indexOf("==UserScript=="),
+            "Inserted after header start");
+        assertTrue(insertedDisabled.indexOf("// @acid-enabled  false") < insertedDisabled.indexOf("==/UserScript=="),
+            "Inserted inside ==UserScript== header block");
+
+        File usDir = File.createTempFile("acid_us_dir_", "_d");
+        usDir.delete();
+        usDir.mkdirs();
+        try {
+            assertEquals(null, UserscriptManager.resolveScriptFile(usDir, "../escape.user.js"),
+                "Parent traversal must be rejected");
+            assertEquals(null, UserscriptManager.resolveScriptFile(usDir, "sub/nested.user.js"),
+                "Subdirectory path must be rejected");
+            assertEquals(null, UserscriptManager.resolveScriptFile(usDir, ""),
+                "Empty script name must be rejected");
+            File okFile = UserscriptManager.resolveScriptFile(usDir, "ok.user.js");
+            assertTrue(okFile != null && okFile.getParentFile().getCanonicalFile().equals(usDir.getCanonicalFile()),
+                "Clean filename resolves inside userscripts dir");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(usDir);
+        }
+
+        // 4. UserscriptShaper @unwrap + native grant secret isolation
+        UserscriptMeta unwrapGrantedMeta = UserscriptMeta.parse("unwrap_granted.user.js",
+            "// ==UserScript==\n// @name UnwrapGrant\n// @match https://example.com/*\n"
+            + "// @unwrap\n// @grant GM_setValue\n// ==/UserScript==\nwindow.testVar = 1;");
+        String shapedSandboxed = UserscriptShaper.shape(unwrapGrantedMeta, null, "secret_tok_abc");
+        assertTrue(!shapedSandboxed.contains("Script Body (@unwrap: page scope)"),
+            "@unwrap with native bridge grant must NOT run unwrapped in page scope");
+        assertTrue(shapedSandboxed.contains("(function(window, unsafeWindow, GM, GM_info"),
+            "@unwrap with native bridge grant stays inside sandboxed closure");
+
+        UserscriptMeta unwrapNoneMeta = UserscriptMeta.parse("unwrap_none.user.js",
+            "// ==UserScript==\n// @name UnwrapNone\n// @match https://example.com/*\n"
+            + "// @unwrap\n// @grant none\n// ==/UserScript==\nwindow.testVar = 2;");
+        String shapedUnwrap = UserscriptShaper.shape(unwrapNoneMeta, null, "secret_tok_abc");
+        assertTrue(shapedUnwrap.contains("Script Body (@unwrap: page scope)"),
+            "@unwrap with @grant none continues using page scope");
+        assertTrue(!shapedUnwrap.contains("secret_tok_abc"),
+            "@unwrap with @grant none never embeds bridge secret");
+
+        // 5. SkillManager directory-first deduplication (<slug>/SKILL.md + <slug>.md)
+        File wsSkillTmp = File.createTempFile("acid_skill_ws_", "_d");
+        wsSkillTmp.delete();
+        wsSkillTmp.mkdirs();
+        try {
+            File demoPkgDir = new File(wsSkillTmp, "skills/demo");
+            demoPkgDir.mkdirs();
+            AcidIo.writeFileUtf8Safe(new File(demoPkgDir, "SKILL.md"), "# Demo Directory Skill\nDirectory package version");
+            AcidIo.writeFileUtf8Safe(new File(wsSkillTmp, "skills/demo.md"), "# Demo Flat Skill\nFlat file version");
+            AcidIo.writeFileUtf8Safe(new File(wsSkillTmp, "skills/other.md"), "# Other Skill\nIndependent skill");
+
+            SkillManager sm = new SkillManager(null, wsSkillTmp);
+            List<SkillManager.SkillMeta> skills = sm.getSkills();
+            int demoCount = 0;
+            SkillManager.SkillMeta demoMeta = null;
+            boolean hasOther = false;
+            for (SkillManager.SkillMeta m : skills) {
+                if ("demo".equalsIgnoreCase(m.name) || m.fileName.startsWith("demo")) {
+                    demoCount++;
+                    demoMeta = m;
+                }
+                if ("other.md".equals(m.fileName)) {
+                    hasOther = true;
+                }
+            }
+            assertEquals(Integer.valueOf(1), Integer.valueOf(demoCount),
+                "Coexisting <slug>/SKILL.md and <slug>.md must deduplicate to 1 skill entry");
+            assertTrue(demoMeta != null && demoMeta.isDirectoryPackage,
+                "Directory package <slug>/SKILL.md must take precedence over flat <slug>.md");
+            assertTrue(hasOther, "Non-duplicate flat skill other.md preserved");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(wsSkillTmp);
+        }
+
+        // 6. AdBlock $3p/$third-party rejection, prefix-only scoped path & element-hiding TLD break
+        AdBlockManager.RuleSet abRs = new AdBlockManager.RuleSet();
+        assertTrue(!AdBlockManager.parseRuleLine("||adutp.com^$third-party", abRs),
+            "Block rule with $third-party option must not become global domain block");
+        assertTrue(!AdBlockManager.parseRuleLine("guanlongfamen.cn$3p", abRs),
+            "Block rule with $3p option must not become global domain block");
+        assertTrue(AdBlockManager.parseRuleLine("||bing.com/ads/", abRs), "Domain path rule parsed");
+        assertTrue(AdBlockManager.isUriBlocked(android.net.Uri.parse("https://bing.com/ads/banner.js"), abRs),
+            "Scoped domain path matches prefix /ads/");
+        assertTrue(!AdBlockManager.isUriBlocked(android.net.Uri.parse("https://bing.com/search?q=https://x/ads/"), abRs),
+            "Scoped domain path must NOT match query substring containing /ads/");
+        AdBlockManager.parseRuleLine("co.uk##.psl-leak", abRs);
+        String pslCss = AdBlockManager.buildIsolatedElementHidingCss(abRs, "shop.co.uk");
+        assertTrue(!pslCss.contains(".psl-leak"), "Element hiding must stop climbing before public suffix co.uk");
+
+        // 7. AcidAgentLoop.pruneHistoryForRequest compacts stale user [Current Browser State] DOM blocks
+        List<JSONObject> hist = new ArrayList<JSONObject>();
+        for (int i = 0; i < 5; i++) {
+            String uContent = (i == 0 ? "Find cheapest flight\n\n" : "Step " + i + "\n\n")
+                + "[Current Browser State]\nURL: https://travel.test/" + i
+                + "\nInteractive Elements (2):\n  [e" + (i * 2 + 1) + "] button \"Btn" + i + "\"\n"
+                + "  [e" + (i * 2 + 2) + "] link \"Lnk" + i + "\"";
+            hist.add(new JSONObject().put("role", "user").put("content", uContent));
+            hist.add(new JSONObject().put("role", "assistant").put("content", "Step " + i + " ack"));
+        }
+        List<JSONObject> pruned = AcidAgentLoop.pruneHistoryForRequest(hist);
+        String oldestUser = pruned.get(0).getString("content");
+        String newestUser = pruned.get(8).getString("content");
+        assertTrue(oldestUser.startsWith("Find cheapest flight"), "Original user prompt text preserved after DOM pruning");
+        assertTrue(!oldestUser.contains("button \"Btn0\""), "Stale user [Current Browser State] DOM elements pruned");
+        assertTrue(newestUser.contains("button \"Btn4\""), "Latest user DOM observation preserved intact");
+
+        // 8. AcidSandboxTools javascript:/data: XSS block & MCP protected write/edit/download guard
+        File wsSbxTmp = File.createTempFile("acid_sbx_b1_", "_d");
+        wsSbxTmp.delete();
+        wsSbxTmp.mkdirs();
+        try {
+            AcidSandboxTools tools = new AcidSandboxTools(null, wsSbxTmp);
+            assertEquals(null, tools.resolveAndValidateNavigationUrl("javascript:alert(1)"),
+                "javascript: scheme blocked in resolveAndValidateNavigationUrl");
+            assertEquals(null, tools.resolveAndValidateNavigationUrl("data:text/html,<h1>x</h1>"),
+                "data: scheme blocked in resolveAndValidateNavigationUrl");
+            assertEquals(null, tools.resolveAndValidateNavigationUrl("vbscript:msgbox(1)"),
+                "vbscript: scheme blocked in resolveAndValidateNavigationUrl");
+
+            AcidSandboxTools.ToolExecResult jsNavRes = tools.executeTool(
+                "browser",
+                new JSONObject().put("action", "navigate").put("url", "javascript:alert(1)"),
+                AcidSandboxTools.ToolSource.AGENT_UI
+            );
+            assertTrue(jsNavRes.outputText.startsWith("Error:"), "browser navigate javascript: returns Error");
+
+            String[] protectedMcpTargets = new String[] {
+                "userscripts/sub/evil.user.js",
+                "homepage/index.html",
+                "settings.json",
+                "skills/injected.md"
+            };
+            for (String p : protectedMcpTargets) {
+                AcidSandboxTools.ToolExecResult wRes = tools.executeTool(
+                    "write",
+                    new JSONObject().put("file_path", p).put("content", "payload"),
+                    AcidSandboxTools.ToolSource.MCP
+                );
+                assertTrue(wRes.outputText.startsWith("Error:"), "MCP write must block " + p);
+            }
+
+            // Pre-create protected files cleanly and verify MCP edit is also blocked
+            AcidIo.writeFileUtf8Safe(new File(wsSbxTmp, "homepage/index.html"), "<html>ok</html>");
+            AcidIo.writeFileUtf8Safe(new File(wsSbxTmp, "settings.json"), "{\"ok\":true}");
+            AcidSandboxTools.ToolExecResult eHomepage = tools.executeTool(
+                "edit",
+                new JSONObject().put("file_path", "homepage/index.html").put("old_string", "ok").put("new_string", "xss"),
+                AcidSandboxTools.ToolSource.MCP
+            );
+            assertTrue(eHomepage.outputText.startsWith("Error:"), "MCP edit must block homepage/index.html");
+
+            AcidSandboxTools.ToolExecResult eSettings = tools.executeTool(
+                "edit",
+                new JSONObject().put("file_path", "settings.json").put("old_string", "true").put("new_string", "false"),
+                AcidSandboxTools.ToolSource.MCP
+            );
+            assertTrue(eSettings.outputText.startsWith("Error:"), "MCP edit must block settings.json");
+
+            AcidSandboxTools.ToolExecResult safeWrite = tools.executeTool(
+                "write",
+                new JSONObject().put("file_path", "notes/hello.txt").put("content", "hi"),
+                AcidSandboxTools.ToolSource.MCP
+            );
+            assertTrue(!safeWrite.outputText.startsWith("Error:"), "MCP write allows ordinary workspace notes");
+
+            AcidSandboxTools.ToolExecResult dlUserJs = tools.executeTool(
+                "browser",
+                new JSONObject().put("action", "download").put("url", "https://example.com/payload.user.js?v=1"),
+                AcidSandboxTools.ToolSource.MCP
+            );
+            assertTrue(dlUserJs.outputText.startsWith("Error:"), "MCP browser download blocks .user.js URL");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(wsSbxTmp);
+        }
+
+        // 9. HttpControlServer unauthenticated Host / Origin validation
+        assertTrue(HttpControlServer.isLocalOrTrustedHost("localhost:3090", false), "localhost trusted");
+        assertTrue(HttpControlServer.isLocalOrTrustedHost("127.0.0.1:3090", false), "127.0.0.1 trusted");
+        assertTrue(HttpControlServer.isLocalOrTrustedHost("[::1]:3090", false), "[::1] trusted");
+        assertTrue(!HttpControlServer.isLocalOrTrustedHost("evil.com:3090", false), "DNS rebinding Host rejected");
+        assertTrue(!HttpControlServer.isLocalOrTrustedHost("127.0.0.1.evil.com:3090", false), "Lookalike loopback rejected");
+        assertTrue(!HttpControlServer.isLocalOrTrustedHost("192.168.1.99:3090", false), "Arbitrary LAN IP rejected when not lanBound");
+        assertTrue(!HttpControlServer.isLocalOrTrustedHost(null, false), "Missing Host rejected");
+        assertTrue(HttpControlServer.isLocalOrTrustedOrigin("http://localhost:3090"), "localhost Origin trusted");
+        assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("null"), "Opaque 'null' Origin rejected");
+        assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("https://evil.com"), "Remote Origin rejected");
     }
 }

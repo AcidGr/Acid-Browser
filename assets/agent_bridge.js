@@ -204,9 +204,17 @@
             return false;
         }
         if (tag === 'label') {
-            // Skip standalone <label> if its associated form control is already visible in DOM
-            if (el.control) return false;
-            return false;
+            // Skip <label> when its associated form control is already visible in DOM to avoid duplicate refs
+            if (el.control) {
+                try {
+                    const ctrlStyle = window.getComputedStyle(el.control);
+                    const ctrlRect = el.control.getBoundingClientRect();
+                    if (isElementVisible(el.control, ctrlRect, ctrlStyle)) {
+                        return false;
+                    }
+                    return true;
+                } catch (e) {}
+            }
         }
         if (INTERACTIVE_TAGS.has(tag)) {
             return true;
@@ -404,10 +412,11 @@
         const marginPx = typeof options.marginPx === 'number' ? options.marginPx : 240;
         const showSom = options.includeSom !== undefined ? !!options.includeSom : somEnabled;
 
-        refMap = {};
-        refMetaMap = {};
+        if (offset === 0) {
+            refMap = {};
+            refMetaMap = {};
+        }
         const items = [];
-        let counter = 0;
         let totalCandidates = 0;
 
         function isRedundantChildOf(el, label, rect, parent) {
@@ -508,8 +517,7 @@
 
                             // Only record item if within the requested [offset, offset + limit) slice
                             if (totalCandidates > offset && items.length < limit) {
-                                counter++;
-                                const ref = 'e' + counter;
+                                const ref = 'e' + totalCandidates;
                                 refMap[ref] = el;
                                 refMetaMap[ref] = {
                                     tag: tag,
@@ -1390,18 +1398,32 @@
         else if (dir === 'right') dx = Math.round(vw * factor);
         else if (dir === 'left') dx = -Math.round(vw * factor);
         else if (dir === 'top') {
-            window.scrollTo({ top: 0, behavior: 'instant' });
-            return { ok: true, scrollY: 0 };
+            if (container === window) {
+                window.scrollTo({ top: 0, behavior: 'instant' });
+            } else {
+                container.scrollTop = 0;
+            }
         } else if (dir === 'bottom') {
-            window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' });
-            return { ok: true, scrollY: window.scrollY };
+            if (container === window) {
+                const fullH = Math.max(
+                    document.documentElement ? document.documentElement.scrollHeight : 0,
+                    document.body ? document.body.scrollHeight : 0
+                );
+                window.scrollTo({ top: fullH, behavior: 'instant' });
+            } else {
+                container.scrollTop = container.scrollHeight;
+            }
+        } else if (container === window) {
+            // No-op for unrecognized direction
         }
 
-        if (container === window) {
-            window.scrollBy({ left: dx, top: dy, behavior: 'instant' });
-        } else {
-            container.scrollLeft += dx;
-            container.scrollTop += dy;
+        if (dir !== 'top' && dir !== 'bottom') {
+            if (container === window) {
+                window.scrollBy({ left: dx, top: dy, behavior: 'instant' });
+            } else {
+                container.scrollLeft += dx;
+                container.scrollTop += dy;
+            }
         }
 
         if (somEnabled) {
@@ -1411,7 +1433,9 @@
         return {
             ok: true,
             direction: dir,
-            scrollY: Math.round(window.scrollY || document.documentElement.scrollTop || 0)
+            scrollY: Math.round(container === window
+                ? (window.scrollY || (document.documentElement ? document.documentElement.scrollTop : 0) || 0)
+                : container.scrollTop)
         };
     }
 

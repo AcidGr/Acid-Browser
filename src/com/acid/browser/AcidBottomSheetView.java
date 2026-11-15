@@ -579,6 +579,10 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         }
     }
 
+    public void markNeedsRenderOnShow() {
+        mNeedsRenderOnShow = true;
+    }
+
     public void refreshActivePage() {
         if (!mPageStack.isEmpty()) {
             notifyTopPagePaused();

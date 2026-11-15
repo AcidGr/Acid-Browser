@@ -175,6 +175,20 @@ public class AcidAgentLoop {
         }
     }
 
+    private static void disconnectQuietly(final HttpURLConnection conn) {
+        if (conn == null) return;
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    conn.disconnect();
+                } catch (Exception ignored) {}
+            }
+        }, "acid-agent-disconnect");
+        t.setDaemon(true);
+        t.start();
+    }
+
     public void stopLoop() {
         mStopRequested = true;
         mPausedForTakeover = false;
@@ -182,12 +196,8 @@ public class AcidAgentLoop {
         mRunGeneration.incrementAndGet();
 
         final HttpURLConnection conn = mActiveConnection;
-        if (conn != null) {
-            try {
-                conn.disconnect();
-            } catch (Exception ignored) {}
-        }
         mActiveConnection = null;
+        disconnectQuietly(conn);
 
         if (mWorkerThread != null) {
             try {
@@ -231,12 +241,8 @@ public class AcidAgentLoop {
         mRunGeneration.incrementAndGet();
 
         final HttpURLConnection conn = mActiveConnection;
-        if (conn != null) {
-            try {
-                conn.disconnect();
-            } catch (Exception ignored) {}
-        }
         mActiveConnection = null;
+        disconnectQuietly(conn);
 
         if (mWorkerThread != null) {
             try {
@@ -450,7 +456,7 @@ public class AcidAgentLoop {
 
             // Guarded ReAct autonomous loop: continues until task completed, stopped by user, takeover requested, or max steps reached
             for (int step = 1; ; step++) {
-                if (mStopRequested || mRunGeneration.get() != runGen) break;
+                if (mStopRequested || mPausedForTakeover || mRunGeneration.get() != runGen) break;
                 if (step > mMaxLoopSteps) {
                     addErrorItem("已达到单次任务最大自主执行步数上限 (" + mMaxLoopSteps + " 步)，智能体已暂停以防止死循环。如需继续，请发送新指令。");
                     break;
@@ -458,9 +464,9 @@ public class AcidAgentLoop {
                 notifyState(true, false, step);
 
                 JSONArray payloadMessages = buildPrunedMessagesForRequest(session);
-                JSONObject responseMsg = callChatCompletionsStream(session, payloadMessages, step);
+                JSONObject responseMsg = callChatCompletionsStream(session, payloadMessages, step, runGen);
 
-                if (mStopRequested || mRunGeneration.get() != runGen || responseMsg == null) break;
+                if (mStopRequested || mPausedForTakeover || mRunGeneration.get() != runGen || responseMsg == null) break;
 
                 String reasoning = responseMsg.optString("reasoning_content", "");
                 String content = responseMsg.isNull("content") ? "" : responseMsg.optString("content", "");
@@ -788,14 +794,17 @@ public class AcidAgentLoop {
         }
 
         // 1. Identify indices of messages that actually contain active DOM observations (with Interactive Elements)
+        // This covers both tool outputs and initial user prompt "[Current Browser State]" blocks.
         List<Integer> domObsIndices = new ArrayList<Integer>();
         for (int i = 0; i < apiMessages.size(); i++) {
             JSONObject m = apiMessages.get(i);
-            if (m != null && "tool".equals(m.optString("role"))) {
-                String content = m.optString("content", "");
-                if (content.contains("Interactive Elements (")) {
-                    domObsIndices.add(i);
-                }
+            if (m == null) continue;
+            String role = m.optString("role");
+            String content = m.optString("content", "");
+            if ("tool".equals(role) && content.contains("Interactive Elements (")) {
+                domObsIndices.add(i);
+            } else if ("user".equals(role) && content.contains("[Current Browser State]") && content.contains("Interactive Elements (")) {
+                domObsIndices.add(i);
             }
         }
 
@@ -821,7 +830,16 @@ public class AcidAgentLoop {
                 try {
                     JSONObject pruned = new JSONObject(orig.toString());
                     String full = orig.optString("content", "");
-                    pruned.put("content", compactOldObservation(full));
+                    if ("user".equals(orig.optString("role"))) {
+                        int marker = full.indexOf("[Current Browser State]");
+                        if (marker >= 0) {
+                            String prefix = full.substring(0, marker);
+                            String compactedSnapshot = compactOldObservation(full.substring(marker));
+                            pruned.put("content", prefix + compactedSnapshot);
+                        }
+                    } else {
+                        pruned.put("content", compactOldObservation(full));
+                    }
                     result.add(pruned);
                 } catch (Exception e) {
                     result.add(orig);
@@ -1082,8 +1100,12 @@ public class AcidAgentLoop {
     private JSONObject callChatCompletionsStream(
         AcidSessionStore.AgentSession session,
         JSONArray messages,
-        int step
+        int step,
+        int runGen
     ) throws Exception {
+        if (mStopRequested || mPausedForTakeover || mRunGeneration.get() != runGen) {
+            return null;
+        }
         String base = getBaseUrl().trim();
         while (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
@@ -1158,8 +1180,8 @@ public class AcidAgentLoop {
         try {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (mStopRequested) {
-                    conn.disconnect();
+                if (mStopRequested || mPausedForTakeover || mRunGeneration.get() != runGen) {
+                    disconnectQuietly(conn);
                     break;
                 }
                 line = line.trim();
@@ -1304,6 +1326,10 @@ public class AcidAgentLoop {
             try {
                 conn.disconnect();
             } catch (Exception ignored) {}
+        }
+
+        if (mStopRequested || mPausedForTakeover || mRunGeneration.get() != runGen) {
+            return null;
         }
 
         // Finalize thinking item

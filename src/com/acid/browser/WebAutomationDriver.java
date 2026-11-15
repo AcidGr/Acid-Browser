@@ -915,10 +915,7 @@ public class WebAutomationDriver {
                     BrowserController.TabSession activeTab = mHost.getTargetTab();
                     if (activeTab != null) {
                         WebView wv = activeTab.webView;
-                        float scale = wv.getScale();
-                        if (scale <= 0.01f) {
-                            scale = mContext.getResources().getDisplayMetrics().density;
-                        }
+                        float scale = getSafeWebViewScale(wv);
                         final float vx = (float) (cssX * scale);
                         final float vy = (float) (cssY * scale);
                         viewXRef.set(vx);
@@ -941,10 +938,7 @@ public class WebAutomationDriver {
                                     return;
                                 }
                                 WebView wv = activeTab.webView;
-                                float scale = wv.getScale();
-                                if (scale <= 0.01f) {
-                                    scale = mContext.getResources().getDisplayMetrics().density;
-                                }
+                                float scale = getSafeWebViewScale(wv);
                                 final float vx = (float) (cssX * scale);
                                 final float vy = (float) (cssY * scale);
                                 viewXRef.set(vx);
@@ -1061,16 +1055,28 @@ public class WebAutomationDriver {
         }
     }
 
+    private float getSafeWebViewScale(WebView wv) {
+        float scale = wv != null ? wv.getScale() : 0f;
+        if (scale <= 0.01f) {
+            scale = mContext.getResources().getDisplayMetrics().density;
+        }
+        return scale > 0.01f ? scale : 1.0f;
+    }
+
     public JSONObject clickCoordinateSync(final float viewX, final float viewY) {
         final boolean isForeground = mHost.isTargetTabActive();
+        final float[] scaleRef = new float[] { getSafeWebViewScale(null) };
         if (isMainLooper()) {
             BrowserController.TabSession targetTab = mHost.getTargetTab();
-            if (targetTab != null && isForeground) {
-                AgentOverlayView overlay = mHost.getOverlayView();
-                if (overlay != null) {
-                    overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
+            if (targetTab != null) {
+                scaleRef[0] = getSafeWebViewScale(targetTab.webView);
+                if (isForeground) {
+                    AgentOverlayView overlay = mHost.getOverlayView();
+                    if (overlay != null) {
+                        overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
+                    }
+                    dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
                 }
-                dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
             }
         } else {
             final CountDownLatch latch = new CountDownLatch(1);
@@ -1079,12 +1085,15 @@ public class WebAutomationDriver {
                 public void run() {
                     try {
                         BrowserController.TabSession targetTab = mHost.getTargetTab();
-                        if (targetTab != null && targetTab.webView != null && isForeground) {
-                            AgentOverlayView overlay = mHost.getOverlayView();
-                            if (overlay != null) {
-                                overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
+                        if (targetTab != null && targetTab.webView != null) {
+                            scaleRef[0] = getSafeWebViewScale(targetTab.webView);
+                            if (isForeground) {
+                                AgentOverlayView overlay = mHost.getOverlayView();
+                                if (overlay != null) {
+                                    overlay.showClickPulse(viewX, viewY, "(" + Math.round(viewX) + "," + Math.round(viewY) + ")");
+                                }
+                                dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
                             }
-                            dispatchHardwareMotionTap(targetTab.webView, viewX, viewY);
                         }
                     } catch (Throwable t) {
                         Log.w(TAG, "Coordinate click failed on UI thread: " + t.getMessage());
@@ -1101,7 +1110,9 @@ public class WebAutomationDriver {
             }
         }
         if (!isForeground) {
-            evaluateJsSync("(function(){ var el = document.elementFromPoint(" + viewX + "," + viewY + "); if (el) el.click(); })()", 2000);
+            float cssX = viewX / scaleRef[0];
+            float cssY = viewY / scaleRef[0];
+            evaluateJsSync("(function(){ var el = document.elementFromPoint(" + cssX + "," + cssY + "); if (el) el.click(); })()", 2000);
         }
         mHost.emitLog("[CLICK] Coordinate (" + Math.round(viewX) + ", " + Math.round(viewY) + ")" + (!isForeground ? " [bg-elementFromPoint]" : ""));
         JSONObject res = new JSONObject();

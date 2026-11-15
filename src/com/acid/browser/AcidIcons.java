@@ -373,8 +373,8 @@ public class AcidIcons {
                 break;
 
             case ICON_CLICK:
-                // SVG Target Click Ripple + Arrow
-                p.addPath(parseSvgPath("M 5 12 A 7 7 0 1 1 16 5.8"));
+                // Target Click Ripple + Arrow (uses native addArc because parseSvgPath omits 'A')
+                p.addArc(new RectF(4.5f, 4.5f, 18.5f, 18.5f), 105f, 200f);
                 p.addCircle(11.5f, 11.5f, 2.5f, Path.Direction.CW);
                 p.addPath(parseSvgPath("M 13.5 13.5 L 20.5 16.5 L 17.2 18 L 19.2 21 L 17.5 22 L 15.5 19 L 13.5 21 Z"));
                 break;

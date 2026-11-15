@@ -236,6 +236,14 @@ public class UserscriptManager {
         });
     }
 
+    private UserscriptMeta findScriptByFileName(String fileName) {
+        if (fileName == null || fileName.isEmpty()) return null;
+        for (UserscriptMeta m : loadedScripts()) {
+            if (fileName.equals(m.fileName)) return m;
+        }
+        return null;
+    }
+
     /** Tells every tab's listeners about a write; the writing tab sees remote=false. */
     private void broadcastValueChange(final UserscriptNativeBridge origin, final String scriptId,
                                       final String name, final Object oldValue, final Object newValue) {
@@ -243,6 +251,7 @@ public class UserscriptManager {
         synchronized (mBridges) {
             all = new ArrayList<UserscriptNativeBridge>(mBridges.values());
         }
+        final UserscriptMeta targetMeta = findScriptByFileName(scriptId);
         final String oldJs = jsLiteral(oldValue);
         final String newJs = jsLiteral(newValue);
         AcidAsync.postToMain(new Runnable() {
@@ -251,6 +260,13 @@ public class UserscriptManager {
                 for (UserscriptNativeBridge b : all) {
                     WebView wv = b.getWebView();
                     if (wv == null) continue;
+                    String wvUrl = null;
+                    try {
+                        wvUrl = wv.getUrl();
+                    } catch (Exception ignored) {}
+                    if (targetMeta != null && (wvUrl == null || !targetMeta.appliesTo(wvUrl))) {
+                        continue;
+                    }
                     String js = "try{var f=window.__acid_gm_vc&&window.__acid_gm_vc["
                         + JSONObject.quote(scriptId) + "];if(f)f(" + JSONObject.quote(name) + ","
                         + oldJs + "," + newJs + "," + (b != origin) + ");}catch(e){}";
@@ -668,52 +684,73 @@ public class UserscriptManager {
         boolean wasEnabled = meta.enabled;
         UserscriptMeta fresh = UserscriptMeta.parse(meta.fileName, content);
         if (!fresh.hasMetadata) return "更新内容缺少元数据块";
-        String err = installUserscript(meta.fileName, content);
-        if (err != null) return err;
-        if (!wasEnabled) setScriptEnabled(meta.fileName, false);
-        invalidateCache();
+        String finalContent = wasEnabled ? content : setAcidEnabledDirective(content, false);
+        return installUserscript(meta.fileName, finalContent);
+    }
+
+    private File resolveScriptFile(String name) {
+        return resolveScriptFile(mUserscriptsDir, name);
+    }
+
+    static File resolveScriptFile(File userscriptsDir, String name) {
+        if (userscriptsDir == null || name == null || name.trim().isEmpty()) return null;
+        try {
+            File dirCanon = userscriptsDir.getCanonicalFile();
+            File f = new File(userscriptsDir, name).getCanonicalFile();
+            File parent = f.getParentFile();
+            if (parent != null && parent.equals(dirCanon)) {
+                return f;
+            }
+        } catch (Exception ignored) {}
         return null;
     }
 
     public boolean deleteUserscript(String name) {
-        if (name == null) return false;
-        File f = new File(mUserscriptsDir, name);
-        if (f.exists() && f.isFile()) {
+        File f = resolveScriptFile(name);
+        if (f != null && f.exists() && f.isFile()) {
             boolean ok = f.delete();
-            if (ok) invalidateCache();
+            if (ok) {
+                mStorage.clear(f.getName());
+                invalidateCache();
+            }
             return ok;
         }
         return false;
     }
 
     public boolean setScriptEnabled(String fileName, boolean enabled) {
-        if (fileName == null) return false;
-        File f = new File(mUserscriptsDir, fileName);
-        if (!f.exists()) return false;
+        File f = resolveScriptFile(fileName);
+        if (f == null || !f.exists() || !f.isFile()) return false;
         String content = AcidIo.readFileUtf8OrEmpty(f, MAX_SCRIPT_BYTES);
         if (content.isEmpty()) return false;
 
-        String pattern = "(?m)^\\s*//+\\s*@acid-enabled\\s+.*$";
-        String replacement = "// @acid-enabled  " + enabled;
-        String newContent;
-        if (Pattern.compile(pattern).matcher(content).find()) {
-            newContent = content.replaceAll(pattern, replacement);
-        } else {
-            int end = content.indexOf("==/UserScript==");
-            if (end >= 0) {
-                int lineStart = content.lastIndexOf('\n', end);
-                if (lineStart >= 0) {
-                    newContent = content.substring(0, lineStart + 1) + replacement + "\n" + content.substring(lineStart + 1);
-                } else {
-                    newContent = replacement + "\n" + content;
-                }
-            } else {
-                newContent = replacement + "\n" + content;
-            }
-        }
+        String newContent = setAcidEnabledDirective(content, enabled);
         boolean ok = AcidIo.writeFileUtf8Safe(f, newContent);
         if (ok) invalidateCache();
         return ok;
+    }
+
+    static String setAcidEnabledDirective(String content, boolean enabled) {
+        if (content == null) return "";
+        String directive = "// @acid-enabled  " + enabled;
+        int metaStart = content.indexOf("==UserScript==");
+        int metaEnd = content.indexOf("==/UserScript==");
+        if (metaStart >= 0 && metaEnd > metaStart) {
+            String before = content.substring(0, metaStart);
+            String header = content.substring(metaStart, metaEnd);
+            String after = content.substring(metaEnd);
+            String pattern = "(?m)^\\s*//+\\s*@acid-enabled\\s+.*$";
+            if (Pattern.compile(pattern).matcher(header).find()) {
+                header = header.replaceAll(pattern, directive);
+                return before + header + after;
+            }
+            int lineStart = content.lastIndexOf('\n', metaEnd);
+            if (lineStart >= metaStart) {
+                return content.substring(0, lineStart + 1) + directive + "\n" + content.substring(lineStart + 1);
+            }
+            return before + header + "\n" + directive + "\n" + after;
+        }
+        return directive + "\n" + content;
     }
 
     private String safeFileName(String name) {
