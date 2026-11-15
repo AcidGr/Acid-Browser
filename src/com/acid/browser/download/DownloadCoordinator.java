@@ -821,7 +821,13 @@ public class DownloadCoordinator {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
             fileName = sanitizeDownloadFileName(fileName);
-            File destDir = getDownloadDestinationDir();
+            File publicDir = null;
+            try {
+                publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            } catch (Throwable ignored) {}
+            File destDir = (publicDir != null && publicDir.exists() && publicDir.isDirectory())
+                ? publicDir
+                : getDownloadDestinationDir();
             purgeSavedOrFailedDuplicatesForUrl(url, destDir);
             String safeFileName = generateUniqueFileName(destDir, fileName);
             String effectiveMime = resolveMimeType(safeFileName, mimeType);
@@ -895,7 +901,13 @@ public class DownloadCoordinator {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
             fileName = sanitizeDownloadFileName(fileName);
-            File destDir = getDownloadDestinationDir();
+            File publicDir = null;
+            try {
+                publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            } catch (Throwable ignored) {}
+            File destDir = (publicDir != null && publicDir.exists() && publicDir.isDirectory())
+                ? publicDir
+                : getDownloadDestinationDir();
             purgeSavedOrFailedDuplicatesForUrl(url, destDir);
             String safeFileName = generateUniqueFileName(destDir, fileName);
             String effectiveMime = resolveMimeType(safeFileName, mimeType);
@@ -1336,31 +1348,36 @@ public class DownloadCoordinator {
     public void openDownloadedFile(DownloadItem it, boolean forceChooser) {
         if (it == null) return;
         try {
-            File dir = getDownloadDestinationDir();
-            File file = new File(dir, it.fileName);
-            if (!file.exists() && mContext != null) {
-                File fallbackDir = new File(mContext.getExternalFilesDir(null), "Download");
-                File fallbackFile = new File(fallbackDir, it.fileName);
-                if (fallbackFile.exists()) {
-                    file = fallbackFile;
-                } else if (mContext.getFilesDir() != null) {
-                    File internalDir = new File(mContext.getFilesDir(), "Download");
-                    File internalFile = new File(internalDir, it.fileName);
-                    if (internalFile.exists()) {
-                        file = internalFile;
-                    }
+            Uri uri = null;
+            DownloadManager dm = (mContext != null)
+                ? (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE)
+                : null;
+
+            if (it.isSystemDownload && dm != null && it.downloadId > 0) {
+                uri = dm.getUriForDownloadedFile(it.downloadId);
+            }
+
+            if (uri == null) {
+                File publicCandidate = null;
+                if (it.isSystemDownload) {
+                    try {
+                        File publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                        if (publicDir != null) {
+                            File candidate = new File(publicDir, it.fileName);
+                            if (candidate.exists()) {
+                                publicCandidate = candidate;
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                File file = resolveExistingDownloadFile(it.fileName, publicCandidate);
+                if (file != null && file.exists()) {
+                    uri = AcidFileProvider.getUriForFile(file);
                 }
             }
 
-            Uri uri = null;
-            if (file.exists()) {
-                uri = AcidFileProvider.getUriForFile(file);
-            }
-            if (uri == null && mContext != null) {
-                DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null && it.downloadId > 0) {
-                    uri = dm.getUriForDownloadedFile(it.downloadId);
-                }
+            if (uri == null && dm != null && it.downloadId > 0) {
+                uri = dm.getUriForDownloadedFile(it.downloadId);
             }
 
             if (uri == null) {
@@ -1435,6 +1452,15 @@ public class DownloadCoordinator {
         }
         File dir = getDownloadDestinationDir();
         File file = new File(dir, fileName);
+        if (!file.exists()) {
+            try {
+                File publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                if (publicDir != null) {
+                    File publicFile = new File(publicDir, fileName);
+                    if (publicFile.exists()) return publicFile;
+                }
+            } catch (Throwable ignored) {}
+        }
         if (!file.exists() && mContext != null) {
             File extFiles = mContext.getExternalFilesDir(null);
             if (extFiles != null) {

@@ -267,10 +267,22 @@ public class UserscriptSheet extends AcidBottomSheetView {
     // LEVEL 2: Script Detail Page (Promoted from Cramped Dialog)
     // =========================================================================
 
-    private SheetPage buildScriptDetailPage(final UserscriptMeta meta) {
-        return new SheetPage(meta.name, new FullPageRenderer() {
+    private UserscriptMeta findScriptMetaByFileName(String fileName) {
+        if (mManager == null || fileName == null) return null;
+        List<UserscriptMeta> list = mManager.getScripts();
+        for (int i = 0; i < list.size(); i++) {
+            UserscriptMeta m = list.get(i);
+            if (fileName.equals(m.fileName)) return m;
+        }
+        return null;
+    }
+
+    private SheetPage buildScriptDetailPage(final UserscriptMeta initialMeta) {
+        return new SheetPage(initialMeta.name, new FullPageRenderer() {
             @Override
             public void render(LinearLayout pinned, LinearLayout container, LinearLayout footer) {
+                UserscriptMeta latest = findScriptMetaByFileName(initialMeta.fileName);
+                final UserscriptMeta meta = (latest != null) ? latest : initialMeta;
                 final Context ctx = getContext();
                 int accent = AcidTheme.accent(mIsDarkMode);
                 boolean en = AcidLocale.isEn();
@@ -381,7 +393,8 @@ public class UserscriptSheet extends AcidBottomSheetView {
         }).withRawTitle().withAction(AcidIcons.ICON_TRASH, "删除", AcidTheme.COLOR_RED, new OnClickListener() {
             @Override
             public void onClick(View v) {
-                confirmDelete(meta);
+                UserscriptMeta cur = findScriptMetaByFileName(initialMeta.fileName);
+                confirmDelete(cur != null ? cur : initialMeta);
             }
         });
     }
@@ -551,7 +564,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
         AcidAsync.run(new AcidAsync.Task<String>() {
             @Override
             public String execute() throws Exception {
-                return AcidHttp.fetchText(url, 8000, 12000, AcidHttp.DEFAULT_MAX_BYTES);
+                return AcidHttp.fetchText(url, 8000, 12000, UserscriptManager.MAX_SCRIPT_BYTES);
             }
         }, new AcidAsync.Callback<String>() {
             @Override

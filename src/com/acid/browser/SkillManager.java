@@ -411,6 +411,8 @@ public class SkillManager {
             if (entryMd != null) {
                 String key = normalizeSkillKey(fname);
                 if (seenKeys.contains(key)) continue;
+                // Builtin skills must never be shadowed by an arbitrary subdirectory package
+                if (isBuiltin(key + ".md") || isBuiltin(key)) continue;
                 List<String> companions = new ArrayList<String>();
                 long[] sizeAndMod = new long[] { 0L, entryMd.lastModified() };
                 collectDirectoryFiles(f, f, entryMd, companions, sizeAndMod);
@@ -538,6 +540,13 @@ public class SkillManager {
             return null;
         }
 
+        if (!clean.contains("/") && (isBuiltin(clean) || isBuiltin(clean + ".md"))) {
+            String flatName = clean.toLowerCase(Locale.US).endsWith(".md") ? clean : (clean + ".md");
+            File flatBuiltin = new File(mSkillsDir, flatName);
+            if (flatBuiltin.exists() && flatBuiltin.isFile()) {
+                return flatBuiltin;
+            }
+        }
         if (direct.exists() && direct.isDirectory()) {
             File entry = findDirectorySkillEntry(direct);
             if (entry != null) return entry;
@@ -804,8 +813,11 @@ public class SkillManager {
                     idx++;
 
                     if ("---".equals(trimmed) || "...".equals(trimmed)) {
-                        if ("description".equals(activeKey) && multiVal.length() > 0) {
-                            yamlDesc = multiVal.toString().trim();
+                        if (multiVal.length() > 0) {
+                            String flushed = multiVal.toString().trim();
+                            if ("name".equals(activeKey)) yamlName = flushed;
+                            else if ("title".equals(activeKey)) yamlTitle = flushed;
+                            else if ("description".equals(activeKey)) yamlDesc = flushed;
                         }
                         break;
                     }
@@ -820,8 +832,11 @@ public class SkillManager {
                     }
 
                     // Flush previous multi-line key if any
-                    if ("description".equals(activeKey) && multiVal.length() > 0) {
-                        yamlDesc = multiVal.toString().trim();
+                    if (multiVal.length() > 0) {
+                        String flushed = multiVal.toString().trim();
+                        if ("name".equals(activeKey)) yamlName = flushed;
+                        else if ("title".equals(activeKey)) yamlTitle = flushed;
+                        else if ("description".equals(activeKey)) yamlDesc = flushed;
                     }
                     activeKey = "";
                     multiVal.setLength(0);
@@ -836,8 +851,12 @@ public class SkillManager {
                             String cleanVal = unquoteYaml(val);
                             if ("name".equals(key)) {
                                 yamlName = cleanVal;
+                                activeKey = "name";
+                                multiVal.append(cleanVal);
                             } else if ("title".equals(key)) {
                                 yamlTitle = cleanVal;
+                                activeKey = "title";
+                                multiVal.append(cleanVal);
                             } else if ("description".equals(key)) {
                                 yamlDesc = cleanVal;
                                 activeKey = "description";

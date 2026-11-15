@@ -167,6 +167,8 @@ public class AcidDownloader {
         synchronized (task) {
             task.isPaused = false;
             task.isCanceled = false;
+            task.errorMessage = null;
+            task.completedAt = 0L;
             task.status = DownloadTask.STATUS_PENDING;
             runGen = task.nextGeneration();
         }
@@ -287,6 +289,10 @@ public class AcidDownloader {
                         }
                         if (probe.responseCode >= 400 && probe.responseCode != 416) {
                             failedResumeCode = probe.responseCode;
+                        } else if (probe.responseCode == 416) {
+                            // Server rejected Range (e.g. offset past modified resource): restart fresh cleanly
+                            resumed = false;
+                            task.cleanCheckpointFile();
                         } else if (probe.contentLength > 0 && task.contentLength > 0 && probe.contentLength != task.contentLength) {
                             // Remote size changed! Checkpoint is obsolete
                             resumed = false;

@@ -60,6 +60,8 @@ def main():
             except Exception:
                 parsed_err = None
             if isinstance(parsed_err, dict) and "jsonrpc" in parsed_err:
+                if "id" not in parsed_err or (parsed_err.get("id") is None and isinstance(req_data, dict) and "id" in req_data):
+                    parsed_err["id"] = req_data.get("id")
                 sys.stdout.write(json.dumps(parsed_err) + "\n")
                 sys.stdout.flush()
                 continue

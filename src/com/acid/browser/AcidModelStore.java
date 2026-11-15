@@ -12,8 +12,10 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * DSH-Inspired Model & Provider Catalog Store for Acid Browser.
@@ -661,13 +663,24 @@ public class AcidModelStore {
             @Override
             public void run() {
                 try {
-                    List<ModelEntry> list = fetchModelsSync(baseUrl, apiKey);
+                    final List<ModelEntry> list = fetchModelsSync(baseUrl, apiKey);
                     if (callback != null) {
-                        callback.onModelsDiscovered(list);
+                        AcidAsync.postToMain(new Runnable() {
+                            @Override
+                            public void run() {
+                                callback.onModelsDiscovered(list);
+                            }
+                        });
                     }
-                } catch (Exception e) {
+                } catch (final Exception e) {
                     if (callback != null) {
-                        callback.onDiscoveryFailed(e.getMessage() != null ? e.getMessage() : e.toString());
+                        final String errMsg = e.getMessage() != null ? e.getMessage() : e.toString();
+                        AcidAsync.postToMain(new Runnable() {
+                            @Override
+                            public void run() {
+                                callback.onDiscoveryFailed(errMsg);
+                            }
+                        });
                     }
                 }
             }
@@ -687,19 +700,37 @@ public class AcidModelStore {
         }
         String url = base.endsWith("/models") ? base : (base + "/models");
 
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(15000);
-        conn.setRequestProperty("Accept", "application/json");
+        Map<String, String> headers = new HashMap<String, String>();
+        headers.put("Accept", "application/json");
         if (apiKey != null && !apiKey.trim().isEmpty()) {
-            conn.setRequestProperty("Authorization", "Bearer " + apiKey.trim());
+            headers.put("Authorization", "Bearer " + apiKey.trim());
         }
 
-        int code = conn.getResponseCode();
-        InputStream is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
-        String respStr = AcidIo.readStreamUtf8(is);
-        conn.disconnect();
+        HttpURLConnection conn = null;
+        InputStream is = null;
+        int code;
+        String respStr;
+        try {
+            conn = AcidHttp.openConnectionWithRedirects(
+                url,
+                "GET",
+                headers,
+                10000,
+                15000,
+                AcidHttp.MAX_REDIRECTS,
+                AcidHttp.createDownloadValidator(url),
+                AcidHttp.SAME_ORIGIN_CREDENTIALS,
+                null
+            );
+            code = conn.getResponseCode();
+            is = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
+            respStr = AcidIo.readStreamUtf8(is);
+        } finally {
+            AcidIo.closeQuietly(is);
+            if (conn != null) {
+                try { conn.disconnect(); } catch (Exception ignored) {}
+            }
+        }
 
         if (code < 200 || code >= 300) {
             throw new Exception("HTTP " + code + (code == 401 || code == 403 ? " (请检查 API Key)" : "") + ": " +

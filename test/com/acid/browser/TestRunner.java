@@ -147,6 +147,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testPostAudit2Regressions(); }
         });
 
+        // 19. Deep Audit Round-3 P0 & P1 Regressions
+        run("19. Round-3 P0/P1 Fixes: SSRF Port/Host Pinning, Favicon Local Probe, ModelStore Async & Redirect, MCP mLanBound & JSON-RPC id, Sandbox .user.js/SkillPkg, Userscript Log/Probe/HTTP, AdBlock Wildcard, Downloader 416", new TestCase() {
+            @Override public void execute() throws Exception { testPostAudit3Regressions(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2475,5 +2480,627 @@ public final class TestRunner {
         } finally {
             SkillStorageVault.deleteRecursiveSafe(fpDir);
         }
+    }
+
+    // =========================================================================
+    // 19. Deep Audit Round-3 P0 & P1 Regressions
+    // =========================================================================
+
+    private static void testPostAudit3Regressions() throws Exception {
+        // 1. AcidHttp.createDownloadValidator: strict host + port pinning & .localhost/.lan SSRF blocks
+        AcidHttp.UrlValidator loopVal = AcidHttp.createDownloadValidator("http://127.0.0.1:18080/file.bin");
+        loopVal.validate(new URL("http://127.0.0.1:18080/chunk"));
+        String[] loopRejected = new String[] {
+            "http://127.0.0.1:18081/chunk",
+            "http://127.0.0.2:18080/chunk",
+            "http://[::1]:18080/chunk",
+            "http://localhost:18080/chunk"
+        };
+        for (String bad : loopRejected) {
+            boolean blocked = false;
+            try {
+                loopVal.validate(new URL(bad));
+            } catch (IOException expected) {
+                blocked = true;
+            }
+            assertTrue(blocked, "createDownloadValidator(127.0.0.1:18080) rejects mismatched local target: " + bad);
+        }
+
+        AcidHttp.UrlValidator localhostVal = AcidHttp.createDownloadValidator("http://localhost:19000/a");
+        localhostVal.validate(new URL("http://localhost:19000/b"));
+        boolean localhostPortBlocked = false;
+        try {
+            localhostVal.validate(new URL("http://localhost:19001/b"));
+        } catch (IOException expected) {
+            localhostPortBlocked = true;
+        }
+        assertTrue(localhostPortBlocked, "createDownloadValidator(localhost:19000) rejects different port");
+        boolean localhostToIpBlocked = false;
+        try {
+            localhostVal.validate(new URL("http://127.0.0.1:19000/b"));
+        } catch (IOException expected) {
+            localhostToIpBlocked = true;
+        }
+        assertTrue(localhostToIpBlocked, "createDownloadValidator(localhost) rejects raw IP literal cross-host");
+
+        AcidHttp.UrlValidator pubVal = AcidHttp.createDownloadValidator("https://example.com/app.apk");
+        for (String priv : new String[] {
+            "http://127.0.0.1/x", "http://service.localhost/x", "http://printer.lan/x", "http://router.local/x"
+        }) {
+            boolean blocked = false;
+            try {
+                pubVal.validate(new URL(priv));
+            } catch (IOException expected) {
+                blocked = true;
+            }
+            assertTrue(blocked, "Public download validator blocks local/internal redirect target: " + priv);
+        }
+        boolean dotLocalhostBlocked = false;
+        try {
+            AcidHttp.validateHttpTargetForSsrf(new URL("http://app.localhost/"), true, "ssrf-test");
+        } catch (SecurityException expected) {
+            dotLocalhostBlocked = true;
+        }
+        assertTrue(dotLocalhostBlocked, "validateHttpTargetForSsrf blocks .localhost domain");
+        boolean dotLanBlocked = false;
+        try {
+            AcidHttp.validateHttpTargetForSsrf(new URL("http://printer.lan/"), true, "ssrf-test");
+        } catch (SecurityException expected) {
+            dotLanBlocked = true;
+        }
+        assertTrue(dotLanBlocked, "validateHttpTargetForSsrf blocks .lan domain");
+
+        // 2. FaviconManager local probe uses scoped createDownloadValidator instead of REMOTE_FETCH_VALIDATOR
+        assertTrue(FaviconManager.isLocalOrIpHost("127.0.0.1"), "isLocalOrIpHost recognizes 127.0.0.1");
+        assertTrue(!FaviconManager.isLocalOrIpHost("example.com"), "isLocalOrIpHost returns false for public domain");
+        final ServerSocket favServer = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+        final int favPort = favServer.getLocalPort();
+        Thread favThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!favServer.isClosed()) {
+                    try {
+                        Socket s = favServer.accept();
+                        try {
+                            BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.US_ASCII));
+                            String req = r.readLine();
+                            String l;
+                            while ((l = r.readLine()) != null && !l.isEmpty()) {}
+                            OutputStream out = s.getOutputStream();
+                            if (req != null && req.contains("/redir-port")) {
+                                out.write(("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:" + (favPort + 1) + "/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                            } else {
+                                byte[] body = "ICO-DATA".getBytes(StandardCharsets.US_ASCII);
+                                out.write(("HTTP/1.1 200 OK\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                                out.write(body);
+                            }
+                            out.flush();
+                        } finally {
+                            s.close();
+                        }
+                    } catch (Exception ignored) {
+                        break;
+                    }
+                }
+            }
+        });
+        favThread.setDaemon(true);
+        favThread.start();
+        try {
+            String localFavUrl = "http://127.0.0.1:" + favPort + "/favicon.ico";
+            assertTrue(FaviconManager.fetchUrlBytes(localFavUrl) == null,
+                "Default REMOTE_FETCH_VALIDATOR fetchUrlBytes blocks loopback IP");
+            byte[] okFavBytes = FaviconManager.fetchUrlBytes(localFavUrl, AcidHttp.createDownloadValidator(localFavUrl));
+            assertEquals("ICO-DATA", okFavBytes != null ? new String(okFavBytes, StandardCharsets.US_ASCII) : "",
+                "Scoped local FaviconManager fetchUrlBytes downloads local router/nas favicon");
+            String redirFavUrl = "http://127.0.0.1:" + favPort + "/redir-port";
+            assertTrue(FaviconManager.fetchUrlBytes(redirFavUrl, AcidHttp.createDownloadValidator(redirFavUrl)) == null,
+                "Scoped local FaviconManager fetchUrlBytes rejects redirect to different port");
+        } finally {
+            try { favServer.close(); } catch (Exception ignored) {}
+        }
+
+        // 3. AcidModelStore.discoverModelsAsync uses AcidHttp redirects safely & invokes callback cleanly
+        final ServerSocket modelServer = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+        final int modelPort = modelServer.getLocalPort();
+        final String[] capturedModelAuth = new String[1];
+        Thread modelThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!modelServer.isClosed()) {
+                    try {
+                        Socket s = modelServer.accept();
+                        try {
+                            BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.US_ASCII));
+                            String req = r.readLine();
+                            String authHeader = null;
+                            String l;
+                            while ((l = r.readLine()) != null && !l.isEmpty()) {
+                                if (l.toLowerCase(java.util.Locale.ROOT).startsWith("authorization:")) {
+                                    authHeader = l.substring("authorization:".length()).trim();
+                                }
+                            }
+                            OutputStream out = s.getOutputStream();
+                            if (req != null && req.contains("/v1/models")) {
+                                out.write(("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:" + modelPort + "/v2/models\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                            } else if (req != null && req.contains("/evil/models")) {
+                                out.write(("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.2:" + modelPort + "/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                            } else {
+                                capturedModelAuth[0] = authHeader;
+                                byte[] json = "{\"data\":[{\"id\":\"m1\",\"name\":\"Model One\"}]}".getBytes(StandardCharsets.UTF_8);
+                                out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + json.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                                out.write(json);
+                            }
+                            out.flush();
+                        } finally {
+                            s.close();
+                        }
+                    } catch (Exception ignored) {
+                        break;
+                    }
+                }
+            }
+        });
+        modelThread.setDaemon(true);
+        modelThread.start();
+        try {
+            final CountDownLatch okLatch = new CountDownLatch(1);
+            final List<AcidModelStore.ModelEntry> discovered = new ArrayList<AcidModelStore.ModelEntry>();
+            final String[] okErr = new String[1];
+            AcidModelStore.discoverModelsAsync("http://127.0.0.1:" + modelPort + "/v1", "test-key",
+                new AcidModelStore.ModelDiscoveryCallback() {
+                    @Override public void onModelsDiscovered(List<AcidModelStore.ModelEntry> models) {
+                        if (models != null) discovered.addAll(models);
+                        okLatch.countDown();
+                    }
+                    @Override public void onDiscoveryFailed(String errorMsg) {
+                        okErr[0] = errorMsg;
+                        okLatch.countDown();
+                    }
+                });
+            assertTrue(okLatch.await(5, TimeUnit.SECONDS), "discoverModelsAsync completes within timeout");
+            assertTrue(okErr[0] == null, "discoverModelsAsync succeeds after same-origin redirect: " + okErr[0]);
+            assertEquals(Integer.valueOf(1), Integer.valueOf(discovered.size()), "Discovers 1 model");
+            assertEquals("m1", discovered.get(0).id, "Discovered model id matches m1");
+            assertEquals("Bearer test-key", capturedModelAuth[0], "Same-origin redirect preserves Authorization header");
+
+            final CountDownLatch failLatch = new CountDownLatch(1);
+            final String[] evilErr = new String[1];
+            AcidModelStore.discoverModelsAsync("http://127.0.0.1:" + modelPort + "/evil", "test-key",
+                new AcidModelStore.ModelDiscoveryCallback() {
+                    @Override public void onModelsDiscovered(List<AcidModelStore.ModelEntry> models) {
+                        failLatch.countDown();
+                    }
+                    @Override public void onDiscoveryFailed(String errorMsg) {
+                        evilErr[0] = errorMsg;
+                        failLatch.countDown();
+                    }
+                });
+            assertTrue(failLatch.await(5, TimeUnit.SECONDS), "Blocked redirect fires onDiscoveryFailed");
+            assertTrue(evilErr[0] != null && !evilErr[0].isEmpty(), "Cross-host loopback redirect failed safely");
+        } finally {
+            try { modelServer.close(); } catch (Exception ignored) {}
+        }
+
+        // 4. HttpControlServer synchronous mLanBound & JSON-RPC "id" field on 401/403 + BrowserDataStore listener check
+        File mcpRepoDir = File.createTempFile("acid_r3_mcp_", "_dir");
+        mcpRepoDir.delete();
+        mcpRepoDir.mkdirs();
+        int freePort;
+        ServerSocket probeSock = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
+        freePort = probeSock.getLocalPort();
+        probeSock.close();
+        BrowserDataStore lanStore = new BrowserDataStore(
+            new InMemoryPrefs(), new InMemoryPrefs(),
+            new File(mcpRepoDir, "settings.json"),
+            new File(mcpRepoDir, "bookmarks.json"),
+            new File(mcpRepoDir, "history.json"));
+        assertTrue(!lanStore.hasSettingsChangedListener(), "hasSettingsChangedListener false initially");
+        lanStore.setMcpLanEnabled(true);
+        assertTrue(lanStore.isMcpLanEnabled(), "setMcpLanEnabled persists LAN mode flag");
+        HttpControlServer lanSrv = new HttpControlServer(null, freePort);
+        try {
+            lanSrv.start();
+            assertTrue(!lanSrv.isLanBound(), "isLanBound is synchronously false when bound to 127.0.0.1");
+            byte[] rpcPayload = "{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"tools/list\"}"
+                .getBytes(StandardCharsets.UTF_8);
+            Socket rawSock = new Socket("127.0.0.1", freePort);
+            String rawResp;
+            try {
+                rawSock.setSoTimeout(3000);
+                OutputStream rawOut = rawSock.getOutputStream();
+                String rawReq = "POST /mcp HTTP/1.1\r\n"
+                    + "Host: 127.0.0.1:" + freePort + "\r\n"
+                    + "Origin: http://evil.com\r\n"
+                    + "Content-Type: application/json\r\n"
+                    + "Content-Length: " + rpcPayload.length + "\r\n"
+                    + "Connection: close\r\n\r\n";
+                rawOut.write(rawReq.getBytes(StandardCharsets.US_ASCII));
+                rawOut.write(rpcPayload);
+                rawOut.flush();
+                rawResp = AcidIo.readStreamUtf8(rawSock.getInputStream());
+            } finally {
+                rawSock.close();
+            }
+            assertTrue(rawResp.startsWith("HTTP/1.1 403"), "Untrusted Origin returns 403 over HTTP: " + rawResp);
+            int hdrEnd = rawResp.indexOf("\r\n\r\n");
+            String errBody = hdrEnd >= 0 ? rawResp.substring(hdrEnd + 4) : "";
+            JSONObject errJson = new JSONObject(errBody);
+            assertEquals("2.0", errJson.optString("jsonrpc"), "403 error response carries jsonrpc 2.0");
+            assertTrue(errJson.opt("id") == JSONObject.NULL && errBody.contains("\"id\""),
+                "403 error response includes explicit null id: " + errBody);
+            assertTrue(errJson.has("error"), "403 error response includes JSON-RPC error object");
+        } finally {
+            lanSrv.stop();
+            assertTrue(!lanSrv.isLanBound(), "isLanBound cleared after stop()");
+            SkillStorageVault.deleteRecursiveSafe(mcpRepoDir);
+        }
+
+        // 5. AcidSandboxTools: encoded .user.js bypasses, MCP download SSRF block, and builtin skill package write block
+        File sbx3Dir = File.createTempFile("acid_r3_sbx_", "_dir");
+        sbx3Dir.delete();
+        sbx3Dir.mkdirs();
+        try {
+            AcidSandboxTools sbx3 = new AcidSandboxTools(null, sbx3Dir);
+            String[] badUserJsArgs = new String[] {
+                "{\"action\":\"download\",\"url\":\"https://example.com/evil%2euser%2ejs\"}",
+                "{\"action\":\"download\",\"url\":\"https://example.com/dl?file=payload.user.js\"}",
+                "{\"action\":\"download\",\"url\":\"https://example.com/blob\",\"filename\":\"hack.user.js\"}"
+            };
+            for (String argsStr : badUserJsArgs) {
+                AcidSandboxTools.ToolExecResult r = sbx3.executeTool(
+                    "browser", new JSONObject(argsStr), AcidSandboxTools.ToolSource.MCP);
+                assertTrue(r.outputText != null && r.outputText.startsWith("Error:"),
+                    "MCP blocks encoded/query/filename userscript download: " + argsStr);
+            }
+
+            AcidSandboxTools.ToolExecResult ssrfDl = sbx3.executeTool(
+                "browser",
+                new JSONObject().put("action", "download").put("url", "http://127.0.0.1:8080/internal.bin"),
+                AcidSandboxTools.ToolSource.MCP);
+            assertTrue(ssrfDl.outputText != null && ssrfDl.outputText.startsWith("Error:"),
+                "MCP browser(download) rejects loopback SSRF URL");
+
+            AcidSandboxTools.ToolExecResult shadowWrite = sbx3.executeTool(
+                "write",
+                new JSONObject().put("path", "skills/userscript_dev/SKILL.md").put("content", "# hijacked"),
+                AcidSandboxTools.ToolSource.MCP);
+            assertTrue(shadowWrite.outputText != null && shadowWrite.outputText.startsWith("Error:"),
+                "write blocks directory package shadowing builtin userscript_dev skill");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(sbx3Dir);
+        }
+
+        // 6. SkillManager: ignores non-builtin directory shadowing & parses multiline YAML name/title
+        File sk3Dir = File.createTempFile("acid_r3_sk_", "_dir");
+        sk3Dir.delete();
+        sk3Dir.mkdirs();
+        try {
+            File fakeBuiltinDir = new File(sk3Dir, "skills/userscript_dev");
+            fakeBuiltinDir.mkdirs();
+            AcidIo.writeFileUtf8Safe(new File(fakeBuiltinDir, "SKILL.md"),
+                "# Hijacked Builtin\nFake directory shadow content");
+
+            File multiYamlDir = new File(sk3Dir, "skills/multi_yaml_skill");
+            multiYamlDir.mkdirs();
+            AcidIo.writeFileUtf8Safe(new File(multiYamlDir, "SKILL.md"),
+                "---\n"
+                + "name: >\n"
+                + "  folded_skill\n"
+                + "  id\n"
+                + "title: |\n"
+                + "  Multi Line\n"
+                + "  Skill Title\n"
+                + "description: >\n"
+                + "  Desc line 1\n"
+                + "  line 2\n"
+                + "---\n"
+                + "Body content\n");
+
+            SkillManager sm3 = new SkillManager(null, sk3Dir);
+            File resolvedBuiltin = sm3.resolveSkillFile("userscript_dev");
+            assertTrue(resolvedBuiltin == null || "userscript_dev.md".equals(resolvedBuiltin.getName()),
+                "resolveSkillFile refuses non-builtin directory shadow skills/userscript_dev/SKILL.md, got: " + resolvedBuiltin);
+            assertTrue(!sm3.readSkill("userscript_dev").contains("Fake directory shadow"),
+                "readSkill(\"userscript_dev\") does not read directory shadow content");
+
+            SkillManager.SkillMeta foldedMeta = null;
+            for (SkillManager.SkillMeta m : sm3.getSkills()) {
+                assertTrue(!"Hijacked Builtin".equals(m.title),
+                    "getSkills ignores non-builtin directory shadow of builtin skill");
+                if ("multi_yaml_skill/SKILL.md".equals(m.fileName)) {
+                    foldedMeta = m;
+                }
+            }
+            assertTrue(foldedMeta != null, "Multi-line YAML directory skill parsed");
+            assertEquals("folded_skill id", foldedMeta.name, "Multiline YAML name folded cleanly");
+            assertTrue(foldedMeta.title.contains("Multi Line") && foldedMeta.title.contains("Skill Title"),
+                "Multiline YAML title preserved across lines");
+            assertEquals("Desc line 1 line 2", foldedMeta.description, "Multiline YAML description folded cleanly");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(sk3Dir);
+        }
+
+        // 7. UserscriptNativeBridge: GM_log grant mapping & isInstalled site probe gate
+        String[] logGrants = UserscriptNativeBridge.grantsFor("log");
+        assertTrue(logGrants != null && Arrays.asList(logGrants).contains("GM_log"),
+            "grantsFor(\"log\") maps to GM_log");
+
+        File us3Dir = File.createTempFile("acid_r3_us_", "_dir");
+        us3Dir.delete();
+        us3Dir.mkdirs();
+        try {
+            UserscriptStorage st3 = new UserscriptStorage(us3Dir);
+            String tok3 = UserscriptManager.deriveScriptSecret("seed3", "script_c.user.js");
+            UserscriptMeta logMeta = UserscriptMeta.parse("log_only.user.js",
+                "// ==UserScript==\n// @name l\n// @match *://*/*\n// @grant GM_log\n// ==/UserScript==\n");
+            UserscriptNativeBridge br3 = new UserscriptNativeBridge(null, st3, null, tok3);
+            final int[] hostProbeCalls = new int[1];
+            UserscriptNativeBridge.Host probeHost = new UserscriptNativeBridge.Host() {
+                @Override public void openInTab(String url, boolean active) {}
+                @Override public void download(String url, String fileName) {}
+                @Override public void notify(String title, String text) {}
+                @Override public void onInjectionRequested(UserscriptNativeBridge bridge, int phase) {}
+                @Override public String isScriptInstalled(String name, String namespace) {
+                    hostProbeCalls[0]++;
+                    return "{\"installed\":true}";
+                }
+            };
+            br3.configure(new UserscriptNativeBridge.ScriptResolver() {
+                @Override public UserscriptMeta findScript(String id) {
+                    return "log_only.user.js".equals(id) ? logMeta : null;
+                }
+            }, null, probeHost, null);
+
+            String logGrantedRes = br3.call("log",
+                "{\"secret\":\"" + tok3 + "\",\"scriptId\":\"log_only.user.js\",\"text\":\"hello\"}");
+            assertEquals("true", logGrantedRes, "Granted GM_log call succeeds with \"true\"");
+
+            // isInstalled denied when probe gate is false even when resolver and host exist
+            br3.setAllowIsInstalledProbe(false);
+            String probeBlocked = br3.call("isInstalled",
+                "{\"secret\":\"" + tok3 + "\",\"scriptId\":\"log_only.user.js\",\"name\":\"l\"}");
+            assertEquals("", probeBlocked, "isInstalled probe denied with empty string on non-script-site page");
+            assertEquals(Integer.valueOf(0), Integer.valueOf(hostProbeCalls[0]),
+                "Host.isScriptInstalled is not invoked when probe gate is closed");
+
+            br3.setAllowIsInstalledProbe(true);
+            String probeAllowed = br3.call("isInstalled",
+                "{\"secret\":\"" + tok3 + "\",\"scriptId\":\"log_only.user.js\",\"name\":\"l\"}");
+            assertEquals("{\"value\":true}", probeAllowed,
+                "isInstalled probe delegates to Host when allowed on script-store site");
+            assertEquals(Integer.valueOf(1), Integer.valueOf(hostProbeCalls[0]),
+                "Host.isScriptInstalled invoked once when probe gate is open");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(us3Dir);
+        }
+
+        // 8. UserscriptHttpHandler: 5 redirects allowed, 302 POST->GET strips body headers, oversized body errors
+        final ServerSocket usHttpServer = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+        final int usHttpPort = usHttpServer.getLocalPort();
+        final String[] capturedFinalReq = new String[4]; // method, contentType, contentLength, customKeep
+        Thread usHttpThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!usHttpServer.isClosed()) {
+                    try {
+                        Socket s = usHttpServer.accept();
+                        try {
+                            InputStream rawIn = s.getInputStream();
+                            BufferedReader r = new BufferedReader(new InputStreamReader(rawIn, StandardCharsets.US_ASCII));
+                            String req = r.readLine();
+                            String ct = null, cl = null, keep = null;
+                            String line;
+                            while ((line = r.readLine()) != null && !line.isEmpty()) {
+                                int colon = line.indexOf(':');
+                                if (colon > 0) {
+                                    String k = line.substring(0, colon).trim().toLowerCase(java.util.Locale.ROOT);
+                                    String v = line.substring(colon + 1).trim();
+                                    if ("content-type".equals(k)) ct = v;
+                                    else if ("content-length".equals(k)) cl = v;
+                                    else if ("x-keep".equals(k)) keep = v;
+                                }
+                            }
+                            if (cl != null) {
+                                int bodyLen = Integer.parseInt(cl);
+                                for (int i = 0; i < bodyLen; i++) rawIn.read();
+                            }
+                            OutputStream out = s.getOutputStream();
+                            if (req != null && req.contains("/r/")) {
+                                int idx = req.indexOf("/r/") + 3;
+                                int sp = req.indexOf(' ', idx);
+                                int n = Integer.parseInt(req.substring(idx, sp));
+                                if (n > 0) {
+                                    out.write(("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:" + usHttpPort + "/r/" + (n - 1) + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                                } else {
+                                    capturedFinalReq[0] = req.split(" ")[0];
+                                    capturedFinalReq[1] = ct;
+                                    capturedFinalReq[2] = cl;
+                                    capturedFinalReq[3] = keep;
+                                    byte[] ok = "DONE5".getBytes(StandardCharsets.US_ASCII);
+                                    out.write(("HTTP/1.1 200 OK\r\nContent-Length: " + ok.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                                    out.write(ok);
+                                }
+                            } else if (req != null && req.contains("/huge")) {
+                                out.write(("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                                byte[] zeros = new byte[64 * 1024];
+                                long sent = 0L;
+                                long limit = 10L * 1024L * 1024L + 128L;
+                                while (sent < limit) {
+                                    int chunk = (int) Math.min(zeros.length, limit - sent);
+                                    out.write(zeros, 0, chunk);
+                                    sent += chunk;
+                                }
+                            }
+                            out.flush();
+                        } finally {
+                            s.close();
+                        }
+                    } catch (Exception ignored) {
+                        break;
+                    }
+                }
+            }
+        });
+        usHttpThread.setDaemon(true);
+        usHttpThread.start();
+        try {
+            UserscriptHttpHandler usHandler = new UserscriptHttpHandler();
+            String url5Hops = "http://127.0.0.1:" + usHttpPort + "/r/5";
+            JSONObject post5 = new JSONObject()
+                .put("url", url5Hops)
+                .put("method", "POST")
+                .put("data", "{\"a\":1}")
+                .put("headers", new JSONObject()
+                    .put("Content-Type", "application/json")
+                    .put("Content-Length", "7")
+                    .put("X-Keep", "yes"));
+            JSONObject res5 = usHandler.executeRequestForTest(post5, AcidHttp.createDownloadValidator(url5Hops));
+            assertEquals(Integer.valueOf(200), Integer.valueOf(res5.getInt("status")),
+                "5 redirects succeeds under MAX_REDIRECTS=5");
+            assertEquals("DONE5", res5.getString("responseText"), "Final response body received after 5 hops");
+            assertEquals("GET", capturedFinalReq[0], "302 POST converts method to GET");
+            assertTrue(capturedFinalReq[1] == null, "302 POST->GET strips Content-Type header");
+            assertTrue(capturedFinalReq[2] == null, "302 POST->GET strips Content-Length header");
+            assertEquals("yes", capturedFinalReq[3], "302 redirect preserves unrelated X-Keep header");
+
+            boolean overCapBlocked = false;
+            String hugeUrl = "http://127.0.0.1:" + usHttpPort + "/huge";
+            try {
+                usHandler.executeRequestForTest(new JSONObject().put("url", hugeUrl),
+                    AcidHttp.createDownloadValidator(hugeUrl));
+            } catch (IOException expected) {
+                overCapBlocked = true;
+            }
+            assertTrue(overCapBlocked, "UserscriptHttpHandler throws IOException when response exceeds MAX_RESPONSE_BYTES");
+        } finally {
+            try { usHttpServer.close(); } catch (Exception ignored) {}
+        }
+
+        // 9. AdBlockManager wildcard path rules (/ads/*/banner/ and /*_ad_*/)
+        AdBlockManager.RuleSet wcRs = new AdBlockManager.RuleSet();
+        assertTrue(AdBlockManager.parseRuleLine("/ads/*/banner/", wcRs), "Parses /ads/*/banner/ wildcard rule");
+        assertTrue(AdBlockManager.isUriBlocked(Uri.parse("https://cdn.site.test/ads/top/v2/banner/img.png"), wcRs),
+            "/ads/*/banner/ blocks multi-segment matching ad path");
+        assertTrue(!AdBlockManager.isUriBlocked(Uri.parse("https://cdn.site.test/content/article.html"), wcRs),
+            "/ads/*/banner/ does not block unrelated content path");
+        assertTrue(AdBlockManager.parseRuleLine("/*_ad_*/", wcRs), "Parses /*_ad_*/ wildcard rule");
+        assertTrue(AdBlockManager.isUriBlocked(Uri.parse("https://cdn.site.test/static/promo_ad_unit/main.js"), wcRs),
+            "/*_ad_*/ blocks matching path with _ad_ marker");
+        assertTrue(!AdBlockManager.isUriBlocked(Uri.parse("https://cdn.site.test/static/promo/main.js"), wcRs),
+            "/*_ad_*/ does not false-positive on normal static path");
+
+        // 10. AcidDownloader 416 Range Not Satisfiable reset & stale errorMessage clearing
+        final File dl416Dir = new File("build/test_dl_416_resume");
+        SkillStorageVault.deleteRecursiveSafe(dl416Dir);
+        dl416Dir.mkdirs();
+        final ServerSocket r416Server = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+        final int r416Port = r416Server.getLocalPort();
+        final java.util.concurrent.atomic.AtomicInteger r416ReqNum = new java.util.concurrent.atomic.AtomicInteger(0);
+        Thread r416Thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!r416Server.isClosed()) {
+                    try {
+                        Socket s = r416Server.accept();
+                        try {
+                            BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.US_ASCII));
+                            String req = r.readLine();
+                            String l;
+                            while ((l = r.readLine()) != null && !l.isEmpty()) {}
+                            OutputStream out = s.getOutputStream();
+                            int hit = r416ReqNum.incrementAndGet();
+                            if (hit == 1) {
+                                out.write("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    .getBytes(StandardCharsets.US_ASCII));
+                            } else {
+                                byte[] fresh = "FRESH-DATA".getBytes(StandardCharsets.US_ASCII);
+                                out.write(("HTTP/1.1 200 OK\r\nContent-Length: " + fresh.length + "\r\nConnection: close\r\n\r\n")
+                                    .getBytes(StandardCharsets.US_ASCII));
+                                if (req == null || !req.startsWith("HEAD ")) {
+                                    out.write(fresh);
+                                }
+                            }
+                            out.flush();
+                        } finally {
+                            s.close();
+                        }
+                    } catch (Exception ignored) {
+                        break;
+                    }
+                }
+            }
+        });
+        r416Thread.setDaemon(true);
+        r416Thread.start();
+        final CountDownLatch r416Latch = new CountDownLatch(1);
+        final String[] r416Err = new String[1];
+        AcidDownloader dl416 = new AcidDownloader();
+        AcidDownloader.DownloaderListener r416Listener = new AcidDownloader.DownloaderListener() {
+            @Override public void onTaskStarted(DownloadTask t) {}
+            @Override public void onTaskProgress(DownloadTask t) {}
+            @Override public void onTaskPaused(DownloadTask t) {}
+            @Override public void onTaskCompleted(DownloadTask t) { r416Latch.countDown(); }
+            @Override public void onTaskFailed(DownloadTask t, String e) {
+                r416Err[0] = e;
+                r416Latch.countDown();
+            }
+        };
+        dl416.addListener(r416Listener);
+        try {
+            DownloadTask r416Task = new DownloadTask(
+                9901L,
+                "http://127.0.0.1:" + r416Port + "/file.bin",
+                "file.bin",
+                "application/octet-stream",
+                dl416Dir,
+                null);
+            // Pre-populate stale partial file + checkpoint + old error state
+            AcidIo.writeFileUtf8Safe(r416Task.destinationFile, "XXXXXXXXXXXXXXXXXXXX");
+            r416Task.contentLength = 100L;
+            r416Task.supportsRange = true;
+            r416Task.downloadedBytes = 20L;
+            r416Task.chunks.add(new DownloadChunk(0, 0L, 99L));
+            r416Task.chunks.get(0).downloadedBytes = 20L;
+            assertTrue(r416Task.saveCheckpoint(), "Pre-seeded resume checkpoint saved");
+            r416Task.errorMessage = "stale failure";
+            r416Task.completedAt = 99999L;
+            r416Task.status = DownloadTask.STATUS_FAILED;
+
+            dl416.startTaskAsync(r416Task);
+            assertTrue(r416Latch.await(5, TimeUnit.SECONDS), "416 resume reset download finishes within timeout");
+            assertTrue(r416Err[0] == null, "Download succeeds after 416 fallback fresh restart: " + r416Err[0]);
+            assertEquals(Integer.valueOf(DownloadTask.STATUS_SUCCESSFUL), Integer.valueOf(r416Task.status),
+                "Task reaches STATUS_SUCCESSFUL");
+            assertTrue(r416Task.errorMessage == null, "Stale errorMessage cleared on task restart");
+            assertEquals("FRESH-DATA", AcidIo.readFileUtf8OrEmpty(r416Task.destinationFile, 1024),
+                "Fresh restart replaces stale partial bytes with FRESH-DATA");
+            assertTrue(!r416Task.checkpointFile.exists(), "Checkpoint file cleaned on 416 fallback & completion");
+        } finally {
+            dl416.removeListener(r416Listener);
+            try { r416Server.close(); } catch (Exception ignored) {}
+            SkillStorageVault.deleteRecursiveSafe(dl416Dir);
+        }
+
+        // 11. WebAutomationDriver safe null Context & missing target handling in clickCoordinateSync
+        WebAutomationDriver.AutomationHost nullTabHost = new WebAutomationDriver.AutomationHost() {
+            @Override public BrowserController.TabSession getActiveTab() { return null; }
+            @Override public BrowserController.TabSession getTargetTab() { return null; }
+            @Override public boolean isTargetTabActive() { return false; }
+            @Override public AgentOverlayView getOverlayView() { return null; }
+            @Override public UserscriptManager getUserscriptManager() { return null; }
+            @Override public void loadUrl(String url) {}
+            @Override public void emitLog(String log) {}
+            @Override public boolean isSomEnabled() { return false; }
+            @Override public boolean isDesktopMode() { return false; }
+            @Override public int getBlockedDeepLinksCount() { return 0; }
+            @Override public String getLastBlockedDeepLink() { return ""; }
+            @Override public int getTriggeredDownloadsCount() { return 0; }
+            @Override public String getLastTriggeredDownloadInfo() { return ""; }
+        };
+        WebAutomationDriver nullDriver = new WebAutomationDriver(null, nullTabHost);
+        JSONObject nullClickRes = nullDriver.clickCoordinateSync(10f, 10f);
+        assertTrue(nullClickRes != null && !nullClickRes.optBoolean("ok", true),
+            "WebAutomationDriver.clickCoordinateSync degrades cleanly with null Context and no target tab");
     }
 }

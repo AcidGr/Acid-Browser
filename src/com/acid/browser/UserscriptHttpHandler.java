@@ -118,7 +118,15 @@ public class UserscriptHttpHandler {
         return o;
     }
 
+    JSONObject executeRequestForTest(JSONObject details, AcidHttp.UrlValidator validator) throws Exception {
+        return doHttpRequest(details, new Inflight(), validator);
+    }
+
     private JSONObject doHttpRequest(JSONObject details, Inflight flight) throws Exception {
+        return doHttpRequest(details, flight, null);
+    }
+
+    private JSONObject doHttpRequest(JSONObject details, Inflight flight, AcidHttp.UrlValidator validatorOverride) throws Exception {
         String urlStr = details.optString("url", "").trim();
         if (urlStr.isEmpty()) {
             throw new IllegalArgumentException("Missing request url");
@@ -155,9 +163,13 @@ public class UserscriptHttpHandler {
         Map<String, List<String>> headerFields = null;
 
         boolean connected = false;
-        for (int redirects = 0; redirects < 5; redirects++) {
+        for (int redirects = 0; redirects <= AcidHttp.MAX_REDIRECTS; redirects++) {
             URL url = new URL(currentUrl);
-            validateAllowedHttpTarget(url);
+            if (validatorOverride != null) {
+                validatorOverride.validate(url);
+            } else {
+                validateAllowedHttpTarget(url);
+            }
             HttpURLConnection nextConn = (HttpURLConnection) url.openConnection();
             conn = nextConn;
             flight.conn = nextConn;
@@ -236,6 +248,7 @@ public class UserscriptHttpHandler {
                             || statusCode == HttpURLConnection.HTTP_MOVED_TEMP) {
                             method = "GET";
                             data = null;
+                            stripBodyHeadersForGet(customHeaders);
                         }
                         continue;
                     }
@@ -301,7 +314,7 @@ public class UserscriptHttpHandler {
                 int n;
                 while ((n = in.read(buf)) != -1) {
                     if (bos.size() + n > MAX_RESPONSE_BYTES) {
-                        break;
+                        throw new java.io.IOException("Response body exceeds " + MAX_RESPONSE_BYTES + " byte limit");
                     }
                     bos.write(buf, 0, n);
                 }
@@ -429,5 +442,20 @@ public class UserscriptHttpHandler {
      */
     public static void validateAllowedHttpTarget(URL url) throws SecurityException {
         AcidHttp.validateHttpTargetForSsrf(url, false, "GM_xmlhttpRequest");
+    }
+
+    private static void stripBodyHeadersForGet(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) return;
+        java.util.Iterator<Map.Entry<String, String>> it = headers.entrySet().iterator();
+        while (it.hasNext()) {
+            String k = it.next().getKey();
+            if (k == null) continue;
+            String lower = k.trim().toLowerCase(java.util.Locale.ROOT);
+            if ("content-type".equals(lower)
+                || "content-length".equals(lower)
+                || "transfer-encoding".equals(lower)) {
+                it.remove();
+            }
+        }
     }
 }

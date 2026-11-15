@@ -438,11 +438,20 @@ public class AcidAgentLoop {
                         if (!isRunCancelled(runGen)) {
                             mRunning = false;
                             addErrorItem(session, "上一轮请求仍在清理连接，请稍后重试。");
+                            final boolean paused = mPausedForTakeover;
                             mMainHandler.post(new Runnable() {
                                 @Override
                                 public void run() {
-                                    if (mRunGeneration.get() == runGen && mListener != null) {
-                                        mListener.onLoopStateChanged(false, mPausedForTakeover, 0);
+                                    if (mRunGeneration.get() == runGen) {
+                                        if (!paused) {
+                                            mController.setAgentBoundTabId(-1);
+                                            if (mController.getControlMode() == AgentOverlayView.MODE_AGENT) {
+                                                mController.setControlMode(AgentOverlayView.MODE_HUMAN, "");
+                                            }
+                                        }
+                                        if (mListener != null) {
+                                            mListener.onLoopStateChanged(false, paused, 0);
+                                        }
                                     }
                                 }
                             });
@@ -616,7 +625,10 @@ public class AcidAgentLoop {
                     mMainHandler.post(new Runnable() {
                         @Override
                         public void run() {
-                            mController.setControlMode(AgentOverlayView.MODE_AGENT, "");
+                            if (mRunGeneration.get() == runGen && mRunning && !mStopRequested
+                                && mController.getControlMode() != AgentOverlayView.MODE_AGENT) {
+                                mController.setControlMode(AgentOverlayView.MODE_AGENT, "");
+                            }
                         }
                     });
                 }
@@ -730,6 +742,9 @@ public class AcidAgentLoop {
                 mMainHandler.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (mRunGeneration.get() != runGen) {
+                            return;
+                        }
                         if (!paused) {
                             mController.setAgentBoundTabId(-1);
                         }
@@ -1299,7 +1314,10 @@ public class AcidAgentLoop {
 
         byte[] payload = reqBody.toString().getBytes(StandardCharsets.UTF_8);
 
-        HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
+        URL endpointUrl = new URL(endpoint);
+        AcidHttp.createDownloadValidator(endpoint).validate(endpointUrl);
+        HttpURLConnection conn = (HttpURLConnection) endpointUrl.openConnection();
+        conn.setInstanceFollowRedirects(false);
         mActiveConnection = conn;
 
         ThinkStreamParser streamParser = new ThinkStreamParser();

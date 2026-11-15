@@ -1053,7 +1053,8 @@ public class WebAutomationDriver {
 
     private float getSafeWebViewScale(WebView wv) {
         float scale = wv != null ? wv.getScale() : 0f;
-        if (scale <= 0.01f) {
+        if (scale <= 0.01f && mContext != null && mContext.getResources() != null
+            && mContext.getResources().getDisplayMetrics() != null) {
             scale = mContext.getResources().getDisplayMetrics().density;
         }
         return scale > 0.01f ? scale : 1.0f;
@@ -1063,7 +1064,7 @@ public class WebAutomationDriver {
         final boolean isForeground = mHost.isTargetTabActive();
         final float[] scaleRef = new float[] { getSafeWebViewScale(null) };
         final boolean[] hasTabRef = new boolean[] { false };
-        if (isMainLooper()) {
+        if (isMainLooper() || mMainHandler == null) {
             BrowserController.TabSession targetTab = mHost.getTargetTab();
             if (targetTab != null && targetTab.webView != null) {
                 hasTabRef[0] = true;
@@ -1121,7 +1122,17 @@ public class WebAutomationDriver {
         if (!isForeground) {
             float cssX = viewX / scaleRef[0];
             float cssY = viewY / scaleRef[0];
-            evaluateJsSync("(function(){ var el = document.elementFromPoint(" + cssX + "," + cssY + "); if (el) el.click(); })()", 2000);
+            evaluateJsSync(
+                "(function(){ var x = " + cssX + ", y = " + cssY + ", doc = document; "
+                + "var el = doc.elementFromPoint(x, y); "
+                + "while (el && el.tagName && el.tagName.toLowerCase() === 'iframe') { "
+                + "  try { var r = el.getBoundingClientRect(); var idoc = el.contentDocument; "
+                + "    if (!idoc) break; x -= (r.left + (el.clientLeft || 0)); y -= (r.top + (el.clientTop || 0)); "
+                + "    doc = idoc; var inner = doc.elementFromPoint(x, y); if (!inner) break; el = inner; "
+                + "  } catch(e){ break; } "
+                + "} if (el && el.click) el.click(); })()",
+                2000
+            );
         }
         mHost.emitLog("[CLICK] Coordinate (" + Math.round(viewX) + ", " + Math.round(viewY) + ")" + (!isForeground ? " [bg-elementFromPoint]" : ""));
         JSONObject res = new JSONObject();

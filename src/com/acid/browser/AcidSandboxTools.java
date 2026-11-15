@@ -10,6 +10,8 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
+import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -441,6 +443,20 @@ public class AcidSandboxTools {
 
     private ToolExecResult executeBrowserTool(final JSONObject args, ToolSource source) throws Exception {
         String action = args.optString("action", "observe").toLowerCase().trim();
+        if (source != ToolSource.AGENT_UI && mController != null && mController.getAgentBoundTabId() > 0) {
+            boolean mutatesActiveTab = "navigate".equals(action) || "click".equals(action)
+                || "fill".equals(action) || "select".equals(action)
+                || "scroll".equals(action) || "eval".equals(action)
+                || "back".equals(action) || "reload".equals(action)
+                || "set_mode".equals(action);
+            if (mutatesActiveTab) {
+                return new ToolExecResult(
+                    "Error: browser(action='" + action + "') via MCP is blocked while an in-app Agent session owns a bound tab.",
+                    false,
+                    null
+                );
+            }
+        }
         final WebAutomationDriver driver = mController != null ? mController.getAutomationDriver() : null;
         final int dlBefore = mController != null ? mController.getTriggeredDownloadsCount() : 0;
 
@@ -595,6 +611,13 @@ public class AcidSandboxTools {
             if (customFileName.isEmpty()) customFileName = null;
             if (source != ToolSource.AGENT_UI && isUserscriptDownloadTarget(url, customFileName)) {
                 return new ToolExecResult("Error: downloading userscripts is not permitted through the MCP gateway.", false, null);
+            }
+            if (source != ToolSource.AGENT_UI) {
+                try {
+                    AcidHttp.REMOTE_FETCH_VALIDATOR.validate(new URL(url));
+                } catch (Exception e) {
+                    return new ToolExecResult("Error: blocked download URL through MCP gateway: " + e.getMessage(), false, null);
+                }
             }
             if (mController == null) {
                 return new ToolExecResult("Error: Browser controller unavailable", false, null);
@@ -1064,15 +1087,18 @@ public class AcidSandboxTools {
         if (store == null) return;
         String name = f.getName();
         if ("settings.json".equals(name)) {
+            final boolean hasListener = store.hasSettingsChangedListener();
             final boolean reloaded = store.reloadFromJsonFile(true);
             if (reloaded) {
-                runOnMain(new Runnable() {
-                    @Override
-                    public void run() {
-                        mController.applySettingsHotReload();
-                        log("[SETTINGS] Live hot-reloaded browser settings from settings.json");
-                    }
-                });
+                if (!hasListener) {
+                    runOnMain(new Runnable() {
+                        @Override
+                        public void run() {
+                            mController.applySettingsHotReload();
+                        }
+                    });
+                }
+                log("[SETTINGS] Live hot-reloaded browser settings from settings.json");
             }
         } else if ("bookmarks.json".equals(name)) {
             if (store.reloadBookmarksFromJsonFile(true)) {
@@ -1096,22 +1122,97 @@ public class AcidSandboxTools {
         return "Error: Access denied: unsafe or disallowed URL scheme (" + rawUrl + ")";
     }
 
+    private static String decodeUrlSafely(String s) {
+        if (s == null) return "";
+        String cur = s;
+        for (int i = 0; i < 2; i++) {
+            try {
+                String decoded = URLDecoder.decode(cur.replace("+", "%2B"), "UTF-8");
+                if (decoded.equals(cur)) break;
+                cur = decoded;
+            } catch (Exception ignored) {
+                break;
+            }
+        }
+        return cur;
+    }
+
+    private static boolean hasUserscriptSuffix(String rawName) {
+        if (rawName == null) return false;
+        String clean = decodeUrlSafely(rawName).trim();
+        if (clean.isEmpty()) return false;
+        String sanitized = com.acid.browser.download.DownloadCoordinator.sanitizeDownloadFileName(clean);
+        return clean.toLowerCase(Locale.US).endsWith(".user.js")
+            || sanitized.toLowerCase(Locale.US).endsWith(".user.js");
+    }
+
     private static boolean isUserscriptDownloadTarget(String url, String customFileName) {
-        if (customFileName != null && customFileName.toLowerCase(Locale.US).endsWith(".user.js")) {
+        if (hasUserscriptSuffix(customFileName)) {
             return true;
         }
         if (url != null) {
-            String pathPart = url.toLowerCase(Locale.US);
+            if (BrowserController.isUserscriptUrl(url)) {
+                return true;
+            }
+            String guessed = com.acid.browser.download.DownloadCoordinator.smartGuessFileName(url, null, null);
+            if (hasUserscriptSuffix(guessed)) {
+                return true;
+            }
+            String decodedLower = decodeUrlSafely(url).toLowerCase(Locale.US);
+            String pathPart = decodedLower;
             int q = pathPart.indexOf('?');
-            if (q >= 0) pathPart = pathPart.substring(0, q);
+            String queryPart = "";
+            if (q >= 0) {
+                queryPart = pathPart.substring(q + 1);
+                pathPart = pathPart.substring(0, q);
+            }
             int h = pathPart.indexOf('#');
             if (h >= 0) pathPart = pathPart.substring(0, h);
-            return pathPart.endsWith(".user.js");
+            int semi = pathPart.indexOf(';');
+            if (semi >= 0) pathPart = pathPart.substring(0, semi);
+            if (pathPart.trim().endsWith(".user.js")) {
+                return true;
+            }
+            if (!queryPart.isEmpty()) {
+                int qHash = queryPart.indexOf('#');
+                if (qHash >= 0) queryPart = queryPart.substring(0, qHash);
+                String[] pairs = queryPart.split("&");
+                for (String pair : pairs) {
+                    int eq = pair.indexOf('=');
+                    String val = (eq >= 0) ? pair.substring(eq + 1) : pair;
+                    if (hasUserscriptSuffix(val)) {
+                        return true;
+                    }
+                }
+            }
         }
         return false;
     }
 
+    private boolean isShadowingBuiltinSkillPackage(File f) {
+        if (f == null || !isInsideSkills(f)) return false;
+        try {
+            File skillsDir = new File(mWorkspaceDir, "skills").getCanonicalFile();
+            File target = f.getCanonicalFile();
+            String skillsPath = skillsDir.getPath();
+            String targetPath = target.getPath();
+            if (!targetPath.startsWith(skillsPath + File.separator)) return false;
+            String rel = targetPath.substring(skillsPath.length() + 1).replace(File.separatorChar, '/');
+            int slash = rel.indexOf('/');
+            if (slash > 0) {
+                String topDir = rel.substring(0, slash);
+                if (SkillManager.isBuiltin(topDir) || SkillManager.isBuiltin(topDir + ".md")) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
     private String checkMcpWritePermission(File f, ToolSource source, String actionVerb) {
+        if (f != null && isShadowingBuiltinSkillPackage(f)) {
+            return "Error: cannot modify or shadow builtin skill package directory under skills/.";
+        }
         if (source == ToolSource.AGENT_UI || f == null) return null;
         if (isInsideUserscripts(f)) {
             String msg = "installing".equals(actionVerb) || "writing".equals(actionVerb)

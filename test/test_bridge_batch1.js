@@ -373,4 +373,154 @@ assert.strictEqual(typeof window[capturedXmlReq.onabort], 'undefined', 'onabort 
 delete global.__acidTestAbortFired;
 console.log('✓ Case 10: runtime_shim.js preserves onabort across GM_xmlhttpRequest().abort() until callback delivery');
 
-console.log('\n[TestBridgeBatch1] All 10 Batch-1/Batch-2 JS regression checks PASSED!\n');
+// Case 11: Unassociated <label> without interactive role is omitted, while role=button and visible-hidden-input label remain
+const unassocLabel = makeEl('label', {
+    text: 'Plain Field Label',
+    rect: { left: 10, top: 10, width: 120, height: 24, right: 130, bottom: 34 }
+});
+const buttonRoleLabel = makeEl('label', {
+    text: 'Toggle Filter',
+    attrs: { role: 'button' },
+    rect: { left: 10, top: 45, width: 120, height: 32, right: 130, bottom: 77 }
+});
+const srOnlyChk = makeEl('input', {
+    id: 'sr_only_chk',
+    attrs: { type: 'checkbox' },
+    rect: { left: 10, top: 90, width: 0, height: 0, right: 10, bottom: 90 },
+    style: { opacity: '0' }
+});
+const boundCustomLabel = makeEl('label', {
+    text: 'Enable Alerts',
+    control: srOnlyChk,
+    rect: { left: 20, top: 90, width: 110, height: 28, right: 130, bottom: 118 }
+});
+bodyEl.children = [unassocLabel, buttonRoleLabel, srOnlyChk, boundCustomLabel];
+const obsLabelFilter = bridge.observe({ offset: 0, limit: 10, includeSom: false });
+assert.strictEqual(obsLabelFilter.elements.some(e => e.label === 'Plain Field Label'), false, 'Unassociated <label> without control or interactive role is omitted');
+assert.strictEqual(obsLabelFilter.elements.some(e => e.label === 'Toggle Filter'), true, '<label role="button"> remains interactive');
+assert.strictEqual(obsLabelFilter.elements.some(e => e.label === 'Enable Alerts'), true, '<label> bound to hidden custom checkbox remains interactive');
+console.log('✓ Case 11: Unassociated <label> is excluded while role="button" and bound custom control labels remain interactive');
+
+// Case 12: Same-origin iframe clientLeft/clientTop border offsets propagate to observe() & prepareClick()
+const borderInnerBtn = makeEl('button', {
+    id: 'bordered_iframe_btn',
+    text: 'Bordered Frame Pay',
+    rect: { left: 10, top: 20, width: 80, height: 30, right: 90, bottom: 50 }
+});
+const borderIframeDoc = {
+    body: makeEl('body', {
+        rect: { left: 0, top: 0, width: 200, height: 200, right: 200, bottom: 200 },
+        children: [borderInnerBtn]
+    }),
+    elementFromPoint() { return borderInnerBtn; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; }
+};
+const borderIframeEl = makeEl('iframe', {
+    id: 'bordered_frame',
+    rect: { left: 100, top: 200, width: 200, height: 200, right: 300, bottom: 400 }
+});
+borderIframeEl.clientLeft = 4;
+borderIframeEl.clientTop = 6;
+borderIframeEl.ownerDocument = global.document;
+borderIframeEl.contentDocument = borderIframeDoc;
+borderIframeDoc.defaultView = { frameElement: borderIframeEl, getComputedStyle: global.getComputedStyle };
+borderIframeDoc.body.ownerDocument = borderIframeDoc;
+borderInnerBtn.ownerDocument = borderIframeDoc;
+bodyEl.children = [borderIframeEl];
+const obsBorderIframe = bridge.observe({ offset: 0, limit: 10, includeSom: false });
+const borderItem = obsBorderIframe.elements.find(e => e.label === 'Bordered Frame Pay');
+assert.ok(borderItem, 'Button inside bordered iframe is observed');
+assert.strictEqual(borderItem.box.x, 114, 'observe() box.x includes iframe clientLeft (100 + 4 + 10)');
+assert.strictEqual(borderItem.box.y, 226, 'observe() box.y includes iframe clientTop (200 + 6 + 20)');
+const prepBorderIframe = bridge.prepareClick({ ref: borderItem.ref });
+assert.strictEqual(prepBorderIframe.ok, true);
+assert.strictEqual(prepBorderIframe.cssX, 154, 'prepareClick adds iframe clientLeft (100 + 4 + 10 + 40 = 154)');
+assert.strictEqual(prepBorderIframe.cssY, 241, 'prepareClick adds iframe clientTop (200 + 6 + 20 + 15 = 241)');
+console.log('✓ Case 12: Same-origin iframe clientLeft/clientTop border offsets propagate to observe() & prepareClick()');
+
+// Case 13: Detached scroll container ref auto-heals and unresolvable detached container errors without scrolling window
+const scrollPanelA = makeEl('div', {
+    id: 'log_scroller',
+    scrollHeight: 900,
+    scrollTop: 0,
+    attrs: { tabindex: '0', 'aria-label': 'Log Output Panel' },
+    rect: { left: 10, top: 20, width: 300, height: 200, right: 310, bottom: 220 }
+});
+const scrollPanelB = makeEl('div', {
+    id: 'log_scroller',
+    scrollHeight: 900,
+    scrollTop: 0,
+    attrs: { tabindex: '0', 'aria-label': 'Log Output Panel' },
+    rect: { left: 10, top: 20, width: 300, height: 200, right: 310, bottom: 220 }
+});
+const prevGetById = global.document.getElementById;
+const prevQsa = global.document.querySelectorAll;
+try {
+    bodyEl.children = [scrollPanelA];
+    const obsScroll = bridge.observe({ offset: 0, limit: 10, includeSom: false });
+    const scrollerItem = obsScroll.elements.find(e => e.label === 'Log Output Panel');
+    assert.ok(scrollerItem, 'Focusable scroll panel receives a ref in observe()');
+
+    // Simulate re-render: old container detached, replacement connected
+    scrollPanelA.isConnected = false;
+    scrollPanelB.isConnected = true;
+    bodyEl.children = [scrollPanelB];
+    global.document.getElementById = (id) => (id === 'log_scroller' ? scrollPanelB : null);
+    global.document.querySelectorAll = (sel) => (sel.includes('log_scroller') || sel.includes('Log Output Panel') ? [scrollPanelB] : []);
+
+    const winCallsBefore = global.windowScrollCalls.length;
+    const healedScrollRes = bridge.scroll('down', 0.5, scrollerItem.ref);
+    assert.strictEqual(healedScrollRes.ok, true, 'scroll() auto-heals detached container ref onto live replacement');
+    assert.strictEqual(scrollPanelA.scrollTop, 0, 'Detached old scroll container is not mutated');
+    assert.ok(scrollPanelB.scrollTop > 0, 'Replacement scroll container is scrolled');
+    assert.strictEqual(global.windowScrollCalls.length, winCallsBefore, 'Healing container scroll does not fall back to window scroll');
+
+    // Simulate total removal: detached ref cannot heal
+    scrollPanelB.isConnected = false;
+    bodyEl.children = [];
+    global.document.getElementById = () => null;
+    global.document.querySelectorAll = () => [];
+    const missingScrollRes = bridge.scroll('down', 0.5, scrollerItem.ref);
+    assert.strictEqual(missingScrollRes.ok, false, 'Unresolvable detached scroll container returns ok: false');
+    assert.strictEqual(global.windowScrollCalls.length, winCallsBefore, 'Unresolvable targetRef does not silently scroll window');
+} finally {
+    global.document.getElementById = prevGetById;
+    global.document.querySelectorAll = prevQsa;
+}
+console.log('✓ Case 13: Detached scroll() targetRef auto-heals across DOM replacement and errors cleanly when missing');
+
+// Case 14: runtime_shim.js locks __acid_dispatch_http_cb & filters GM.* Promise APIs by GM_info.script.grant
+const cbDescriptor = Object.getOwnPropertyDescriptor(window, '__acid_dispatch_http_cb');
+assert.ok(cbDescriptor && typeof cbDescriptor.value === 'function', '__acid_dispatch_http_cb exists on window');
+assert.strictEqual(cbDescriptor.writable, false, '__acid_dispatch_http_cb is locked writable: false');
+assert.strictEqual(cbDescriptor.configurable, false, '__acid_dispatch_http_cb is locked configurable: false');
+
+let grantScopedShim = fs.readFileSync('assets/userscripts/runtime_shim.js', 'utf8')
+    .replaceAll('/*__GUARD_KEY__*/', JSON.stringify('shim_grant_scope_test.user.js'))
+    .replaceAll('/*__SAFE_SID__*/""', JSON.stringify('shim_grant_scope_test.user.js'))
+    .replaceAll('/*__SAFE_SID__*/', JSON.stringify('shim_grant_scope_test.user.js'))
+    .replaceAll('/*__SAFE_SECRET__*/""', JSON.stringify('tok4'))
+    .replaceAll('/*__GM_INFO__*/{}', JSON.stringify({ script: { grant: ['GM_addStyle'] } }));
+grantScopedShim += `
+global.__acidGmScopeResult = {
+    hasAddStyle: typeof GM.addStyle === 'function',
+    hasXmlHttp: typeof GM.xmlHttpRequest !== 'undefined',
+    hasGetValue: typeof GM.getValue !== 'undefined',
+    hasLog: typeof GM.log !== 'undefined'
+};
+} catch(e) { throw e; }
+})();
+`;
+delete global.__acidGmScopeResult;
+eval(grantScopedShim);
+assert.deepStrictEqual(global.__acidGmScopeResult, {
+    hasAddStyle: true,
+    hasXmlHttp: false,
+    hasGetValue: false,
+    hasLog: false
+}, 'GM.* Promise namespace only exposes granted APIs while keeping dispatcher non-redefinable');
+delete global.__acidGmScopeResult;
+console.log('✓ Case 14: runtime_shim.js locks __acid_dispatch_http_cb and filters GM.* by @grant');
+
+console.log('\n[TestBridgeBatch1] All 14 Batch-1/Batch-2 JS regression checks PASSED!\n');

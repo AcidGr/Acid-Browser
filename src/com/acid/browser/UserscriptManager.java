@@ -123,11 +123,20 @@ public class UserscriptManager {
      */
     public void injectBootstrap(WebView wv, String url) {
         if (wv == null || url == null || url.isEmpty()) return;
+        boolean scriptSite = isScriptSite(url);
+        UserscriptNativeBridge existing = mBridges.get(wv);
+        if (existing != null) {
+            existing.setAllowIsInstalledProbe(scriptSite);
+        }
         if (url.startsWith("about:") || url.startsWith("data:") || url.startsWith("file://")) return;
         attachToWebView(wv);
+        UserscriptNativeBridge bridge = mBridges.get(wv);
+        if (bridge != null) {
+            bridge.setAllowIsInstalledProbe(scriptSite);
+        }
         try {
             wv.evaluateJavascript(UserscriptShaper.bootstrap(), null);
-            if (isScriptSite(url)) {
+            if (scriptSite) {
                 wv.evaluateJavascript(UserscriptShaper.tampermonkeyFacade(), null);
             }
         } catch (Exception e) {
@@ -473,12 +482,27 @@ public class UserscriptManager {
             currentUrl = wv.getUrl();
         } catch (Exception ignored) {}
         if (currentUrl == null || currentUrl.isEmpty()) return false;
+        if (!samePageIgnoringFragment(originUrl, currentUrl)) {
+            Log.i(TAG, "Aborted async userscript injection for " + meta.fileName
+                + ": page navigated from " + originUrl + " to " + currentUrl);
+            return false;
+        }
         if (!meta.appliesTo(currentUrl)) {
             Log.i(TAG, "Aborted async userscript injection for " + meta.fileName
                 + ": page drifted from " + originUrl + " to " + currentUrl);
             return false;
         }
         return true;
+    }
+
+    private static boolean samePageIgnoringFragment(String a, String b) {
+        if (a == null || b == null) return false;
+        return stripUrlFragment(a).equals(stripUrlFragment(b));
+    }
+
+    private static String stripUrlFragment(String url) {
+        int hash = url.indexOf('#');
+        return hash >= 0 ? url.substring(0, hash) : url;
     }
 
     private void evaluate(WebView wv, UserscriptMeta meta, List<String> requires) {

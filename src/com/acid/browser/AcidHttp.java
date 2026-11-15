@@ -68,13 +68,20 @@ public final class AcidHttp {
             parsedInitial = initialUrlStr != null ? new URL(initialUrlStr.trim()) : null;
         } catch (Exception ignored) {}
         final String initialHost = parsedInitial != null ? normalizeHost(parsedInitial.getHost()) : "";
+        final int initialPort = parsedInitial != null ? effectivePort(parsedInitial) : -1;
 
         return new UrlValidator() {
             @Override
             public void validate(URL url) throws IOException {
                 try {
                     String targetHost = url != null ? normalizeHost(url.getHost()) : "";
-                    boolean blockLocal = !initialIsPrivateOrLocal || !initialHost.equals(targetHost);
+                    int targetPort = url != null ? effectivePort(url) : -1;
+                    boolean sameEndpointLocal = initialIsPrivateOrLocal
+                        && !initialHost.isEmpty()
+                        && initialHost.equals(targetHost)
+                        && initialPort != -1
+                        && initialPort == targetPort;
+                    boolean blockLocal = !sameEndpointLocal;
                     validateHttpTargetForSsrf(url, blockLocal, "AcidDownload");
                 } catch (SecurityException se) {
                     throw new IOException(se.getMessage(), se);
@@ -83,27 +90,133 @@ public final class AcidHttp {
         };
     }
 
+    private static int effectivePort(URL url) {
+        if (url == null) return -1;
+        return url.getPort() != -1 ? url.getPort() : url.getDefaultPort();
+    }
+
     private static boolean isPrivateOrLocalEndpoint(String urlStr) {
         if (urlStr == null || urlStr.trim().isEmpty()) return false;
         try {
             URL u = new URL(urlStr.trim());
-            String host = normalizeHost(u.getHost());
-            if (host.startsWith("[") && host.endsWith("]") && host.length() > 2) {
-                host = host.substring(1, host.length() - 1);
+            String proto = u.getProtocol() != null ? u.getProtocol().toLowerCase(Locale.ROOT) : "";
+            if (!"http".equals(proto) && !"https".equals(proto)) {
+                return false;
             }
+            String host = normalizeHost(u.getHost());
             if (host.isEmpty()) return false;
-            if (HttpControlServer.isLoopbackOrLocalLiteralHost(host) || host.endsWith(".local")) {
+            if ("localhost".equals(host) || host.endsWith(".localhost")
+                || host.endsWith(".local") || host.endsWith(".lan")) {
                 return true;
             }
-            InetAddress[] addrs = InetAddress.getAllByName(host);
-            for (InetAddress addr : addrs) {
-                if (addr.isLoopbackAddress() || addr.isSiteLocalAddress()
-                    || isIpv4CgnatAddress(addr) || isBlockedIpv6UlaAddress(addr, host)) {
-                    return true;
-                }
+            InetAddress literalAddr = parseStrictIpLiteral(host);
+            if (literalAddr == null) {
+                return false;
             }
+            if (literalAddr.isLinkLocalAddress() || literalAddr.isAnyLocalAddress()
+                || literalAddr.isMulticastAddress()
+                || isAlibabaCloudMetadataAddress(literalAddr)
+                || isAwsIpv6MetadataAddress(literalAddr)) {
+                return false;
+            }
+            String lanIp = HttpControlServer.getLocalIpAddress();
+            if (lanIp != null && lanIp.equals(literalAddr.getHostAddress())) {
+                return true;
+            }
+            return literalAddr.isLoopbackAddress() || literalAddr.isSiteLocalAddress()
+                || isIpv4CgnatAddress(literalAddr) || isBlockedIpv6UlaAddress(literalAddr, host);
         } catch (Exception ignored) {}
         return false;
+    }
+
+    /**
+     * Parses strictly formatted IPv4 or IPv6 address literals without performing DNS lookups.
+     */
+    private static InetAddress parseStrictIpLiteral(String host) {
+        if (host == null || host.isEmpty()) return null;
+        if (host.indexOf(':') < 0) {
+            byte[] v4 = parseStrictIpv4Bytes(host);
+            if (v4 == null) return null;
+            try {
+                return InetAddress.getByAddress(v4);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        String clean = host;
+        int pct = clean.indexOf('%');
+        if (pct >= 0) {
+            clean = clean.substring(0, pct);
+        }
+        if (!isValidIpv6LiteralSyntax(clean)) {
+            return null;
+        }
+        try {
+            return InetAddress.getByName(clean);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static byte[] parseStrictIpv4Bytes(String s) {
+        String[] parts = s.split("\\.", -1);
+        if (parts.length != 4) return null;
+        byte[] out = new byte[4];
+        for (int i = 0; i < 4; i++) {
+            String p = parts[i];
+            if (p.isEmpty() || p.length() > 3) return null;
+            int val = 0;
+            for (int j = 0; j < p.length(); j++) {
+                char c = p.charAt(j);
+                if (c < '0' || c > '9') return null;
+                val = val * 10 + (c - '0');
+            }
+            if (val > 255) return null;
+            out[i] = (byte) val;
+        }
+        return out;
+    }
+
+    private static boolean isValidIpv6LiteralSyntax(String s) {
+        if (s == null || s.length() < 2) return false;
+        int doubleColon = s.indexOf("::");
+        if (doubleColon >= 0 && s.indexOf("::", doubleColon + 2) >= 0) {
+            return false;
+        }
+        String[] halves = doubleColon >= 0
+            ? new String[] { s.substring(0, doubleColon), s.substring(doubleColon + 2) }
+            : new String[] { s };
+        int totalHextets = 0;
+        boolean sawIpv4Tail = false;
+        for (int h = 0; h < halves.length; h++) {
+            String part = halves[h];
+            if (part.isEmpty()) {
+                if (doubleColon < 0) return false;
+                continue;
+            }
+            String[] groups = part.split(":", -1);
+            for (int g = 0; g < groups.length; g++) {
+                String grp = groups[g];
+                if (grp.isEmpty()) return false;
+                if (grp.indexOf('.') >= 0) {
+                    if (h != halves.length - 1 || g != groups.length - 1 || sawIpv4Tail) {
+                        return false;
+                    }
+                    if (parseStrictIpv4Bytes(grp) == null) return false;
+                    sawIpv4Tail = true;
+                    totalHextets += 2;
+                } else {
+                    if (grp.length() > 4) return false;
+                    for (int k = 0; k < grp.length(); k++) {
+                        char c = grp.charAt(k);
+                        boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                        if (!hex) return false;
+                    }
+                    totalHextets += 1;
+                }
+            }
+        }
+        return doubleColon >= 0 ? totalHextets < 8 : totalHextets == 8;
     }
 
     private static boolean isIpv4CgnatAddress(InetAddress addr) {
@@ -241,10 +354,11 @@ public final class AcidHttp {
         if ("metadata.google.internal".equals(rawHost) || "169.254.169.254".equals(rawHost)) {
             throw new SecurityException("Blocked SSRF access to cloud metadata endpoint: " + rawHost);
         }
-        if ((blockAllLoopbackAndLocal || isMcpPort) && HttpControlServer.isLoopbackOrLocalLiteralHost(rawHost)) {
+        if ((blockAllLoopbackAndLocal || isMcpPort)
+            && (HttpControlServer.isLoopbackOrLocalLiteralHost(rawHost) || rawHost.endsWith(".localhost"))) {
             throw new SecurityException("Blocked SSRF access to local/loopback target " + rawHost + ":" + port);
         }
-        if (rawHost.endsWith(".local") && blockAllLoopbackAndLocal) {
+        if ((rawHost.endsWith(".local") || rawHost.endsWith(".lan")) && blockAllLoopbackAndLocal) {
             throw new SecurityException("Blocked SSRF access to mDNS/local host " + rawHost);
         }
 
@@ -350,6 +464,9 @@ public final class AcidHttp {
     private static String normalizeHost(String host) {
         if (host == null) return "";
         String h = host.trim().toLowerCase(Locale.ROOT);
+        if (h.startsWith("[") && h.endsWith("]") && h.length() > 2) {
+            h = h.substring(1, h.length() - 1).trim();
+        }
         while (h.endsWith(".")) {
             h = h.substring(0, h.length() - 1).trim();
         }

@@ -62,6 +62,7 @@ public class UserscriptNativeBridge {
     private Host mHost;
     private ValueChangeSink mValueSink;
     private WeakReference<WebView> mWebViewRef;
+    private volatile boolean mAllowIsInstalledProbe = false;
 
     /** Permissive form (no token, no grant checks); kept for tests and tooling. */
     public UserscriptNativeBridge(
@@ -134,6 +135,10 @@ public class UserscriptNativeBridge {
         mWebViewRef = new WeakReference<WebView>(wv);
     }
 
+    public void setAllowIsInstalledProbe(boolean allow) {
+        mAllowIsInstalledProbe = allow;
+    }
+
     public WebView getWebView() {
         return mWebViewRef != null ? mWebViewRef.get() : null;
     }
@@ -153,6 +158,7 @@ public class UserscriptNativeBridge {
         if ("getResourceText".equals(action)) return new String[]{"GM_getResourceText"};
         if ("getResourceURL".equals(action)) return new String[]{"GM_getResourceURL"};
         if ("notification".equals(action)) return new String[]{"GM_notification"};
+        if ("log".equals(action)) return new String[]{"GM_log"};
         return new String[0];
     }
 
@@ -314,6 +320,10 @@ public class UserscriptNativeBridge {
             }
 
             if ("isInstalled".equals(action)) {
+                if (mResolver != null && !mAllowIsInstalledProbe) {
+                    Log.w(TAG, "Blocked untrusted Tampermonkey isInstalled probe on non-script site");
+                    return "";
+                }
                 JSONObject res = new JSONObject();
                 boolean installed = mHost != null
                     && mHost.isScriptInstalled(args.optString("name", ""), args.optString("namespace", "")) != null;

@@ -349,6 +349,9 @@ public class HttpControlServer {
             return;
         }
         mRunning = true;
+        final boolean lanEnabled = mController != null && mController.getDataStore() != null
+            && mController.getDataStore().isMcpLanEnabled();
+        mLanBound = lanEnabled;
         final int gen = mServerGeneration.incrementAndGet();
         final java.util.concurrent.atomic.AtomicBoolean cbFired = new java.util.concurrent.atomic.AtomicBoolean(false);
         final ExecutorService pool = getOrCreatePool();
@@ -356,9 +359,6 @@ public class HttpControlServer {
             @Override
             public void run() {
                 try {
-                    boolean lanEnabled = mController != null && mController.getDataStore() != null
-                        && mController.getDataStore().isMcpLanEnabled();
-                    mLanBound = lanEnabled;
                     InetAddress bindAddr = lanEnabled ? InetAddress.getByName("0.0.0.0") : InetAddress.getByName("127.0.0.1");
                     ServerSocket ss = new ServerSocket();
                     ss.setReuseAddress(true);
@@ -394,6 +394,7 @@ public class HttpControlServer {
                 } finally {
                     if (mServerGeneration.get() == gen) {
                         mRunning = false;
+                        mLanBound = false;
                         sActiveMcpPort = -1;
                         if (cbFired.compareAndSet(false, true) && callback != null) {
                             notifyStartCallback(callback, false, "MCP server stopped before binding");
@@ -424,6 +425,7 @@ public class HttpControlServer {
     public synchronized void stop() {
         mServerGeneration.incrementAndGet();
         mRunning = false;
+        mLanBound = false;
         sActiveMcpPort = -1;
         try {
             if (mServerSocket != null) {
@@ -575,6 +577,7 @@ public class HttpControlServer {
                 if (parsedLen < 0) {
                     sendJsonResponse(os, 400, new JSONObject()
                         .put("jsonrpc", "2.0")
+                        .put("id", JSONObject.NULL)
                         .put("error", new JSONObject()
                             .put("code", -32600)
                             .put("message", "Invalid Request: Malformed negative or non-numeric Content-Length")
@@ -585,6 +588,7 @@ public class HttpControlServer {
                 if (parsedLen > MAX_BODY_BYTES) {
                     sendJsonResponse(os, 413, new JSONObject()
                         .put("jsonrpc", "2.0")
+                        .put("id", JSONObject.NULL)
                         .put("error", new JSONObject()
                             .put("code", -32000)
                             .put("message", "Payload Too Large: Content-Length exceeds " + (MAX_BODY_BYTES / (1024 * 1024)) + "MB limit (" + parsedLen + " bytes)")
@@ -683,6 +687,7 @@ public class HttpControlServer {
     private void sendUnauthorizedResponse(OutputStream os) throws Exception {
         JSONObject err = new JSONObject();
         err.put("jsonrpc", "2.0");
+        err.put("id", JSONObject.NULL);
         JSONObject errDetail = new JSONObject();
         errDetail.put("code", -32000);
         errDetail.put("message", "Unauthorized: Missing or invalid Bearer token. Please configure 'Authorization: Bearer <token>' header or '?token=<token>' query parameter.");
@@ -735,6 +740,7 @@ public class HttpControlServer {
         if (!isLocalOrTrustedHost(host, mLanBound)) {
             sendJsonResponse(os, 403, new JSONObject()
                 .put("jsonrpc", "2.0")
+                .put("id", JSONObject.NULL)
                 .put("error", new JSONObject()
                     .put("code", -32000)
                     .put("message", "Forbidden: Untrusted Host header blocked when MCP token authentication is disabled.")
@@ -745,6 +751,7 @@ public class HttpControlServer {
         if (origin != null && !isLocalOrTrustedOrigin(origin, mLanBound)) {
             sendJsonResponse(os, 403, new JSONObject()
                 .put("jsonrpc", "2.0")
+                .put("id", JSONObject.NULL)
                 .put("error", new JSONObject()
                     .put("code", -32000)
                     .put("message", "Forbidden: Cross-origin requests from external web pages are blocked when MCP token authentication is disabled.")
@@ -792,6 +799,10 @@ public class HttpControlServer {
     }
 
     private void handleSseConnection(Socket socket, OutputStream os) throws Exception {
+        if (!mRunning) {
+            try { socket.close(); } catch (Exception ignored) {}
+            return;
+        }
         pruneDeadSseSessions();
         if (mSseSessions.size() >= MAX_SSE_SESSIONS) {
             // Actively probe existing SSE sockets on saturation to evict half-open zombie clients.
@@ -800,6 +811,7 @@ public class HttpControlServer {
         if (mSseSessions.size() >= MAX_SSE_SESSIONS) {
             sendJsonResponse(os, 503, new JSONObject()
                 .put("jsonrpc", "2.0")
+                .put("id", JSONObject.NULL)
                 .put("error", new JSONObject()
                     .put("code", -32000)
                     .put("message", "Service Unavailable: Too many active MCP SSE connections (limit " + MAX_SSE_SESSIONS + ").")
@@ -826,9 +838,15 @@ public class HttpControlServer {
             throw new java.io.IOException("Failed to write initial SSE endpoint event");
         }
 
-        mSseSessions.put(sessionId, session);
-        emitLog("[MCP] SSE Client connected (session: " + sessionId + ")");
-        getOrCreateHeartbeatExecutor();
+        synchronized (this) {
+            if (!mRunning) {
+                try { socket.close(); } catch (Exception ignored) {}
+                return;
+            }
+            mSseSessions.put(sessionId, session);
+            emitLog("[MCP] SSE Client connected (session: " + sessionId + ")");
+            getOrCreateHeartbeatExecutor();
+        }
         // Return immediately: this frees the worker thread back to mPool instantly!
         // The SSE stream stays active on its socket, and dead connections / periodic pings
         // are pruned and dispatched by mHeartbeatExecutor without tying up worker threads.

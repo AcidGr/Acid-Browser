@@ -134,7 +134,7 @@
 
     // 5. Element Visibility & Top-Layer Anti-Occlusion Filter
     const INTERACTIVE_TAGS = new Set([
-        'a', 'button', 'input', 'select', 'textarea', 'summary', 'details', 'label'
+        'a', 'button', 'input', 'select', 'textarea', 'summary', 'details'
     ]);
     const INTERACTIVE_ROLES = new Set([
         'button', 'link', 'textbox', 'searchbox', 'combobox', 'listbox',
@@ -635,7 +635,9 @@
                 try {
                     const doc = el.contentDocument;
                     if (doc && doc.body) {
-                        walk(doc.body, nextParent, rect.left, rect.top);
+                        const cl = typeof el.clientLeft === 'number' ? el.clientLeft : 0;
+                        const ct = typeof el.clientTop === 'number' ? el.clientTop : 0;
+                        walk(doc.body, nextParent, rect.left + cl, rect.top + ct);
                     }
                 } catch (e) {}
             }
@@ -814,11 +816,129 @@
     }
 
     // 8. Fingerprint & Semantic Target Resolver (Auto-Healing & Semantic Locators)
+    function collectAllSearchRoots() {
+        const roots = [];
+        const visitedDocs = [];
+        const visitedRoots = [];
+        function scanRoot(root) {
+            if (!root || visitedRoots.indexOf(root) >= 0) return;
+            visitedRoots.push(root);
+            roots.push(root);
+            try {
+                const startEl = root.body || root.documentElement || root;
+                const stack = [startEl];
+                while (stack.length > 0) {
+                    const node = stack.pop();
+                    if (!node) continue;
+                    const shadow = node.shadowRoot || node.__acidShadowRoot;
+                    if (shadow && visitedRoots.indexOf(shadow) < 0) {
+                        scanRoot(shadow);
+                    }
+                    const tag = (node.tagName || '').toLowerCase();
+                    if (tag === 'iframe') {
+                        try {
+                            const doc = node.contentDocument;
+                            if (doc && visitedDocs.indexOf(doc) < 0) {
+                                visitedDocs.push(doc);
+                                scanRoot(doc);
+                            }
+                        } catch (ignored) {}
+                    }
+                    const ch = node.children;
+                    if (ch) {
+                        for (let i = ch.length - 1; i >= 0; i--) {
+                            stack.push(ch[i]);
+                        }
+                    }
+                }
+            } catch (ignored) {}
+        }
+        visitedDocs.push(document);
+        scanRoot(document);
+        return roots;
+    }
+
+    function querySelectorAllDeep(selector) {
+        const results = [];
+        const roots = collectAllSearchRoots();
+        for (let r = 0; r < roots.length; r++) {
+            const root = roots[r];
+            if (!root || typeof root.querySelectorAll !== 'function') continue;
+            try {
+                const matched = root.querySelectorAll(selector);
+                if (matched) {
+                    for (let i = 0; i < matched.length; i++) {
+                        results.push(matched[i]);
+                    }
+                }
+            } catch (ignored) {}
+        }
+        return results;
+    }
+
+    function querySelectorDeep(selector) {
+        const roots = collectAllSearchRoots();
+        for (let r = 0; r < roots.length; r++) {
+            const root = roots[r];
+            if (!root || typeof root.querySelector !== 'function') continue;
+            try {
+                const found = root.querySelector(selector);
+                if (found) return found;
+            } catch (ignored) {}
+        }
+        return null;
+    }
+
+    function findElementByIdDeep(id) {
+        if (!id) return null;
+        const roots = collectAllSearchRoots();
+        for (let r = 0; r < roots.length; r++) {
+            const root = roots[r];
+            try {
+                if (typeof root.getElementById === 'function') {
+                    const byId = root.getElementById(id);
+                    if (byId && byId.isConnected) return byId;
+                } else if (typeof root.querySelector === 'function') {
+                    const bySel = root.querySelector('[id=' + JSON.stringify(id) + ']');
+                    if (bySel && bySel.isConnected) return bySel;
+                }
+            } catch (ignored) {}
+        }
+        return null;
+    }
+
+    function collectDeepText() {
+        const chunks = [];
+        const roots = collectAllSearchRoots();
+        for (let r = 0; r < roots.length; r++) {
+            const root = roots[r];
+            const txt = root && root.body
+                ? (root.body.innerText || root.body.textContent || '')
+                : (root && root.textContent ? root.textContent : '');
+            if (txt) chunks.push(txt);
+        }
+        return chunks.join('\n');
+    }
+
+    function getDeepActiveElement() {
+        let ae = document.activeElement;
+        while (ae) {
+            if (ae.contentDocument && ae.contentDocument.activeElement) {
+                ae = ae.contentDocument.activeElement;
+            } else if ((ae.shadowRoot || ae.__acidShadowRoot) && (ae.shadowRoot || ae.__acidShadowRoot).activeElement) {
+                ae = (ae.shadowRoot || ae.__acidShadowRoot).activeElement;
+            } else {
+                break;
+            }
+        }
+        return ae || null;
+    }
+
     function findElementByFingerprint(meta) {
         if (!meta) return null;
         if (meta.id) {
             try {
-                const byId = document.getElementById(meta.id);
+                const byId = findElementByIdDeep(meta.id);
                 if (byId && byId.isConnected) return byId;
             } catch (e) {}
         }
@@ -826,7 +946,7 @@
         if (meta.href) {
             try {
                 const sel = (validTag || '') + '[href=' + JSON.stringify(meta.href) + ']';
-                const candidates = document.querySelectorAll(sel);
+                const candidates = querySelectorAllDeep(sel);
                 for (let i = 0; i < candidates.length; i++) {
                     const byHref = candidates[i];
                     if (!byHref || !byHref.isConnected) continue;
@@ -838,7 +958,7 @@
         if (meta.name) {
             try {
                 const sel = (validTag || '') + '[name=' + JSON.stringify(meta.name) + ']';
-                const candidates = document.querySelectorAll(sel);
+                const candidates = querySelectorAllDeep(sel);
                 for (let i = 0; i < candidates.length; i++) {
                     const byName = candidates[i];
                     if (!byName || !byName.isConnected) continue;
@@ -848,7 +968,7 @@
             } catch (e) {}
         }
         if (meta.label && meta.label.length >= 2) {
-            const candidates = document.querySelectorAll(validTag || 'button, a, div, span, input');
+            const candidates = querySelectorAllDeep(validTag || 'button, a, div, span, input');
             const want = cleanText(meta.label, 80);
             for (let i = 0; i < candidates.length; i++) {
                 const c = candidates[i];
@@ -867,14 +987,16 @@
         const text = String(query).trim();
         if (!text) return null;
 
-        const interactives = document.querySelectorAll(
+        const interactives = querySelectorAllDeep(
             'button, a, input, select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [onclick], [tabindex]'
         );
         let partialMatch = null;
         for (let i = 0; i < interactives.length; i++) {
             const el = interactives[i];
             if (!el.isConnected) continue;
-            const style = window.getComputedStyle(el);
+            const elWin = (el.ownerDocument && el.ownerDocument.defaultView && typeof el.ownerDocument.defaultView.getComputedStyle === 'function')
+                ? el.ownerDocument.defaultView : window;
+            const style = elWin.getComputedStyle(el);
             if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
             const label = extractElementLabel(el).trim();
             if (label === text) {
@@ -886,11 +1008,13 @@
         }
         if (partialMatch) return partialMatch;
 
-        const textNodes = document.querySelectorAll('div, span, p, li, h1, h2, h3, h4, h5, h6, label');
+        const textNodes = querySelectorAllDeep('div, span, p, li, h1, h2, h3, h4, h5, h6, label');
         for (let i = 0; i < textNodes.length; i++) {
             const el = textNodes[i];
             if (!el.isConnected) continue;
-            const style = window.getComputedStyle(el);
+            const elWin = (el.ownerDocument && el.ownerDocument.defaultView && typeof el.ownerDocument.defaultView.getComputedStyle === 'function')
+                ? el.ownerDocument.defaultView : window;
+            const style = elWin.getComputedStyle(el);
             if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
             const label = (el.innerText || '').trim();
             if (label === text) {
@@ -936,7 +1060,7 @@
         // 2. Selector fallback
         if (!matchedEl && selector) {
             try {
-                const el = document.querySelector(selector);
+                const el = querySelectorDeep(selector);
                 if (el && el.isConnected) {
                     matchedEl = el;
                     matchedBy = 'selector';
@@ -991,8 +1115,10 @@
             }
             if (!frameEl) break;
             const fRect = frameEl.getBoundingClientRect();
-            left += fRect.left;
-            top += fRect.top;
+            const cl = typeof frameEl.clientLeft === 'number' ? frameEl.clientLeft : 0;
+            const ct = typeof frameEl.clientTop === 'number' ? frameEl.clientTop : 0;
+            left += fRect.left + cl;
+            top += fRect.top + ct;
             curWin = frameEl.ownerDocument ? frameEl.ownerDocument.defaultView : null;
         }
         return {
@@ -1037,8 +1163,9 @@
         const doc = el.ownerDocument || document;
         const hitEl = doc.elementFromPoint(localRect.left + localRect.width / 2, localRect.top + localRect.height / 2);
         const occluded = !!(hitEl && hitEl !== el && !el.contains(hitEl) && !hitEl.contains(el));
-        const activeTagBefore = document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '';
-        const activeIdBefore = document.activeElement ? (document.activeElement.id || '') : '';
+        const activeElBefore = getDeepActiveElement();
+        const activeTagBefore = activeElBefore ? (activeElBefore.tagName || '').toLowerCase() : '';
+        const activeIdBefore = activeElBefore ? (activeElBefore.id || '') : '';
 
         return {
             ok: true,
@@ -1074,11 +1201,14 @@
             return resolved;
         }
         const el = resolved.el;
+        const elDoc = el.ownerDocument || document;
+        const elWin = elDoc.defaultView || window;
         const ref = resolved.ref || 'target';
         const revBefore = documentRevision;
         const urlBefore = location.href;
-        const activeBefore = (document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '') +
-            '#' + (document.activeElement ? (document.activeElement.id || '') : '');
+        const activeElBefore = getDeepActiveElement();
+        const activeBefore = (activeElBefore ? (activeElBefore.tagName || '').toLowerCase() : '') +
+            '#' + (activeElBefore ? (activeElBefore.id || '') : '');
         try {
             el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
         } catch (e) {}
@@ -1087,7 +1217,7 @@
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
 
-        const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+        const opts = { bubbles: true, cancelable: true, view: elWin, clientX: cx, clientY: cy };
         try { el.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (e) {}
         try { el.dispatchEvent(new MouseEvent('mousedown', opts)); } catch (e) {}
         try { el.focus(); } catch (e) {}
@@ -1103,8 +1233,9 @@
 
         const revAfter = documentRevision;
         const urlAfter = location.href;
-        const activeAfter = (document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '') +
-            '#' + (document.activeElement ? (document.activeElement.id || '') : '');
+        const activeElAfter = getDeepActiveElement();
+        const activeAfter = (activeElAfter ? (activeElAfter.tagName || '').toLowerCase() : '') +
+            '#' + (activeElAfter ? (activeElAfter.id || '') : '');
         const domChanged = revAfter > revBefore;
         const urlChanged = urlBefore !== urlAfter;
         const focusChanged = activeBefore !== activeAfter;
@@ -1142,8 +1273,12 @@
         const finalText = clear === false ? ((el.value || '') + text) : String(text);
 
         if (tag === 'input' || tag === 'textarea') {
-            const proto = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-            const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+            const elDoc = el.ownerDocument || document;
+            const elWin = elDoc.defaultView || window;
+            const ctorName = tag === 'textarea' ? 'HTMLTextAreaElement' : 'HTMLInputElement';
+            const ctor = (elWin && elWin[ctorName]) ? elWin[ctorName] : window[ctorName];
+            const proto = ctor ? ctor.prototype : null;
+            const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
             const previousValue = el.value;
 
             // 1. Dispatch beforeinput (for modern React, Vue, Lexical, and Web components)
@@ -1198,11 +1333,12 @@
             } catch (e) {}
 
             let applied = false;
+            const elDoc = el.ownerDocument || document;
             try {
                 if (clear !== false) {
-                    document.execCommand('selectAll', false, null);
+                    elDoc.execCommand('selectAll', false, null);
                 }
-                applied = document.execCommand('insertText', false, finalText);
+                applied = elDoc.execCommand('insertText', false, finalText);
             } catch (e) {}
 
             const currentVal = (el.innerText !== undefined ? el.innerText : (el.textContent || '')).trim();
@@ -1448,7 +1584,22 @@
     function scroll(direction, amount, targetRef) {
         const dir = (direction || 'down').toLowerCase();
         const factor = typeof amount === 'number' ? amount : 0.75;
-        const container = (targetRef && refMap[targetRef]) ? refMap[targetRef] : window;
+        let container = window;
+        if (targetRef) {
+            const refStr = String(targetRef).trim();
+            const resolved = /^e\d+$/.test(refStr)
+                ? resolveTargetElement({ ref: refStr })
+                : resolveTargetElement({ selector: refStr });
+            if (resolved.ok && resolved.el) {
+                container = resolved.el;
+            } else {
+                return {
+                    ok: false,
+                    error: resolved.error || 'ELEMENT_NOT_FOUND',
+                    message: resolved.message || ('Could not resolve scroll container: ' + refStr)
+                };
+            }
+        }
         const vh = window.innerHeight || 640;
         const vw = window.innerWidth || 360;
 
@@ -1511,14 +1662,15 @@
     }
 
     function getState() {
+        const activeEl = getDeepActiveElement();
         return {
             ok: true,
             url: location.href,
             title: document.title || '',
             revision: documentRevision,
             msSinceLastMutation: Date.now() - lastMutationTime,
-            activeTag: document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '',
-            activeId: document.activeElement ? (document.activeElement.id || '') : '',
+            activeTag: activeEl ? (activeEl.tagName || '').toLowerCase() : '',
+            activeId: activeEl ? (activeEl.id || '') : '',
             somEnabled: somEnabled,
             desktopSpoofEnabled: desktopSpoofEnabled
         };
@@ -1569,8 +1721,8 @@
         if (cond === 'selector') {
             if (!target) return { ok: false, error: 'Target selector required' };
             try {
-                const el = document.querySelector(target);
-                const satisfied = !!(el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0));
+                const el = querySelectorDeep(target);
+                const satisfied = !!(el && (el.offsetWidth > 0 || el.offsetHeight > 0 || (el.getClientRects && el.getClientRects().length > 0)));
                 return { ok: true, satisfied: satisfied };
             } catch (e) {
                 return { ok: false, error: String(e) };
@@ -1578,20 +1730,20 @@
         }
         if (cond === 'text') {
             if (!target) return { ok: false, error: 'Target text required' };
-            const pageText = document.body ? (document.body.innerText || '') : '';
+            const pageText = collectDeepText();
             return { ok: true, satisfied: pageText.includes(target) };
         }
         if (cond === 'gone') {
             if (!target) return { ok: false, error: 'Target required for gone condition' };
             let found = false;
             try {
-                const el = document.querySelector(target);
-                if (el && (el.offsetWidth > 0 || el.offsetHeight > 0)) {
+                const el = querySelectorDeep(target);
+                if (el && (el.offsetWidth > 0 || el.offsetHeight > 0 || (el.getClientRects && el.getClientRects().length > 0))) {
                     found = true;
                 }
             } catch (ignored) {}
             if (!found) {
-                const pageText = document.body ? (document.body.innerText || '') : '';
+                const pageText = collectDeepText();
                 if (pageText.includes(target)) {
                     found = true;
                 }

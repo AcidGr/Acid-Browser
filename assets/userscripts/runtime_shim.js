@@ -180,7 +180,7 @@ try {
   GM_xmlhttpRequest.UNSENT = 0; GM_xmlhttpRequest.OPENED = 1;
   GM_xmlhttpRequest.HEADERS_RECEIVED = 2; GM_xmlhttpRequest.LOADING = 3; GM_xmlhttpRequest.DONE = 4;
 
-  window.__acid_dispatch_http_cb = function(name, obj, last) {
+  var _dispatchHttpCb = function(name, obj, last) {
     try {
       if (obj && obj.responseType) {
         var type = obj.responseType;
@@ -218,20 +218,62 @@ try {
       }
     } catch(e) { console.error('[AcidUserscriptHttpCallbackError]', e); }
   };
+  try {
+    var _dDesc = Object.getOwnPropertyDescriptor(window, '__acid_dispatch_http_cb');
+    if (!_dDesc || _dDesc.configurable) {
+      _defProp(window, '__acid_dispatch_http_cb', {
+        value: _dispatchHttpCb, writable: false, configurable: false, enumerable: false
+      });
+    } else if (_dDesc.writable) {
+      window.__acid_dispatch_http_cb = _dispatchHttpCb;
+    }
+  } catch(e) {
+    try { window.__acid_dispatch_http_cb = _dispatchHttpCb; } catch(e2){}
+  }
 
-  // ---- GM.* promise API ----
+  // ---- GM.* promise API (filtered by @grant) ----
+  var _rawGrants = (GM_info && GM_info.script && Array.isArray(GM_info.script.grant)) ? GM_info.script.grant : [];
+  var _hasExplicitGrants = _rawGrants.length > 0;
+  var _normGrant = function(g) {
+    var s = String(g || '').trim().toLowerCase();
+    return s.indexOf('gm.') === 0 ? ('gm_' + s.substring(3)) : s;
+  };
+  var _grantSet = {};
+  for (var _gi = 0; _gi < _rawGrants.length; _gi++) {
+    _grantSet[_normGrant(_rawGrants[_gi])] = true;
+  }
+  var _isGmGranted = function() {
+    if (!_hasExplicitGrants) return true;
+    for (var _i = 0; _i < arguments.length; _i++) {
+      var _w = _normGrant(arguments[_i]);
+      if (_w !== 'none' && _grantSet[_w]) return true;
+    }
+    return false;
+  };
   var _p = function(f) { return function() { var a = arguments; return new Promise(function(res){ res(f.apply(null, a)); }); }; };
-  var GM = {
-    info: GM_info,
-    setValue: _p(GM_setValue), getValue: _p(GM_getValue), deleteValue: _p(GM_deleteValue),
-    listValues: _p(GM_listValues), setValues: _p(GM_setValues), getValues: _p(GM_getValues),
-    deleteValues: _p(GM_deleteValues), addStyle: _p(GM_addStyle), addElement: _p(GM_addElement),
-    setClipboard: _p(GM_setClipboard), notification: _p(GM_notification),
-    openInTab: _p(GM_openInTab), download: _p(GM_download),
-    getResourceText: _p(GM_getResourceText), getResourceUrl: _p(GM_getResourceURL),
-    getResourceURL: _p(GM_getResourceURL),
-    registerMenuCommand: _p(GM_registerMenuCommand), unregisterMenuCommand: _p(GM_unregisterMenuCommand),
-    xmlHttpRequest: function(d) {
+  var GM = { info: GM_info };
+  if (_isGmGranted('GM_setValue', 'GM_setValues')) GM.setValue = _p(GM_setValue);
+  if (_isGmGranted('GM_getValue', 'GM_getValues')) GM.getValue = _p(GM_getValue);
+  if (_isGmGranted('GM_deleteValue', 'GM_deleteValues')) GM.deleteValue = _p(GM_deleteValue);
+  if (_isGmGranted('GM_listValues')) GM.listValues = _p(GM_listValues);
+  if (_isGmGranted('GM_setValues')) GM.setValues = _p(GM_setValues);
+  if (_isGmGranted('GM_getValues')) GM.getValues = _p(GM_getValues);
+  if (_isGmGranted('GM_deleteValues')) GM.deleteValues = _p(GM_deleteValues);
+  if (_isGmGranted('GM_addStyle')) GM.addStyle = _p(GM_addStyle);
+  if (_isGmGranted('GM_addElement')) GM.addElement = _p(GM_addElement);
+  if (_isGmGranted('GM_setClipboard')) GM.setClipboard = _p(GM_setClipboard);
+  if (_isGmGranted('GM_notification')) GM.notification = _p(GM_notification);
+  if (_isGmGranted('GM_openInTab')) GM.openInTab = _p(GM_openInTab);
+  if (_isGmGranted('GM_download')) GM.download = _p(GM_download);
+  if (_isGmGranted('GM_getResourceText')) GM.getResourceText = _p(GM_getResourceText);
+  if (_isGmGranted('GM_getResourceURL')) {
+    GM.getResourceUrl = _p(GM_getResourceURL);
+    GM.getResourceURL = _p(GM_getResourceURL);
+  }
+  if (_isGmGranted('GM_registerMenuCommand')) GM.registerMenuCommand = _p(GM_registerMenuCommand);
+  if (_isGmGranted('GM_unregisterMenuCommand')) GM.unregisterMenuCommand = _p(GM_unregisterMenuCommand);
+  if (_isGmGranted('GM_xmlhttpRequest')) {
+    GM.xmlHttpRequest = function(d) {
       var h;
       var p = new Promise(function(resolve, reject) {
         var c = Object.assign({}, d);
@@ -243,5 +285,5 @@ try {
       });
       p.abort = function() { if (h) h.abort(); };
       return p;
-    }
-  };
+    };
+  }

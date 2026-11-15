@@ -247,6 +247,10 @@ public class BrowserDataStore {
         mSettingsChangedListener = l;
     }
 
+    public boolean hasSettingsChangedListener() {
+        return mSettingsChangedListener != null;
+    }
+
     public void setOnBookmarksChangedListener(OnBookmarksChangedListener l) {
         mBookmarkRepo.setOnBookmarksChangedListener(l);
     }

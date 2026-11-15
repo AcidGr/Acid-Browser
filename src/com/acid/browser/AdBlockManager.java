@@ -519,6 +519,14 @@ public class AdBlockManager {
                     return false;
                 }
             }
+            if (inner.contains("*")) {
+                java.util.regex.Pattern wcPat = compileWildcardPathPattern(line);
+                if (wcPat != null) {
+                    out.regexPatterns.add(wcPat);
+                    return true;
+                }
+                return false;
+            }
             // Preserve slash boundaries (e.g. "/ads/") so substring matching never collaterally
             // blocks legitimate URLs containing words like "downloads" or "uploads".
             out.pathPatterns.add(line.toLowerCase(Locale.ROOT));
@@ -641,11 +649,37 @@ public class AdBlockManager {
         for (int i = 0; i < inner.length(); i++) {
             char ch = inner.charAt(i);
             if (ch == '\\' || ch == '(' || ch == '[' || ch == '^' || ch == '$'
-                || ch == '+' || ch == '?' || ch == '|' || ch == '*' || ch == '{') {
+                || ch == '+' || ch == '?' || ch == '|' || ch == '{') {
                 return true;
             }
         }
         return false;
+    }
+
+    private static java.util.regex.Pattern compileWildcardPathPattern(String rule) {
+        if (rule == null || rule.length() > 256) return null;
+        try {
+            StringBuilder regex = new StringBuilder();
+            StringBuilder literal = new StringBuilder();
+            for (int i = 0; i < rule.length(); i++) {
+                char c = rule.charAt(i);
+                if (c == '*') {
+                    if (literal.length() > 0) {
+                        regex.append(java.util.regex.Pattern.quote(literal.toString()));
+                        literal.setLength(0);
+                    }
+                    regex.append(".*");
+                } else {
+                    literal.append(c);
+                }
+            }
+            if (literal.length() > 0) {
+                regex.append(java.util.regex.Pattern.quote(literal.toString()));
+            }
+            return java.util.regex.Pattern.compile(regex.toString(), java.util.regex.Pattern.CASE_INSENSITIVE);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private static boolean isAsciiLowerTwoLetters(String s) {

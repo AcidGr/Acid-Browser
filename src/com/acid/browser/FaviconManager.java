@@ -229,6 +229,10 @@ public final class FaviconManager {
     }
 
     private Bitmap getFaviconFromDisk(String host) {
+        return getFaviconFromDisk(host, mCacheGeneration.get());
+    }
+
+    private Bitmap getFaviconFromDisk(String host, int expectedGen) {
         File file = getCacheFileForHost(host);
         if (file != null && file.exists() && file.length() > 32) {
             byte[] bytes = readFileBytes(file);
@@ -236,7 +240,9 @@ public final class FaviconManager {
                 Bitmap bmp = decodeFaviconBitmap(bytes);
                 if (bmp != null) {
                     synchronized (mMemCache) {
-                        mMemCache.put(host, bmp);
+                        if (mCacheGeneration.get() == expectedGen) {
+                            mMemCache.put(host, bmp);
+                        }
                     }
                     return bmp;
                 }
@@ -339,8 +345,8 @@ public final class FaviconManager {
         mExecutor.execute(new Runnable() {
             @Override
             public void run() {
-                Bitmap resultBmp = getFaviconFromDisk(host);
-                if (resultBmp == null) {
+                Bitmap resultBmp = getFaviconFromDisk(host, startGen);
+                if (resultBmp == null && mCacheGeneration.get() == startGen) {
                     byte[] downloaded = probeAndDownloadFaviconBytes(host);
                     if (mCacheGeneration.get() == startGen) {
                         if (downloaded != null && isValidFaviconBytes(downloaded)) {
@@ -482,7 +488,10 @@ public final class FaviconManager {
         }
 
         for (String cand : candidates) {
-            byte[] b = fetchUrlBytes(cand);
+            AcidHttp.UrlValidator validator = isLocalOrIp
+                ? AcidHttp.createDownloadValidator(cand)
+                : AcidHttp.REMOTE_FETCH_VALIDATOR;
+            byte[] b = fetchUrlBytes(cand, validator);
             if (b != null && isValidFaviconBytes(b)) {
                 return b;
             }
@@ -491,6 +500,10 @@ public final class FaviconManager {
     }
 
     public static byte[] fetchUrlBytes(String urlStr) {
+        return fetchUrlBytes(urlStr, AcidHttp.REMOTE_FETCH_VALIDATOR);
+    }
+
+    public static byte[] fetchUrlBytes(String urlStr, AcidHttp.UrlValidator validator) {
         HttpURLConnection conn = null;
         InputStream is = null;
         try {
@@ -499,7 +512,8 @@ public final class FaviconManager {
             headers.put("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
             conn = AcidHttp.openConnectionWithRedirects(
                 urlStr, "GET", headers, 2500, 3000, 3,
-                AcidHttp.REMOTE_FETCH_VALIDATOR, AcidHttp.SAME_ORIGIN_CREDENTIALS, null
+                validator != null ? validator : AcidHttp.REMOTE_FETCH_VALIDATOR,
+                AcidHttp.SAME_ORIGIN_CREDENTIALS, null
             );
             int code = conn.getResponseCode();
             if (code != HttpURLConnection.HTTP_OK) {
@@ -609,20 +623,27 @@ public final class FaviconManager {
                 return buildEmpty404Response();
             }
 
+            final int startGen = mCacheGeneration.get();
             byte[] downloaded = probeAndDownloadFaviconBytes(host);
-            if (downloaded != null && isValidFaviconBytes(downloaded)) {
-                saveToDisk(host, downloaded);
-                Bitmap bmp = decodeFaviconBitmap(downloaded);
-                if (bmp != null) {
-                    synchronized (mMemCache) {
-                        mMemCache.put(host, bmp);
+            if (mCacheGeneration.get() == startGen) {
+                if (downloaded != null && isValidFaviconBytes(downloaded)) {
+                    saveToDisk(host, downloaded);
+                    Bitmap bmp = decodeFaviconBitmap(downloaded);
+                    if (bmp != null) {
+                        synchronized (mMemCache) {
+                            if (mCacheGeneration.get() == startGen) {
+                                mMemCache.put(host, bmp);
+                            }
+                        }
                     }
+                    mNegativeCache.remove(host);
+                    return buildFaviconResponse(downloaded);
                 }
-                mNegativeCache.remove(host);
+
+                mNegativeCache.put(host, Long.valueOf(System.currentTimeMillis()));
+            } else if (downloaded != null && isValidFaviconBytes(downloaded)) {
                 return buildFaviconResponse(downloaded);
             }
-
-            mNegativeCache.put(host, Long.valueOf(System.currentTimeMillis()));
         } catch (Exception ignored) {}
         return buildEmpty404Response();
     }

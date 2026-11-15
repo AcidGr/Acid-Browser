@@ -37,6 +37,7 @@ public class SkillSheet extends AcidBottomSheetView {
             mManager.addListener(new SkillManager.OnSkillsChangedListener() {
                 @Override
                 public void onSkillsChanged() {
+                    if (mSuppressRefreshOnToggle) return;
                     post(new Runnable() {
                         @Override
                         public void run() {
@@ -254,10 +255,22 @@ public class SkillSheet extends AcidBottomSheetView {
     // LEVEL 2: Skill Detail Page (with Bundled Companion Files Support)
     // =========================================================================
 
-    private SheetPage buildSkillDetailPage(final SkillManager.SkillMeta meta) {
-        SheetPage page = new SheetPage(meta.title, new FullPageRenderer() {
+    private SkillManager.SkillMeta findSkillMetaByFileName(String fileName) {
+        if (mManager == null || fileName == null) return null;
+        List<SkillManager.SkillMeta> list = mManager.getSkills();
+        for (int i = 0; i < list.size(); i++) {
+            SkillManager.SkillMeta m = list.get(i);
+            if (fileName.equals(m.fileName)) return m;
+        }
+        return null;
+    }
+
+    private SheetPage buildSkillDetailPage(final SkillManager.SkillMeta initialMeta) {
+        SheetPage page = new SheetPage(initialMeta.title, new FullPageRenderer() {
             @Override
             public void render(LinearLayout pinned, LinearLayout container, LinearLayout footer) {
+                SkillManager.SkillMeta latest = findSkillMetaByFileName(initialMeta.fileName);
+                final SkillManager.SkillMeta meta = (latest != null) ? latest : initialMeta;
                 final Context ctx = getContext();
                 final String content = mManager != null ? mManager.readSkill(meta.fileName) : "";
                 boolean en = AcidLocale.isEn();
@@ -356,18 +369,20 @@ public class SkillSheet extends AcidBottomSheetView {
             }
         });
 
-        if (meta.isBuiltin) {
+        if (initialMeta.isBuiltin) {
             page.withAction(AcidIcons.ICON_RELOAD, "重置默认", new OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    confirmResetBuiltin(meta);
+                    SkillManager.SkillMeta cur = findSkillMetaByFileName(initialMeta.fileName);
+                    confirmResetBuiltin(cur != null ? cur : initialMeta);
                 }
             });
         } else {
             page.withAction(AcidIcons.ICON_TRASH, "删除", AcidTheme.COLOR_RED, new OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    confirmDelete(meta);
+                    SkillManager.SkillMeta cur = findSkillMetaByFileName(initialMeta.fileName);
+                    confirmDelete(cur != null ? cur : initialMeta);
                 }
             });
         }
@@ -454,7 +469,11 @@ public class SkillSheet extends AcidBottomSheetView {
                 public void run() {
                     boolean ok = mManager != null && mManager.deleteSkill(meta.fileName);
                     AcidFeedback.info(ctx, ok ? "已删除技能「" + meta.title + "」" : "删除失败");
-                    popPage();
+                    if (getPageDepth() > 1) {
+                        popPage();
+                    } else if (isShowing()) {
+                        setRootPage(buildSkillsListPage());
+                    }
                 }
             }
         );
