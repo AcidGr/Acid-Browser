@@ -9,10 +9,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -364,6 +366,22 @@ public class AcidAgentLoop {
     }
 
     /**
+     * Returns true only when {@code baseUrl} parses to a loopback or local literal host
+     * (rejecting substring lookalikes such as {@code https://evil.com/?localhost}).
+     */
+    public static boolean isLoopbackBaseUrl(String baseUrl) {
+        if (baseUrl == null) return false;
+        String trimmed = baseUrl.trim();
+        if (trimmed.isEmpty()) return false;
+        try {
+            URI uri = URI.create(trimmed.contains("://") ? trimmed : ("http://" + trimmed));
+            return HttpControlServer.isLoopbackOrLocalLiteralHost(uri.getHost());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
      * Starts a new user task turn or resumes after human takeover.
      */
     public void submitUserTask(final String userPrompt) {
@@ -382,7 +400,7 @@ public class AcidAgentLoop {
         }
         String apiKey = getApiKey();
         String baseUrl = getBaseUrl();
-        if (apiKey.isEmpty() && !baseUrl.contains("127.0.0.1") && !baseUrl.contains("localhost")) {
+        if (apiKey.isEmpty() && !isLoopbackBaseUrl(baseUrl)) {
             addErrorItem("当前供应商 [" + activeProvider.displayName + "] 尚未配置 API Key！请点击浏览器右下角 [功能 -> 模型配置] 填入 API Key，或点击面板右上角切换其他已配置模型。");
             return;
         }
@@ -416,10 +434,29 @@ public class AcidAgentLoop {
             @Override
             public void run() {
                 if (prevWorker != null && prevWorker.isAlive() && Thread.currentThread() != prevWorker) {
+                    disconnectQuietly(mActiveConnection);
                     try {
-                        prevWorker.join(350);
+                        prevWorker.interrupt();
+                    } catch (Exception ignored) {}
+                    try {
+                        prevWorker.join(3000);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
+                    }
+                    if (prevWorker.isAlive()) {
+                        if (!isRunCancelled(runGen)) {
+                            mRunning = false;
+                            addErrorItem("上一轮请求仍在清理连接，请稍后重试。");
+                            mMainHandler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (mRunGeneration.get() == runGen && mListener != null) {
+                                        mListener.onLoopStateChanged(false, mPausedForTakeover, 0);
+                                    }
+                                }
+                            });
+                        }
+                        return;
                     }
                 }
                 if (isRunCancelled(runGen)) {
@@ -853,16 +890,20 @@ public class AcidAgentLoop {
             return new ArrayList<JSONObject>();
         }
 
-        // 1. Identify indices of messages that actually contain active DOM observations (with Interactive Elements)
-        // This covers both tool outputs and initial user prompt "[Current Browser State]" blocks.
+        // 1. Identify DOM observations (with Interactive Elements) and oversized (>8192 chars) non-DOM tool outputs.
         List<Integer> domObsIndices = new ArrayList<Integer>();
+        List<Integer> nonDomGiantIndices = new ArrayList<Integer>();
         for (int i = 0; i < apiMessages.size(); i++) {
             JSONObject m = apiMessages.get(i);
             if (m == null) continue;
             String role = m.optString("role");
             String content = m.optString("content", "");
-            if ("tool".equals(role) && content.contains("Interactive Elements (")) {
-                domObsIndices.add(i);
+            if ("tool".equals(role)) {
+                if (content.contains("Interactive Elements (")) {
+                    domObsIndices.add(i);
+                } else if (content.length() > 8192) {
+                    nonDomGiantIndices.add(i);
+                }
             } else if ("user".equals(role) && content.contains("[Current Browser State]") && content.contains("Interactive Elements (")) {
                 domObsIndices.add(i);
             }
@@ -871,22 +912,25 @@ public class AcidAgentLoop {
         // 2. Ironclad Rules:
         // - The latest DOM observation (last in domObsIndices) MUST NEVER be pruned under any circumstances!
         // - Keep at least the last 3 DOM observations intact so pagination slices (offset=0, offset=180, offset=360) co-exist.
-        // - Non-DOM tools (eval, download, tabs, bash, read, write) NEVER count as DOM observations and cannot evict DOM history.
+        // - Keep at least the last 2 oversized non-DOM tool outputs intact; compact older >8192 non-DOM outputs via DSH head/tail trimming.
         int domKeepThreshold = domObsIndices.size() > 3
             ? domObsIndices.get(domObsIndices.size() - 3)
             : -1;
+        int nonDomKeepThreshold = nonDomGiantIndices.size() > 2
+            ? nonDomGiantIndices.get(nonDomGiantIndices.size() - 2)
+            : -1;
 
         Set<Integer> domIndicesSet = new HashSet<Integer>(domObsIndices);
+        Set<Integer> nonDomGiantSet = new HashSet<Integer>(nonDomGiantIndices);
         int latestDomIndex = !domObsIndices.isEmpty() ? domObsIndices.get(domObsIndices.size() - 1) : -1;
 
         List<JSONObject> result = new ArrayList<JSONObject>(apiMessages.size());
         for (int i = 0; i < apiMessages.size(); i++) {
             JSONObject orig = apiMessages.get(i);
             if (orig == null) continue;
-            // Prune only if:
-            // a) It is an old DOM observation strictly before domKeepThreshold
-            // b) It is definitely not the latest DOM observation
-            if (domKeepThreshold >= 0 && i < domKeepThreshold && domIndicesSet.contains(i) && i != latestDomIndex) {
+            boolean shouldCompactDom = domKeepThreshold >= 0 && i < domKeepThreshold && domIndicesSet.contains(i) && i != latestDomIndex;
+            boolean shouldCompactGiantNonDom = nonDomKeepThreshold >= 0 && i < nonDomKeepThreshold && nonDomGiantSet.contains(i);
+            if (shouldCompactDom || shouldCompactGiantNonDom) {
                 try {
                     JSONObject pruned = new JSONObject(orig.toString());
                     String full = orig.optString("content", "");
@@ -1157,6 +1201,35 @@ public class AcidAgentLoop {
         return new JSONObject(rawArgs);
     }
 
+    /**
+     * Extracts a human-readable error message from a streaming SSE JSON chunk when an
+     * OpenAI-compatible gateway emits an HTTP 200 inline {@code {"error": ...}} event.
+     */
+    public static String extractSseErrorMessage(JSONObject chunk) {
+        if (chunk == null || !chunk.has("error") || chunk.isNull("error")) {
+            return null;
+        }
+        Object errVal = chunk.opt("error");
+        if (errVal instanceof JSONObject) {
+            JSONObject eo = (JSONObject) errVal;
+            String msg = eo.optString("message", "").trim();
+            if (msg.isEmpty()) msg = eo.optString("detail", "").trim();
+            if (msg.isEmpty()) msg = eo.optString("error", "").trim();
+            String code = eo.isNull("code") ? "" : eo.optString("code", "").trim();
+            String type = eo.isNull("type") ? "" : eo.optString("type", "").trim();
+            if (msg.isEmpty()) msg = eo.toString();
+            if (!code.isEmpty() && !"null".equals(code)) {
+                return msg + " (code: " + code + ")";
+            }
+            if (!type.isEmpty() && !"null".equals(type)) {
+                return msg + " (" + type + ")";
+            }
+            return msg;
+        }
+        String raw = String.valueOf(errVal).trim();
+        return raw.isEmpty() || "null".equals(raw) ? "Unknown stream error" : raw;
+    }
+
     private JSONObject callChatCompletionsStream(
         AcidSessionStore.AgentSession session,
         JSONArray messages,
@@ -1261,6 +1334,12 @@ public class AcidAgentLoop {
                     chunk = new JSONObject(data);
                 } catch (Exception e) {
                     continue;
+                }
+
+                String streamErr = extractSseErrorMessage(chunk);
+                if (streamErr != null) {
+                    disconnectQuietly(conn);
+                    throw new IOException(streamErr);
                 }
 
                 if (chunk.has("usage") && !chunk.isNull("usage")) {

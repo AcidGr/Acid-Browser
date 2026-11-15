@@ -115,6 +115,7 @@ public class BrowserDataStore {
     private volatile String mLastSyncedSettingsJson = null;
     private final AtomicLong mSettingsRevision = new AtomicLong(0);
     private final Object mSettingsFileLock = new Object();
+    private final Object mSettingsStateLock = new Object();
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
@@ -319,18 +320,22 @@ public class BrowserDataStore {
 
     public <T> boolean set(final AcidSettings.SettingKey<T> key, T value) {
         final T sanitized = key.sanitize(value);
-        T previous = get(key);
-        boolean changed = (previous == null) ? (sanitized != null) : !previous.equals(sanitized);
+        final boolean changed;
+        final long rev;
+        synchronized (mSettingsStateLock) {
+            T previous = get(key);
+            changed = (previous == null) ? (sanitized != null) : !previous.equals(sanitized);
 
-        SharedPreferences.Editor ed = prefs().edit();
-        key.write(ed, sanitized);
-        if (key.exportToJson) {
-            ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, true);
+            SharedPreferences.Editor ed = prefs().edit();
+            key.write(ed, sanitized);
+            if (key.exportToJson) {
+                ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, true);
+            }
+            ed.apply();
+            rev = key.exportToJson ? mSettingsRevision.incrementAndGet() : 0L;
         }
-        ed.apply();
 
         if (key.exportToJson) {
-            final long rev = mSettingsRevision.incrementAndGet();
             if (AcidAsync.isMainThread()) {
                 AcidAsync.runSerialized(new Runnable() {
                     @Override
@@ -487,12 +492,17 @@ public class BrowserDataStore {
             }
             try {
                 mLastSelfSaveTime = System.currentTimeMillis();
-                JSONObject o = exportToJson();
+                final JSONObject o;
+                synchronized (mSettingsStateLock) {
+                    o = exportToJson();
+                }
                 String jsonText = o.toString(2);
                 mLastSyncedSettingsJson = jsonText;
                 AcidIo.writeFileUtf8(mSettingsJsonFile, jsonText);
-                if (expectedRevision <= 0 || expectedRevision == mSettingsRevision.get()) {
-                    prefs().edit().putBoolean(PREF_SETTINGS_PENDING_SYNC, false).apply();
+                synchronized (mSettingsStateLock) {
+                    if (expectedRevision <= 0 || expectedRevision == mSettingsRevision.get()) {
+                        prefs().edit().putBoolean(PREF_SETTINGS_PENDING_SYNC, false).apply();
+                    }
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Failed to save settings.json", e);
@@ -547,16 +557,18 @@ public class BrowserDataStore {
                 JSONObject o = new JSONObject(content);
                 mLastSyncedSettingsJson = content;
 
-                SharedPreferences.Editor ed = prefs().edit();
-                for (int i = 0; i < AcidSettings.ALL_KEYS.size(); i++) {
-                    ChangedKeyEntry<?> diff = stageKeyFromJson(o, ed, AcidSettings.ALL_KEYS.get(i));
-                    if (diff != null) {
-                        changedEntries.add(diff);
+                synchronized (mSettingsStateLock) {
+                    SharedPreferences.Editor ed = prefs().edit();
+                    for (int i = 0; i < AcidSettings.ALL_KEYS.size(); i++) {
+                        ChangedKeyEntry<?> diff = stageKeyFromJson(o, ed, AcidSettings.ALL_KEYS.get(i));
+                        if (diff != null) {
+                            changedEntries.add(diff);
+                        }
                     }
+                    ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, false);
+                    ed.apply();
+                    mSettingsRevision.incrementAndGet();
                 }
-                ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, false);
-                ed.apply();
-                mSettingsRevision.incrementAndGet();
             } catch (Exception e) {
                 Log.w(TAG, "Failed to reload settings from " + mSettingsJsonFile, e);
                 return false;

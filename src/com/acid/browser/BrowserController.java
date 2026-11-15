@@ -68,6 +68,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public interface BrowserStateListener {
         void onUrlChanged(String url, String title);
+        void onVisitHistoryUpdated(String url, String title);
         void onProgressChanged(int progress, boolean isLoading);
         void onModeChanged(boolean isDesktopMode, int controlMode, boolean somEnabled);
         void onDeepLinkBlocked(String blockedUri, int totalBlocked);
@@ -89,6 +90,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         public volatile String url = HOME_URL;
         public volatile int progress = 0;
         public volatile boolean isLoading = false;
+        public volatile String lastHistoryUrl = "";
+        public volatile String lastHistoryTitle = "";
         public Bitmap snapshot = null;
 
         public TabSession(int id, WebView webView) {
@@ -586,6 +589,40 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     /**
+     * Evaluates whether the current tab URL/title represents a new history commit or title upgrade
+     * for the active navigation (preventing duplicate writes and stale-title overwrites).
+     */
+    public static boolean prepareHistoryCommit(TabSession tab) {
+        if (tab == null || tab.url == null || tab.url.isEmpty() || isLocalHomeUrl(tab.url)) {
+            return false;
+        }
+        String url = tab.url;
+        String lowerUrl = url.toLowerCase(java.util.Locale.ROOT);
+        if (!lowerUrl.startsWith("http://") && !lowerUrl.startsWith("https://") && !lowerUrl.startsWith("file://")) {
+            return false;
+        }
+        String effectiveTitle = (tab.title != null && !tab.title.isEmpty()) ? tab.title : url;
+        if (url.equals(tab.lastHistoryUrl) && effectiveTitle.equals(tab.lastHistoryTitle)) {
+            return false;
+        }
+        if (url.equals(tab.lastHistoryUrl) && effectiveTitle.equals(url)) {
+            return false;
+        }
+        tab.lastHistoryUrl = url;
+        tab.lastHistoryTitle = effectiveTitle;
+        return true;
+    }
+
+    private void commitHistoryVisit(TabSession tab) {
+        if (tab == null || mListener == null || isHomeUrl(tab.url)) {
+            return;
+        }
+        if (prepareHistoryCommit(tab)) {
+            mListener.onVisitHistoryUpdated(tab.url, tab.lastHistoryTitle);
+        }
+    }
+
+    /**
      * Resolves which tab a tool call should act on.
      *
      * <p>Three states, matching {@link #resolveAgentTargetState}:
@@ -858,6 +895,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (Build.VERSION.SDK_INT >= 24 && request != null && request.getUrl() != null) {
+                    if (!request.isForMainFrame()) {
+                        return false;
+                    }
                     String u = request.getUrl().toString();
                     if (isUserscriptUrl(u)) {
                         String guessName = DownloadCoordinator.smartGuessFileName(u, null, "application/javascript");
@@ -865,9 +905,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                             mListener.onUserscriptInstallRequested(u, guessName);
                         }
                         return true;
-                    }
-                    if (!request.isForMainFrame()) {
-                        return false;
                     }
                     if ((u.startsWith("http://") || u.startsWith("https://"))
                             && (isTrustedLocalHomepageFileUrl(view != null ? view.getUrl() : null, getWorkspaceDir())
@@ -891,7 +928,13 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 tab.isLoading = true;
+                String prevUrl = tab.url;
                 tab.url = url;
+                if (url != null && !url.equals(prevUrl)) {
+                    tab.title = url;
+                }
+                tab.lastHistoryUrl = "";
+                tab.lastHistoryTitle = "";
                 if (mFileChooserTabId == tab.id) {
                     cancelPendingFileChooser("navigated");
                 }
@@ -933,6 +976,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     pushBookmarksToActiveHomeTabs();
                 }
 
+                commitHistoryVisit(tab);
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(url, tab.title);
                     mListener.onProgressChanged(100, false);
@@ -964,6 +1008,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public void onReceivedTitle(WebView view, String title) {
                 tab.title = (title != null && !title.isEmpty()) ? title : tab.url;
+                commitHistoryVisit(tab);
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(tab.url, tab.title);
                 }

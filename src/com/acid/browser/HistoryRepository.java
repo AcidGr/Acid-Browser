@@ -188,10 +188,13 @@ public class HistoryRepository {
                 } catch (Exception e) {
                     formatted = arr.toString();
                 }
-                AcidIo.writeFileUtf8(file, formatted);
+                // Update mLastSyncedJson before atomic write so FileObserver never observes the prior value.
                 mLastSyncedJson = formatted.trim();
-                if (expectedRevision <= 0 || expectedRevision == mHistoryRevision.get()) {
-                    prefs().edit().putBoolean(PREF_HISTORY_PENDING_SYNC, false).apply();
+                AcidIo.writeFileUtf8(file, formatted);
+                synchronized (this) {
+                    if (expectedRevision <= 0 || expectedRevision == mHistoryRevision.get()) {
+                        prefs().edit().putBoolean(PREF_HISTORY_PENDING_SYNC, false).apply();
+                    }
                 }
                 return true;
             } catch (Exception e) {

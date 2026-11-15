@@ -217,11 +217,45 @@ public class HttpControlServer {
         if (h.startsWith("[") && h.endsWith("]") && h.length() > 2) {
             h = h.substring(1, h.length() - 1);
         }
-        return "localhost".equals(h)
+        if (h.isEmpty()) return false;
+        if ("localhost".equals(h)
             || "::1".equals(h)
+            || "::".equals(h)
             || "::ffff:127.0.0.1".equals(h)
+            || "::ffff:0.0.0.0".equals(h)
             || isLoopbackIpv4(h)
-            || "0.0.0.0".equals(h);
+            || "0.0.0.0".equals(h)) {
+            return true;
+        }
+        if (isNumericIpLiteral(h)) {
+            try {
+                InetAddress addr = InetAddress.getByName(h);
+                return addr.isLoopbackAddress() || addr.isAnyLocalAddress();
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    private static boolean isNumericIpLiteral(String h) {
+        if (h == null || h.isEmpty()) return false;
+        if (h.indexOf(':') >= 0) {
+            for (int i = 0; i < h.length(); i++) {
+                char c = h.charAt(i);
+                if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == ':' || c == '.') continue;
+                return false;
+            }
+            return true;
+        }
+        boolean hasDot = false;
+        for (int i = 0; i < h.length(); i++) {
+            char c = h.charAt(i);
+            if (c == '.') {
+                hasDot = true;
+            } else if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return hasDot;
     }
 
     public static boolean isLocalOrTrustedHost(String hostHeader, boolean lanBound) {
@@ -492,22 +526,33 @@ public class HttpControlServer {
             // Read request body if Content-Length or Transfer-Encoding: chunked present
             byte[] bodyBytes = new byte[0];
             if (headers.containsKey("content-length")) {
-                int len = 0;
+                long parsedLen;
                 try {
-                    len = Integer.parseInt(headers.get("content-length"));
+                    parsedLen = Long.parseLong(headers.get("content-length"));
                 } catch (Exception e) {
-                    Log.w(TAG, "Ignoring non-numeric Content-Length: " + headers.get("content-length"), e);
+                    parsedLen = -1;
                 }
-                if (len > MAX_BODY_BYTES) {
-                    sendJsonResponse(os, 413, new JSONObject()
+                if (parsedLen < 0) {
+                    sendJsonResponse(os, 400, new JSONObject()
                         .put("jsonrpc", "2.0")
                         .put("error", new JSONObject()
-                            .put("code", -32000)
-                            .put("message", "Payload Too Large: Content-Length exceeds " + (MAX_BODY_BYTES / (1024 * 1024)) + "MB limit (" + len + " bytes)")
+                            .put("code", -32600)
+                            .put("message", "Invalid Request: Malformed negative or non-numeric Content-Length")
                         ));
                     socket.close();
                     return;
                 }
+                if (parsedLen > MAX_BODY_BYTES) {
+                    sendJsonResponse(os, 413, new JSONObject()
+                        .put("jsonrpc", "2.0")
+                        .put("error", new JSONObject()
+                            .put("code", -32000)
+                            .put("message", "Payload Too Large: Content-Length exceeds " + (MAX_BODY_BYTES / (1024 * 1024)) + "MB limit (" + parsedLen + " bytes)")
+                        ));
+                    socket.close();
+                    return;
+                }
+                int len = (int) parsedLen;
                 if (len > 0) {
                     try {
                         bodyBytes = new byte[len];
@@ -708,6 +753,10 @@ public class HttpControlServer {
 
     private void handleSseConnection(Socket socket, OutputStream os) throws Exception {
         pruneDeadSseSessions();
+        if (mSseSessions.size() >= MAX_SSE_SESSIONS) {
+            // Actively probe existing SSE sockets on saturation to evict half-open zombie clients.
+            sweepAndPingSseSessions();
+        }
         if (mSseSessions.size() >= MAX_SSE_SESSIONS) {
             sendJsonResponse(os, 503, new JSONObject()
                 .put("jsonrpc", "2.0")
@@ -941,6 +990,7 @@ public class HttpControlServer {
 
     public static byte[] readChunkedBody(InputStream is, int maxBytes) throws Exception {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        boolean sawTerminator = false;
         while (true) {
             StringBuilder hexSb = new StringBuilder();
             int b;
@@ -956,7 +1006,9 @@ public class HttpControlServer {
             String line = hexSb.toString().trim();
             int semi = line.indexOf(';');
             if (semi >= 0) line = line.substring(0, semi).trim();
-            if (line.isEmpty()) break;
+            if (line.isEmpty()) {
+                throw new java.io.IOException("Premature EOF or missing chunk size in chunked body");
+            }
 
             long parsedSize;
             try {
@@ -968,6 +1020,7 @@ public class HttpControlServer {
                 throw new java.io.IOException("Invalid negative chunk size: " + line);
             }
             if (parsedSize == 0) {
+                sawTerminator = true;
                 while ((b = is.read()) != -1) {
                     if (b == '\n') break;
                 }
@@ -989,6 +1042,9 @@ public class HttpControlServer {
             if (cr == '\r') {
                 is.read();
             }
+        }
+        if (!sawTerminator) {
+            throw new java.io.IOException("Missing terminating 0-byte chunk");
         }
         return baos.toByteArray();
     }

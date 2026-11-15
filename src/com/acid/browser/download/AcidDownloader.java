@@ -7,6 +7,7 @@ import com.acid.browser.AcidAsync;
 import com.acid.browser.AcidIo;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.util.ArrayList;
@@ -269,13 +270,16 @@ public class AcidDownloader {
 
             if (resumed) {
                 // Verify remote file consistency before resuming to ensure the server resource hasn't changed
+                int failedResumeCode = 0;
                 try {
                     HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders, task);
                     synchronized (task) {
                         if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
                             return;
                         }
-                        if (probe.contentLength > 0 && task.contentLength > 0 && probe.contentLength != task.contentLength) {
+                        if (probe.responseCode >= 400 && probe.responseCode != 416) {
+                            failedResumeCode = probe.responseCode;
+                        } else if (probe.contentLength > 0 && task.contentLength > 0 && probe.contentLength != task.contentLength) {
                             // Remote size changed! Checkpoint is obsolete
                             resumed = false;
                             task.cleanCheckpointFile();
@@ -301,11 +305,17 @@ public class AcidDownloader {
                     }
                     // Probe network hiccup: allow workers to proceed with existing checkpoint
                 }
+                if (failedResumeCode >= 400) {
+                    throw new IOException("HTTP " + failedResumeCode + " from resume probe");
+                }
             }
 
             if (!resumed) {
                 // Pre-flight probe to discover range support & total size
                 HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders, task);
+                if (probe.responseCode < 200 || probe.responseCode >= 300) {
+                    throw new IOException("HTTP " + probe.responseCode + " from pre-flight probe");
+                }
 
                 synchronized (task) {
                     if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {

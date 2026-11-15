@@ -124,9 +124,11 @@ public class DownloadCoordinator {
             List<DownloadItem> saved = mDataStore.loadDownloads();
             boolean changed = false;
             for (DownloadItem it : saved) {
-                // If app process was terminated while a task was RUNNING or PENDING, reset to PAUSED
-                // so the user can cleanly resume from where it left off instead of being stuck in RUNNING
-                if (it.status == DownloadTask.STATUS_RUNNING || it.status == DownloadTask.STATUS_PENDING) {
+                // If app process was terminated while a builtin task was RUNNING or PENDING, reset to PAUSED
+                // so the user can cleanly resume from where it left off instead of being stuck in RUNNING.
+                // System DownloadManager tasks live out-of-process and are polled on sync.
+                if (!it.isSystemDownload
+                    && (it.status == DownloadTask.STATUS_RUNNING || it.status == DownloadTask.STATUS_PENDING)) {
                     it.status = DownloadTask.STATUS_PAUSED;
                     it.speedBytesPerSec = 0;
                     it.formattedSpeed = "";
@@ -1065,6 +1067,7 @@ public class DownloadCoordinator {
                 headers
             );
             synchronized (mDownloads) {
+                it.isSystemDownload = false;
                 it.status = DownloadTask.STATUS_RUNNING;
                 if (mDataStore != null) {
                     mDataStore.saveDownloads(mDownloads);
@@ -1129,17 +1132,7 @@ public class DownloadCoordinator {
             }
         }
 
-        // 3. Drop the obsolete non-completed record before starting a fresh one
-        if (target.status != DownloadTask.STATUS_SUCCESSFUL && target.status != DownloadItem.STATUS_SAVED) {
-            synchronized (mDownloads) {
-                mDownloads.remove(target);
-                if (mDataStore != null) {
-                    mDataStore.saveDownloads(mDownloads);
-                }
-            }
-        }
-
-        // 4. Start fresh download
+        // 3. Start fresh download (obsolete record was already removed from mDownloads above)
         startDownload(target.url, target.fileName, null, null, target.mimeType, target.contentLength);
     }
 
@@ -1266,8 +1259,10 @@ public class DownloadCoordinator {
                             }
                         }
                     } else if (c != null
-                        && (it.status == DownloadManager.STATUS_RUNNING || it.status == DownloadManager.STATUS_PENDING)) {
-                        // System download was cancelled/removed outside the app (e.g. notification swipe/cancel)
+                        && ((it.isSystemDownload && activeStatus)
+                            || it.status == DownloadManager.STATUS_RUNNING
+                            || it.status == DownloadManager.STATUS_PENDING)) {
+                        // System download was cancelled/removed outside the app (including previously paused system tasks)
                         it.status = DownloadManager.STATUS_FAILED;
                         changed = true;
                     }

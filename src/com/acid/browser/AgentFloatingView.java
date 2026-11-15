@@ -57,6 +57,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     private TextView mTvAgentLoopStatus;
     private ScrollView mChatScrollView;
     private LinearLayout mChatStreamContainer;
+    private View mEmptyWelcomeCard;
     private LinearLayout mAgentInputBar;
     private EditText mEtAgentTaskInput;
     private AcidIcons.BadgeButton mBtnAgentSendStop;
@@ -474,6 +475,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mAssistantHolders.clear();
         mLoadEarlierHeaderCard = null;
         mTvLoadEarlierSummary = null;
+        mEmptyWelcomeCard = null;
         mCurrentRenderedSession = session;
 
         if (session != null && mTvAgentSessionTitle != null) {
@@ -699,14 +701,15 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             card.addView(chip);
         }
 
+        mEmptyWelcomeCard = card;
         mChatStreamContainer.addView(card);
     }
 
     public void appendUiMessageItemView(AcidSessionStore.UiMessageItem item, boolean autoScroll) {
         if (mChatStreamContainer == null || item == null) return;
-        if (mChatStreamContainer.getChildCount() == 1 && mAgentLoop != null &&
-            mAgentLoop.getActiveSession() != null && mAgentLoop.getActiveSession().uiItems.size() == 1) {
-            mChatStreamContainer.removeAllViews();
+        if (mEmptyWelcomeCard != null) {
+            mChatStreamContainer.removeView(mEmptyWelcomeCard);
+            mEmptyWelcomeCard = null;
         }
 
         mChatStreamContainer.addView(createUiMessageItemView(item));

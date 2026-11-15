@@ -1580,10 +1580,19 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (!mEtUrl.hasFocus()) {
                     mEtUrl.setText(mController != null && mController.isHomeUrl(url) ? "acid://home" : url);
                 }
+                updateNavButtons();
+            }
+        });
+    }
+
+    @Override
+    public void onVisitHistoryUpdated(final String url, final String title) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
                 if (mDataStore != null) {
                     mDataStore.recordHistory(url, title, mIncognitoMode);
                 }
-                updateNavButtons();
             }
         });
     }

@@ -152,15 +152,15 @@ public final class AcidHttp {
                 if (lanIp != null && lanIp.equals(hostIp) && (blockAllLoopbackAndLocal || isMcpPort)) {
                     throw new SecurityException("Blocked SSRF access to local device address " + rawHost + ":" + port);
                 }
-                if (isMcpPort && addr.isSiteLocalAddress()) {
-                    throw new SecurityException("Blocked SSRF access to site-local MCP port " + port);
+                if ((blockAllLoopbackAndLocal || isMcpPort) && addr.isSiteLocalAddress()) {
+                    throw new SecurityException("Blocked SSRF access to site-local network address " + rawHost + ":" + port);
                 }
             }
         } catch (SecurityException se) {
             throw se;
         } catch (UnknownHostException ignored) {
             // Defer DNS resolution failure cleanly (matches offline unit tests such as https://example.com/api).
-        } catch (Throwable ignored) {}
+        }
     }
 
     private AcidHttp() {}

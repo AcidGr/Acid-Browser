@@ -1110,12 +1110,14 @@ public class AcidSandboxTools {
         return isInsideDir(f, new File(mWorkspaceDir, "homepage"));
     }
 
-    /** True when {@code f} is a protected workspace state JSON file (settings, userscript storage, skill sync). */
+    /** True when {@code f} is a protected workspace state JSON file (settings, bookmarks, history, userscript storage, skill sync). */
     private boolean isProtectedRootStateFile(File f) {
         if (f == null) return false;
         try {
             File target = f.getCanonicalFile();
             return target.equals(new File(mWorkspaceDir, "settings.json").getCanonicalFile())
+                || target.equals(new File(mWorkspaceDir, "bookmarks.json").getCanonicalFile())
+                || target.equals(new File(mWorkspaceDir, "history.json").getCanonicalFile())
                 || target.equals(new File(mWorkspaceDir, "userscript_storage.json").getCanonicalFile())
                 || target.equals(new File(mWorkspaceDir, "skills_sync.json").getCanonicalFile());
         } catch (Exception e) {

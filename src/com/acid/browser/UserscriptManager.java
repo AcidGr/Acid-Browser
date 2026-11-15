@@ -252,6 +252,7 @@ public class UserscriptManager {
             all = new ArrayList<UserscriptNativeBridge>(mBridges.values());
         }
         final UserscriptMeta targetMeta = findScriptByFileName(scriptId);
+        if (targetMeta == null) return;
         final String oldJs = jsLiteral(oldValue);
         final String newJs = jsLiteral(newValue);
         AcidAsync.postToMain(new Runnable() {
@@ -264,7 +265,7 @@ public class UserscriptManager {
                     try {
                         wvUrl = wv.getUrl();
                     } catch (Exception ignored) {}
-                    if (targetMeta != null && (wvUrl == null || !targetMeta.appliesTo(wvUrl))) {
+                    if (wvUrl == null || !targetMeta.appliesTo(wvUrl)) {
                         continue;
                     }
                     String js = "try{var f=window.__acid_gm_vc&&window.__acid_gm_vc["

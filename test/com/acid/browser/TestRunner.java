@@ -15,6 +15,7 @@ import com.acid.browser.download.DownloadWorker;
 import com.acid.browser.download.HttpProbe;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -37,6 +38,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -1751,7 +1754,9 @@ public final class TestRunner {
             String[] blockedMcpFiles = new String[] {
                 "adblock/custom_rules.txt",
                 "userscript_storage.json",
-                "skills_sync.json"
+                "skills_sync.json",
+                "bookmarks.json",
+                "history.json"
             };
             for (String p : blockedMcpFiles) {
                 AcidSandboxTools.ToolExecResult wRes = sbx.executeTool(
@@ -1889,5 +1894,167 @@ public final class TestRunner {
         assertTrue(!nullAb.isEnabled(), "setEnabled works safely when dataStore is null");
         assertTrue(nullAb.getSubscriptionUrl() != null, "getSubscriptionUrl returns non-null default when dataStore is null");
         nullAb.setSubscriptionUrl("https://example.com/rules.txt");
+
+        // 8. HttpControlServer IPv6 literal normalization & chunked terminator validation
+        assertTrue(HttpControlServer.isLoopbackOrLocalLiteralHost("::"), ":: is wildcard local literal");
+        assertTrue(HttpControlServer.isLoopbackOrLocalLiteralHost("::ffff:0.0.0.0"), "::ffff:0.0.0.0 is local literal");
+        assertTrue(HttpControlServer.isLoopbackOrLocalLiteralHost("::ffff:7f00:1"), "::ffff:7f00:1 is loopback literal");
+        assertTrue(HttpControlServer.isLoopbackOrLocalLiteralHost("0:0:0:0:0:0:0:1"), "0:0:0:0:0:0:0:1 is loopback IPv6");
+        byte[] validChunked = HttpControlServer.readChunkedBody(
+            new ByteArrayInputStream("4\r\nWiki\r\n0\r\n\r\n".getBytes(StandardCharsets.US_ASCII)), 1024);
+        assertTrue("Wiki".equals(new String(validChunked, StandardCharsets.UTF_8)), "valid chunked body parses cleanly");
+        boolean rejectedTruncatedChunk = false;
+        try {
+            HttpControlServer.readChunkedBody(
+                new ByteArrayInputStream("4\r\nWiki\r\n".getBytes(StandardCharsets.US_ASCII)), 1024);
+        } catch (IOException expectedChunkErr) {
+            rejectedTruncatedChunk = true;
+        }
+        assertTrue(rejectedTruncatedChunk, "truncated chunked body without 0 terminator must throw IOException");
+
+        // 9. AcidHttp.REMOTE_FETCH_VALIDATOR blocks RFC1918 site-local addresses on non-MCP ports
+        boolean blockedSiteLocal80 = false;
+        try {
+            AcidHttp.REMOTE_FETCH_VALIDATOR.validate(new URL("http://192.168.1.1:80/"));
+        } catch (IOException expected) {
+            blockedSiteLocal80 = true;
+        }
+        assertTrue(blockedSiteLocal80, "REMOTE_FETCH_VALIDATOR blocks 192.168.1.1:80");
+        boolean blocked10Net = false;
+        try {
+            AcidHttp.REMOTE_FETCH_VALIDATOR.validate(new URL("http://10.0.0.1/admin"));
+        } catch (IOException expected) {
+            blocked10Net = true;
+        }
+        assertTrue(blocked10Net, "REMOTE_FETCH_VALIDATOR blocks 10.0.0.1/admin");
+
+        // 10. AcidModelStore preset upgrade merges missing built-ins without wiping user models
+        AcidModelStore.CatalogProviderPreset dsPreset = AcidModelStore.findBuiltinPreset("deepseek");
+        assertTrue(dsPreset != null, "deepseek builtin preset exists");
+        AcidModelStore.ConfiguredProvider dsProvider = new AcidModelStore.ConfiguredProvider(
+            "deepseek", "DeepSeek", false, "https://api.deepseek.com/v1", "sk-test");
+        dsProvider.models.add(new AcidModelStore.ModelEntry("custom-ds-user", "Custom User Model"));
+        int beforePresetSize = dsPreset.defaultModels.size();
+        AcidModelStore.mergeBuiltinCatalogPreset(dsProvider, dsPreset);
+        assertTrue(dsProvider.findModel("custom-ds-user") != null, "user custom model preserved across preset upgrade");
+        assertTrue(dsProvider.findModel("deepseek-flash") != null, "missing builtin model merged into provider");
+        AcidModelStore.mergeBuiltinCatalogPreset(dsProvider, dsPreset);
+        assertTrue(dsProvider.models.size() == beforePresetSize + 1, "idempotent preset merge avoids duplicates");
+        AcidModelStore.ConfiguredProvider localV6 = new AcidModelStore.ConfiguredProvider(
+            "custom-local", "Local IPv6", true, "http://[::1]:11434/v1", "");
+        assertTrue(localV6.hasApiKey(), "loopback IPv6 endpoint does not require API key");
+        AcidModelStore.ConfiguredProvider spoofedQuery = new AcidModelStore.ConfiguredProvider(
+            "custom-evil", "Evil", true, "https://evil.com/?localhost", "");
+        assertTrue(!spoofedQuery.hasApiKey(), "query-string ?localhost does not bypass API key requirement");
+
+        // 11. AcidAgentLoop SSE inline errors, strict loopback check, and non-DOM observation compaction
+        String sseErrObj = AcidAgentLoop.extractSseErrorMessage(
+            new JSONObject("{\"error\":{\"message\":\"Rate limit\",\"code\":429}}"));
+        assertTrue(sseErrObj != null && sseErrObj.contains("Rate limit") && sseErrObj.contains("429"),
+            "extractSseErrorMessage formats error object with code");
+        String sseErrStr = AcidAgentLoop.extractSseErrorMessage(new JSONObject("{\"error\":\"Overloaded\"}"));
+        assertTrue("Overloaded".equals(sseErrStr), "extractSseErrorMessage handles string error");
+        assertTrue(AcidAgentLoop.extractSseErrorMessage(
+            new JSONObject("{\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}")) == null,
+            "normal delta chunk returns null SSE error");
+        assertTrue(AcidAgentLoop.isLoopbackBaseUrl("http://127.0.0.1:11434/v1"), "127.0.0.1 is loopback URL");
+        assertTrue(AcidAgentLoop.isLoopbackBaseUrl("http://[::1]:11434/v1"), "[::1] is loopback URL");
+        assertTrue(AcidAgentLoop.isLoopbackBaseUrl("http://localhost:8000/v1"), "localhost is loopback URL");
+        assertTrue(!AcidAgentLoop.isLoopbackBaseUrl("https://evil.com/?localhost"), "query string localhost is not loopback");
+        assertTrue(!AcidAgentLoop.isLoopbackBaseUrl("https://localhost.evil.com/v1"), "localhost.evil.com is not loopback");
+
+        StringBuilder bigPayload = new StringBuilder();
+        for (int i = 0; i < 900; i++) bigPayload.append("0123456789");
+        String giantStr = bigPayload.toString(); // 9000 chars (> 8192)
+        List<JSONObject> hist = new ArrayList<JSONObject>();
+        hist.add(new JSONObject().put("role", "tool").put("tool_call_id", "c0").put("content", "OUT0:" + giantStr));
+        hist.add(new JSONObject().put("role", "tool").put("tool_call_id", "c1").put("content", "OUT1:" + giantStr));
+        hist.add(new JSONObject().put("role", "tool").put("tool_call_id", "c2").put("content", "OUT2:" + giantStr));
+        List<JSONObject> prunedHist = AcidAgentLoop.pruneHistoryForRequest(hist);
+        assertTrue(prunedHist.get(0).optString("content").contains("[... historical output middle pruned"),
+            "older >8192 non-DOM tool output is compacted");
+        assertTrue(prunedHist.get(1).optString("content").length() > 8500, "second-latest giant tool output preserved");
+        assertTrue(prunedHist.get(2).optString("content").length() > 8500, "latest giant tool output preserved");
+
+        // 12. BrowserController.prepareHistoryCommit deduplicates and blocks title downgrades
+        BrowserController.TabSession tab = new BrowserController.TabSession(1, null);
+        tab.url = "https://example.com/p1";
+        tab.title = tab.url;
+        assertTrue(BrowserController.prepareHistoryCommit(tab), "first HTTP visit prepares history commit");
+        assertTrue(!BrowserController.prepareHistoryCommit(tab), "duplicate URL/title commit is deduplicated");
+        tab.title = "Example Page Title";
+        assertTrue(BrowserController.prepareHistoryCommit(tab), "title upgrade prepares history update");
+        tab.title = tab.url;
+        assertTrue(!BrowserController.prepareHistoryCommit(tab), "downgrading title back to URL is ignored");
+        tab.url = "about:blank";
+        tab.title = "Blank";
+        assertTrue(!BrowserController.prepareHistoryCommit(tab), "non-HTTP(S) URL does not commit history");
+
+        // 13. AcidDownloader HTTP 404 probe rejection avoids creating empty target files
+        final File dlProbeDir = new File("build/test_dl_404_probe");
+        SkillStorageVault.deleteRecursiveSafe(dlProbeDir);
+        dlProbeDir.mkdirs();
+        final ServerSocket errServer = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
+        final int errPort = errServer.getLocalPort();
+        Thread errThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!errServer.isClosed()) {
+                    try {
+                        Socket s = errServer.accept();
+                        try {
+                            InputStream is = s.getInputStream();
+                            byte[] buf = new byte[1024];
+                            is.read(buf);
+                            OutputStream os = s.getOutputStream();
+                            os.write(("HTTP/1.1 404 Not Found\r\n" +
+                                      "Content-Length: 0\r\n" +
+                                      "Connection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                            os.flush();
+                        } finally {
+                            s.close();
+                        }
+                    } catch (Exception ignored) {
+                        break;
+                    }
+                }
+            }
+        });
+        errThread.setDaemon(true);
+        errThread.start();
+        final CountDownLatch failLatch = new CountDownLatch(1);
+        final String[] failErrHolder = new String[1];
+        AcidDownloader downloader = new AcidDownloader();
+        AcidDownloader.DownloaderListener dlListener = new AcidDownloader.DownloaderListener() {
+            @Override public void onTaskStarted(DownloadTask task) {}
+            @Override public void onTaskProgress(DownloadTask task) {}
+            @Override public void onTaskPaused(DownloadTask task) {}
+            @Override public void onTaskCompleted(DownloadTask task) { failLatch.countDown(); }
+            @Override public void onTaskFailed(DownloadTask task, String error) {
+                failErrHolder[0] = error;
+                failLatch.countDown();
+            }
+        };
+        downloader.addListener(dlListener);
+        try {
+            downloader.enqueue(
+                8802L,
+                "http://127.0.0.1:" + errPort + "/missing.bin",
+                "missing.bin",
+                "application/octet-stream",
+                dlProbeDir,
+                null
+            );
+            boolean finished = failLatch.await(5, TimeUnit.SECONDS);
+            assertTrue(finished, "AcidDownloader 404 probe task finishes within timeout");
+            assertTrue(failErrHolder[0] != null && failErrHolder[0].contains("404"),
+                "AcidDownloader reports HTTP 404 from pre-flight probe");
+            assertTrue(!new File(dlProbeDir, "missing.bin").exists(),
+                "404 probe abort must not allocate target file");
+        } finally {
+            downloader.removeListener(dlListener);
+            try { errServer.close(); } catch (Exception ignored) {}
+            SkillStorageVault.deleteRecursiveSafe(dlProbeDir);
+        }
     }
 }

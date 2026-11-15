@@ -175,7 +175,7 @@ public class AcidModelStore {
 
         public boolean hasApiKey() {
             if (!TextUtils.isEmpty(apiKey)) return true;
-            return baseUrl.contains("127.0.0.1") || baseUrl.contains("localhost");
+            return AcidAgentLoop.isLoopbackBaseUrl(baseUrl);
         }
 
         public ModelEntry findModel(String modelId) {
@@ -373,19 +373,41 @@ public class AcidModelStore {
         }
     }
 
+    /**
+     * Merges updated built-in catalog defaults into {@code provider} without discarding user-added
+     * or dynamically fetched models.
+     */
+    public static void mergeBuiltinCatalogPreset(ConfiguredProvider provider, CatalogProviderPreset preset) {
+        if (provider == null || preset == null) return;
+        java.util.Set<String> seenIds = new java.util.HashSet<String>();
+        for (int i = 0; i < provider.models.size(); i++) {
+            ModelEntry existing = provider.models.get(i);
+            if (existing != null && !existing.id.isEmpty()) {
+                seenIds.add(existing.id);
+            }
+        }
+        for (int i = 0; i < preset.defaultModels.size(); i++) {
+            ModelEntry def = preset.defaultModels.get(i);
+            if (def != null && !def.id.isEmpty() && !seenIds.contains(def.id)) {
+                provider.models.add(def.copy());
+                seenIds.add(def.id);
+            }
+        }
+    }
+
     private void upgradeBuiltinCatalog(SharedPreferences sp) {
         for (ConfiguredProvider p : mProviders) {
             if (!p.isCustom) {
                 CatalogProviderPreset preset = findBuiltinPreset(p.id);
                 if (preset != null) {
-                    p.models.clear();
-                    for (ModelEntry m : preset.defaultModels) {
-                        p.models.add(m.copy());
-                    }
+                    mergeBuiltinCatalogPreset(p, preset);
                 }
             }
         }
-        if ("deepseek-chat".equals(mSelectedModelId) || "deepseek-reasoner".equals(mSelectedModelId) || TextUtils.isEmpty(mSelectedModelId)) {
+        ConfiguredProvider selected = getProvider(mSelectedProviderId);
+        boolean selectionMissing = (selected == null || selected.findModel(mSelectedModelId) == null);
+        if (TextUtils.isEmpty(mSelectedModelId)
+            || ("deepseek".equals(mSelectedProviderId) && selectionMissing)) {
             mSelectedModelId = "deepseek-flash";
         }
         sp.edit()
