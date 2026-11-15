@@ -13,8 +13,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -116,6 +119,7 @@ public class AcidSessionStore {
         public int lastCompletionTokens;
         public int lastTotalTokens;
         public int lastCachedTokens;
+        public transient long saveRevision = 0L;
         public final List<UiMessageItem> uiItems = new CopyOnWriteArrayList<UiMessageItem>();
         public final List<JSONObject> apiMessages = new CopyOnWriteArrayList<JSONObject>();
 
@@ -134,6 +138,8 @@ public class AcidSessionStore {
     private final Context mContext;
     private final File mSessionsDir;
     private final Object mDiskLock = new Object();
+    private final ConcurrentHashMap<String, Long> mLatestSaveRevision = new ConcurrentHashMap<String, Long>();
+    private final Set<String> mDeletedSessionIds = Collections.synchronizedSet(new HashSet<String>());
     private AgentSession mActiveSession;
 
     public AcidSessionStore(Context context) {
@@ -192,6 +198,7 @@ public class AcidSessionStore {
         s.title = "新对话";
         s.createdAt = now;
         s.updatedAt = now;
+        mDeletedSessionIds.remove(s.id);
         mActiveSession = s;
         saveSession(s);
         setActiveSessionIdPref(s.id);
@@ -204,6 +211,7 @@ public class AcidSessionStore {
         }
         AgentSession target = readSessionFromDisk(sessionId);
         if (target != null) {
+            mDeletedSessionIds.remove(target.id);
             mActiveSession = target;
             setActiveSessionIdPref(target.id);
         }
@@ -211,8 +219,14 @@ public class AcidSessionStore {
     }
 
     public synchronized boolean deleteSession(String sessionId) {
+        if (sessionId == null) return false;
+        mDeletedSessionIds.add(sessionId);
+        mLatestSaveRevision.put(sessionId, Long.MAX_VALUE);
         File f = new File(mSessionsDir, sessionId + ".json");
-        boolean deleted = f.exists() && f.delete();
+        boolean deleted;
+        synchronized (mDiskLock) {
+            deleted = f.exists() && f.delete();
+        }
         if (mActiveSession != null && mActiveSession.id.equals(sessionId)) {
             mActiveSession = null;
             List<SessionMeta> remaining = listSessions();
@@ -256,20 +270,42 @@ public class AcidSessionStore {
     }
 
     public void saveSession(AgentSession s) {
-        if (s == null) return;
+        if (s == null || s.id == null) return;
+        final String sid = s.id;
         final JSONObject root;
         final File f;
+        final long rev;
         synchronized (this) {
-            s.updatedAt = System.currentTimeMillis();
-            root = buildSessionSnapshot(s);
-            f = new File(mSessionsDir, s.id + ".json");
-        }
-        synchronized (mDiskLock) {
-            try {
-                AcidIo.writeFileUtf8(f, root.toString());
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to persist session " + (s != null ? s.id : "?"), e);
+            if (mDeletedSessionIds.contains(sid)) {
+                return;
             }
+            s.updatedAt = System.currentTimeMillis();
+            rev = ++s.saveRevision;
+            mLatestSaveRevision.put(sid, rev);
+            root = buildSessionSnapshot(s);
+            f = new File(mSessionsDir, sid + ".json");
+        }
+        final String jsonText = root.toString();
+        Runnable writeTask = new Runnable() {
+            @Override
+            public void run() {
+                synchronized (mDiskLock) {
+                    Long latest = mLatestSaveRevision.get(sid);
+                    if (mDeletedSessionIds.contains(sid) || (latest != null && rev < latest.longValue())) {
+                        return;
+                    }
+                    try {
+                        AcidIo.writeFileUtf8(f, jsonText);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to persist session " + sid, e);
+                    }
+                }
+            }
+        };
+        if (AcidAsync.isMainThread()) {
+            AcidAsync.runSerialized(writeTask);
+        } else {
+            writeTask.run();
         }
     }
 

@@ -473,7 +473,8 @@ public final class FaviconManager {
             headers.put("User-Agent", BrowserController.UA_MOBILE);
             headers.put("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
             conn = AcidHttp.openConnectionWithRedirects(
-                urlStr, "GET", headers, 2500, 3000, 3, null, AcidHttp.SAME_ORIGIN_CREDENTIALS, null
+                urlStr, "GET", headers, 2500, 3000, 3,
+                AcidHttp.REMOTE_FETCH_VALIDATOR, AcidHttp.SAME_ORIGIN_CREDENTIALS, null
             );
             int code = conn.getResponseCode();
             if (code != HttpURLConnection.HTTP_OK) {

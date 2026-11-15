@@ -31,7 +31,7 @@ public class UserscriptManager {
      * Hard ceiling of 20 MB so complex web-app userscripts (like Immersive Translate ~5.6MB)
      * install smoothly, while guarding against Android Dalvik/ART OutOfMemory crashes.
      */
-    private static final int MAX_SCRIPT_BYTES = 20 * 1024 * 1024; // 20 MB
+    public static final int MAX_SCRIPT_BYTES = 20 * 1024 * 1024; // 20 MB
 
     private final Context mContext;
     private final File mWorkspaceDir;
@@ -753,7 +753,7 @@ public class UserscriptManager {
         return directive + "\n" + content;
     }
 
-    private String safeFileName(String name) {
+    public static String safeFileName(String name) {
         String base = name != null ? name.trim() : "";
         if (base.isEmpty()) base = "script";
         base = base.replaceAll("[^a-zA-Z0-9._-]", "_");

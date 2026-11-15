@@ -9,6 +9,7 @@ import sys
 import os
 import json
 import urllib.request
+import urllib.error
 
 MCP_ENDPOINT = os.environ.get("ACID_MCP_ENDPOINT", "http://127.0.0.1:3090/mcp")
 MCP_TOKEN = os.environ.get("ACID_MCP_TOKEN", "")
@@ -41,11 +42,36 @@ def main():
                 data=json.dumps(req_data).encode('utf-8'),
                 headers=headers
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=150) as resp:
                 resp_text = resp.read().decode('utf-8').strip()
                 if not is_notification and resp_text:
                     sys.stdout.write(resp_text + "\n")
                     sys.stdout.flush()
+        except urllib.error.HTTPError as he:
+            if isinstance(req_data, dict) and ("id" not in req_data):
+                continue
+            body_text = ""
+            try:
+                body_text = he.read().decode('utf-8', errors='replace').strip()
+            except Exception:
+                body_text = ""
+            try:
+                parsed_err = json.loads(body_text) if body_text else None
+            except Exception:
+                parsed_err = None
+            if isinstance(parsed_err, dict) and "jsonrpc" in parsed_err:
+                sys.stdout.write(json.dumps(parsed_err) + "\n")
+                sys.stdout.flush()
+                continue
+            req_id = req_data.get("id") if (isinstance(req_data, dict) and "id" in req_data) else None
+            err_msg = body_text or f"HTTP {he.code}: {he.reason}"
+            err_resp = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32000 if he.code in (401, 403) else -32603, "message": err_msg}
+            }
+            sys.stdout.write(json.dumps(err_resp) + "\n")
+            sys.stdout.flush()
         except Exception as e:
             if isinstance(req_data, dict) and ("id" not in req_data):
                 continue

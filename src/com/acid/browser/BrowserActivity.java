@@ -1881,11 +1881,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mController.hideCustomView();
             return;
         }
-        if (mIsFullscreenMode) {
-            setFullscreenMode(false);
+        if (mOverlayStack.handleBackPressed()) {
             return;
         }
-        if (mOverlayStack.handleBackPressed()) {
+        if (mIsFullscreenMode) {
+            setFullscreenMode(false);
             return;
         }
         BrowserController.TabSession tab = mController != null ? mController.getActiveTab() : null;

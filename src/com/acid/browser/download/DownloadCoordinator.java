@@ -909,6 +909,7 @@ public class DownloadCoordinator {
                 DownloadManager.STATUS_RUNNING,
                 System.currentTimeMillis()
             );
+            item.isSystemDownload = true;
 
             synchronized (mDownloads) {
                 mDownloads.add(0, item);
@@ -1097,26 +1098,44 @@ public class DownloadCoordinator {
         }
         if (target == null) return;
 
-        // 1. Cancel and halt any active task in AcidDownloader without deleting physical files
+        // 1. Inspect task & checkpoint ownership before cancelling (cancel removes task & deletes .part.cfg)
         DownloadTask activeTask = mDownloader.getTask(downloadId);
-        if (activeTask != null) {
-            mDownloader.cancel(downloadId, false);
-        }
-
-        // 2. Clean checkpoint file only if it belongs to this task
+        boolean ownsActiveUnfinished = (activeTask != null && activeTask.status != DownloadTask.STATUS_SUCCESSFUL);
+        File activeDestFile = (activeTask != null) ? activeTask.destinationFile : null;
         File destDir = getDownloadDestinationDir();
         File cfg = new File(destDir, target.fileName + ".part.cfg");
         boolean ownsCheckpoint = isCheckpointMatchingUrl(cfg, target.url);
+
+        if (activeTask != null) {
+            mDownloader.cancel(downloadId, false);
+        }
+        if (target.isSystemDownload
+            && target.status != DownloadManager.STATUS_SUCCESSFUL
+            && target.status != DownloadItem.STATUS_SAVED) {
+            removeSystemDownloadQuietly(downloadId);
+        }
+
         if (ownsCheckpoint) {
             try { cfg.delete(); } catch (Exception ignored) {}
         }
 
-        // 3. Purge dirty incomplete partial file ONLY if it belongs to this task
-        // If there was no matching checkpoint, target.fileName on disk does NOT belong to this task!
-        if (ownsCheckpoint && (target.status == DownloadTask.STATUS_FAILED || target.status == DownloadTask.STATUS_PAUSED)) {
-            File partial = new File(destDir, target.fileName);
+        // 2. Purge dirty incomplete partial file belonging to this unfinished task so redownload starts clean
+        if ((ownsCheckpoint || ownsActiveUnfinished)
+            && target.status != DownloadTask.STATUS_SUCCESSFUL
+            && target.status != DownloadItem.STATUS_SAVED) {
+            File partial = (activeDestFile != null) ? activeDestFile : new File(destDir, target.fileName);
             if (partial.exists()) {
                 try { partial.delete(); } catch (Exception ignored) {}
+            }
+        }
+
+        // 3. Drop the obsolete non-completed record before starting a fresh one
+        if (target.status != DownloadTask.STATUS_SUCCESSFUL && target.status != DownloadItem.STATUS_SAVED) {
+            synchronized (mDownloads) {
+                mDownloads.remove(target);
+                if (mDataStore != null) {
+                    mDataStore.saveDownloads(mDownloads);
+                }
             }
         }
 
@@ -1208,13 +1227,19 @@ public class DownloadCoordinator {
                     continue;
                 }
 
-                if (dm == null) continue;
+                boolean activeStatus = it.status == DownloadManager.STATUS_RUNNING
+                    || it.status == DownloadManager.STATUS_PENDING
+                    || it.status == DownloadManager.STATUS_PAUSED;
+                if (dm == null || (!it.isSystemDownload && !activeStatus)) {
+                    continue;
+                }
                 DownloadManager.Query q = new DownloadManager.Query();
                 q.setFilterById(it.downloadId);
                 Cursor c = null;
                 try {
                     c = dm.query(q);
                     if (c != null && c.moveToFirst()) {
+                        it.isSystemDownload = true;
                         int statusCol = c.getColumnIndex(DownloadManager.COLUMN_STATUS);
                         int bytesCol = c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR);
                         int totalCol = c.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES);
@@ -1240,6 +1265,11 @@ public class DownloadCoordinator {
                                 changed = true;
                             }
                         }
+                    } else if (c != null
+                        && (it.status == DownloadManager.STATUS_RUNNING || it.status == DownloadManager.STATUS_PENDING)) {
+                        // System download was cancelled/removed outside the app (e.g. notification swipe/cancel)
+                        it.status = DownloadManager.STATUS_FAILED;
+                        changed = true;
                     }
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to read download status for id " + it.downloadId, e);
@@ -1367,13 +1397,35 @@ public class DownloadCoordinator {
         AcidIo.copyToClipboard(mContext, "download_url", url, "已复制到剪贴板");
     }
 
+    private File resolveExistingDownloadFile(String fileName, File preferredFile) {
+        if (preferredFile != null && preferredFile.exists()) {
+            return preferredFile;
+        }
+        File dir = getDownloadDestinationDir();
+        File file = new File(dir, fileName);
+        if (!file.exists() && mContext != null) {
+            File extFiles = mContext.getExternalFilesDir(null);
+            if (extFiles != null) {
+                File fallbackFile = new File(new File(extFiles, "Download"), fileName);
+                if (fallbackFile.exists()) return fallbackFile;
+            }
+            if (mContext.getFilesDir() != null) {
+                File internalFile = new File(new File(mContext.getFilesDir(), "Download"), fileName);
+                if (internalFile.exists()) return internalFile;
+            }
+        }
+        return file;
+    }
+
     public boolean deleteDownload(long downloadId, boolean deletePhysicalFile) {
         boolean removed = false;
         DownloadItem target = null;
-        // Never let AcidDownloader directly delete physical files: file lifecycle and reference-count
-        // verification must strictly be governed below by DownloadCoordinator to prevent deleting files
-        // still referenced by other surviving download entries or deleting files not owned by failed tasks.
-        mDownloader.cancel(downloadId, false);
+
+        // Inspect live builtin task ownership and .part.cfg BEFORE cancelling (cancel removes task & .part.cfg)
+        DownloadTask activeTask = mDownloader.getTask(downloadId);
+        boolean ownsActiveTask = (activeTask != null);
+        boolean ownsActiveUnfinished = (activeTask != null && activeTask.status != DownloadTask.STATUS_SUCCESSFUL);
+        File activeDestFile = (activeTask != null) ? activeTask.destinationFile : null;
 
         synchronized (mDownloads) {
             for (int i = 0; i < mDownloads.size(); i++) {
@@ -1387,55 +1439,57 @@ public class DownloadCoordinator {
             }
         }
 
-        if (deletePhysicalFile && target != null) {
-            try {
-                File dir = getDownloadDestinationDir();
-                File file = new File(dir, target.fileName);
-                if (!file.exists()) {
-                    File fallbackDir = new File(mContext != null ? mContext.getExternalFilesDir(null) : null, "Download");
-                    file = new File(fallbackDir, target.fileName);
-                    if (!file.exists() && mContext != null && mContext.getFilesDir() != null) {
-                        File internalDir = new File(mContext.getFilesDir(), "Download");
-                        file = new File(internalDir, target.fileName);
-                    }
-                }
+        File resolvedFile = null;
+        File cfg = null;
+        boolean hasMatchingCheckpoint = false;
+        if (target != null) {
+            resolvedFile = resolveExistingDownloadFile(target.fileName, activeDestFile);
+            File cfgParent = resolvedFile.getParentFile();
+            if (cfgParent != null) {
+                cfg = new File(cfgParent, target.fileName + ".part.cfg");
+                hasMatchingCheckpoint = cfg.exists() && isCheckpointMatchingUrl(cfg, target.url);
+            }
+        }
 
-                // Check if any other surviving record in mDownloads still references target.fileName
-                boolean otherRecordReferencesFileName = false;
-                synchronized (mDownloads) {
-                    for (DownloadItem it : mDownloads) {
-                        if (target.fileName.equalsIgnoreCase(it.fileName)) {
-                            otherRecordReferencesFileName = true;
-                            break;
+        // Cancel active builtin task without delegating physical file deletion to AcidDownloader
+        mDownloader.cancel(downloadId, false);
+
+        if (target != null) {
+            boolean wasSuccessful = (target.status == DownloadTask.STATUS_SUCCESSFUL
+                || target.status == DownloadManager.STATUS_SUCCESSFUL);
+            if (deletePhysicalFile) {
+                try {
+                    boolean otherRecordReferencesFileName = false;
+                    synchronized (mDownloads) {
+                        for (DownloadItem it : mDownloads) {
+                            if (target.fileName.equalsIgnoreCase(it.fileName)) {
+                                otherRecordReferencesFileName = true;
+                                break;
+                            }
                         }
                     }
-                }
-
-                if (target.status == DownloadTask.STATUS_SUCCESSFUL || target.status == DownloadManager.STATUS_SUCCESSFUL) {
-                    // Task was successful: delete the physical file only if no other record references it
-                    if (!otherRecordReferencesFileName && file.exists()) {
-                        file.delete();
-                    }
-                } else {
-                    // Task was NOT successful: this task does not own any completed file!
-                    // Only delete the physical file if its matching .part.cfg exists and belongs to this task's URL
-                    File cfg = new File(file.getParentFile(), target.fileName + ".part.cfg");
-                    if (cfg.exists() && isCheckpointMatchingUrl(cfg, target.url)) {
-                        cfg.delete();
-                        if (!otherRecordReferencesFileName && file.exists()) {
-                            file.delete();
+                    if (wasSuccessful) {
+                        if (!otherRecordReferencesFileName && resolvedFile != null && resolvedFile.exists()) {
+                            resolvedFile.delete();
+                        }
+                    } else if (ownsActiveUnfinished || hasMatchingCheckpoint) {
+                        if (cfg != null && cfg.exists()) {
+                            cfg.delete();
+                        }
+                        if (!otherRecordReferencesFileName && resolvedFile != null && resolvedFile.exists()) {
+                            resolvedFile.delete();
                         }
                     }
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to delete downloaded file for id " + downloadId, e);
                 }
+            }
 
-                if (mContext != null) {
-                    DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
-                    if (dm != null && downloadId > 0) {
-                        dm.remove(downloadId);
-                    }
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to delete downloaded file for id " + downloadId, e);
+            boolean unfinished = !wasSuccessful && target.status != DownloadItem.STATUS_SAVED;
+            if (mContext != null && downloadId > 0
+                && (target.isSystemDownload || (!ownsActiveTask && querySystemDownloadStatus(downloadId) != -1))
+                && (deletePhysicalFile || unfinished)) {
+                removeSystemDownloadQuietly(downloadId);
             }
         }
 
@@ -1474,7 +1528,10 @@ public class DownloadCoordinator {
                         if (t != null) {
                             boolean unfinished = t.status != DownloadTask.STATUS_SUCCESSFUL;
                             mDownloader.cancel(it.downloadId, unfinished);
-                        } else if (dm != null && it.status != DownloadManager.STATUS_SUCCESSFUL) {
+                        } else if (dm != null
+                            && it.status != DownloadManager.STATUS_SUCCESSFUL
+                            && it.status != DownloadItem.STATUS_SAVED
+                            && (it.isSystemDownload || querySystemDownloadStatus(it.downloadId) != -1)) {
                             try {
                                 dm.remove(it.downloadId);
                             } catch (Exception ignored) {}

@@ -981,6 +981,13 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             if (item.isRunning) {
                 mRenderedFinalMarkdown = false;
                 if (mStreamingTextView != null) {
+                    if (mStreamingTextView.getParent() != cardView) {
+                        if (mStreamingTextView.getParent() instanceof ViewGroup) {
+                            ((ViewGroup) mStreamingTextView.getParent()).removeView(mStreamingTextView);
+                        }
+                        cardView.removeAllViews();
+                        cardView.addView(mStreamingTextView);
+                    }
                     mStreamingTextView.setText(text);
                     mStreamingTextView.setVisibility(View.VISIBLE);
                 }

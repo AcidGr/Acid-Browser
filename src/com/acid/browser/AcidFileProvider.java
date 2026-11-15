@@ -237,4 +237,157 @@ public class AcidFileProvider extends ContentProvider {
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         return 0;
     }
+
+    public interface ExtensionMimeResolver {
+        String mimeForExtension(String ext);
+    }
+
+    /**
+     * Validates an upload URI returned from the system file chooser against scheme spoofing,
+     * internal {@link AcidFileProvider} re-exposure, and private app data directory disclosure.
+     */
+    public static boolean isSafeFileChooserUri(Context ctx, Uri uri) {
+        if (uri == null) return false;
+        String scheme = uri.getScheme() != null ? uri.getScheme().toLowerCase(java.util.Locale.ROOT).trim() : "";
+        if ("content".equals(scheme)) {
+            String raw = uri.toString() != null ? uri.toString() : "";
+            String lower = raw.toLowerCase(java.util.Locale.ROOT);
+            String host = uri.getHost() != null ? uri.getHost().toLowerCase(java.util.Locale.ROOT).trim() : "";
+            String authority = host;
+            if (authority.isEmpty() && lower.startsWith("content://")) {
+                int start = "content://".length();
+                int end = lower.length();
+                int sIdx = lower.indexOf('/', start);
+                int qIdx = lower.indexOf('?', start);
+                int hIdx = lower.indexOf('#', start);
+                if (sIdx >= 0 && sIdx < end) end = sIdx;
+                if (qIdx >= 0 && qIdx < end) end = qIdx;
+                if (hIdx >= 0 && hIdx < end) end = hIdx;
+                authority = lower.substring(start, end);
+            }
+            int at = authority.lastIndexOf('@');
+            if (at >= 0) authority = authority.substring(at + 1);
+            if (authority.isEmpty()) return false;
+            if (AUTHORITY.equalsIgnoreCase(authority)) return false;
+            if (ctx != null && ctx.getPackageName() != null
+                && (ctx.getPackageName() + ".fileprovider").equalsIgnoreCase(authority)) {
+                return false;
+            }
+            return true;
+        }
+        if ("file".equals(scheme)) {
+            String rawPath = uri.getPath();
+            if (rawPath == null || rawPath.trim().isEmpty()) return false;
+            String canonPath;
+            try {
+                canonPath = new File(rawPath).getCanonicalPath().replace('\\', '/');
+            } catch (Exception e) {
+                canonPath = rawPath.replace('\\', '/');
+            }
+            String normRaw = rawPath.replace('\\', '/');
+            return isSafeExternalFilePath(canonPath, ctx) && isSafeExternalFilePath(normRaw, ctx);
+        }
+        return false;
+    }
+
+    private static boolean isSafeExternalFilePath(String path, Context ctx) {
+        if (path == null || path.isEmpty()) return false;
+        if (path.startsWith("/proc/self") || "/proc/self".equals(path)) return false;
+        String pkg = (ctx != null && ctx.getPackageName() != null && !ctx.getPackageName().trim().isEmpty())
+            ? ctx.getPackageName().trim() : "com.acid.browser";
+        if (isPathUnderBase(path, "/data/data/" + pkg)) return false;
+        if (isPathUnderAndroidUserPkg(path, "/data/user/", pkg)) return false;
+        if (isPathUnderAndroidUserPkg(path, "/data/user_de/", pkg)) return false;
+        if (ctx != null) {
+            try {
+                if (ctx.getApplicationInfo() != null && ctx.getApplicationInfo().dataDir != null) {
+                    String dataCanon = new File(ctx.getApplicationInfo().dataDir).getCanonicalPath().replace('\\', '/');
+                    if (isPathUnderBase(path, dataCanon)) return false;
+                }
+            } catch (Throwable ignored) {}
+            try {
+                File filesDir = ctx.getFilesDir();
+                if (filesDir != null) {
+                    if (isPathUnderBase(path, filesDir.getCanonicalPath().replace('\\', '/'))) return false;
+                    File parent = filesDir.getParentFile();
+                    if (parent != null && isPathUnderBase(path, parent.getCanonicalPath().replace('\\', '/'))) return false;
+                }
+            } catch (Throwable ignored) {}
+            try {
+                File cacheDir = ctx.getCacheDir();
+                if (cacheDir != null && isPathUnderBase(path, cacheDir.getCanonicalPath().replace('\\', '/'))) return false;
+            } catch (Throwable ignored) {}
+        }
+        return true;
+    }
+
+    private static boolean isPathUnderBase(String path, String base) {
+        if (base == null || base.isEmpty()) return false;
+        while (base.endsWith("/") && base.length() > 1) base = base.substring(0, base.length() - 1);
+        return path.equals(base) || path.startsWith(base + "/");
+    }
+
+    private static boolean isPathUnderAndroidUserPkg(String path, String rootPrefix, String pkg) {
+        if (!path.startsWith(rootPrefix)) return false;
+        int restStart = rootPrefix.length();
+        int slash = path.indexOf('/', restStart);
+        if (slash <= restStart) return false;
+        String sub = path.substring(slash + 1);
+        return sub.equals(pkg) || sub.startsWith(pkg + "/");
+    }
+
+    /**
+     * Normalizes HTML {@code accept} tokens (handling comma-separated items, {@code ;charset=...}
+     * parameters, uppercase types, and extensions). Returns an empty list (meaning {@code *\/*})
+     * whenever any token is {@code *\/*} or cannot be mapped to a concrete MIME type so valid
+     * selections are never filtered out.
+     */
+    public static java.util.List<String> normalizeFileChooserAcceptTypes(
+            String[] acceptTypes, ExtensionMimeResolver resolver) {
+        java.util.ArrayList<String> mimes = new java.util.ArrayList<String>();
+        if (acceptTypes == null || acceptTypes.length == 0) return mimes;
+        for (int i = 0; i < acceptTypes.length; i++) {
+            String rawEntry = acceptTypes[i];
+            if (rawEntry == null) continue;
+            String[] parts = rawEntry.split(",");
+            for (int p = 0; p < parts.length; p++) {
+                String token = parts[p] != null ? parts[p].trim() : "";
+                if (token.isEmpty()) continue;
+                int semi = token.indexOf(';');
+                if (semi >= 0) token = token.substring(0, semi).trim();
+                if (token.isEmpty()) continue;
+                String lower = token.toLowerCase(java.util.Locale.ROOT);
+                if ("*".equals(lower) || "*/*".equals(lower)) {
+                    mimes.clear();
+                    return mimes;
+                }
+                if (lower.indexOf('/') >= 0) {
+                    int slash = lower.indexOf('/');
+                    if (slash <= 0 || slash >= lower.length() - 1) {
+                        mimes.clear();
+                        return mimes;
+                    }
+                    if (!mimes.contains(lower)) mimes.add(lower);
+                } else {
+                    String ext = lower.startsWith(".") ? lower.substring(1) : lower;
+                    if (ext.isEmpty()) continue;
+                    String resolved = null;
+                    if (resolver != null) {
+                        resolved = resolver.mimeForExtension(ext);
+                    } else {
+                        try {
+                            resolved = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+                        } catch (Throwable ignored) {}
+                    }
+                    if (resolved == null || resolved.trim().isEmpty()) {
+                        mimes.clear();
+                        return mimes;
+                    }
+                    String normResolved = resolved.trim().toLowerCase(java.util.Locale.ROOT);
+                    if (!mimes.contains(normResolved)) mimes.add(normResolved);
+                }
+            }
+        }
+        return mimes;
+    }
 }

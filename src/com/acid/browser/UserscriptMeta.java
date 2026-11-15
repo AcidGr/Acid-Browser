@@ -197,7 +197,11 @@ public class UserscriptMeta {
      * script declares grants, only those APIs are available ({@code @grant none} = none).
      */
     public boolean isGranted(String... apis) {
-        if (grants.isEmpty()) return true;
+        if (grants.isEmpty()) {
+            // @unwrap scripts without an explicit @grant opt out of privileged bridge APIs
+            // so secrets are never exposed to page scope and @unwrap works as authored.
+            return !unwrap;
+        }
         for (String api : apis) {
             String want = normalizeGrant(api);
             for (String g : grants) {

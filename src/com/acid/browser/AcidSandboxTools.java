@@ -468,6 +468,9 @@ public class AcidSandboxTools {
             if (url == null) {
                 return new ToolExecResult(formatBlockedNavigationError(rawUrl), false, null);
             }
+            if (source != ToolSource.AGENT_UI && isUserscriptDownloadTarget(url, null)) {
+                return new ToolExecResult("Error: navigating to or installing .user.js URLs is only available from the in-app agent chat, not through the MCP gateway.", false, null);
+            }
             if (driver == null) {
                 return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
             }
@@ -618,6 +621,9 @@ public class AcidSandboxTools {
                     validatedNewTabUrl = resolveAndValidateNavigationUrl(rawNewUrl);
                     if (validatedNewTabUrl == null) {
                         return new ToolExecResult(formatBlockedNavigationError(rawNewUrl), false, null);
+                    }
+                    if (source != ToolSource.AGENT_UI && isUserscriptDownloadTarget(validatedNewTabUrl, null)) {
+                        return new ToolExecResult("Error: opening or installing .user.js URLs is only available from the in-app agent chat, not through the MCP gateway.", false, null);
                     }
                 }
             } else {
@@ -915,17 +921,7 @@ public class AcidSandboxTools {
         // Writing into userscripts/ is an install, not a plain write: it must go through
         // validation so a script without @match cannot silently end up running everywhere.
         if (isInsideUserscripts(f)) {
-            String error = mController.installUserscript(f.getName(), content);
-            if (error != null) {
-                return "Error: " + error;
-            }
-            UserscriptMeta meta = UserscriptMeta.parse(f.getName(), content);
-            return "Installed userscript \"" + meta.name + "\"\n"
-                + "Scope: " + meta.describeScope() + "\n"
-                + "Run at: " + meta.runAt + "\n"
-                + "File: " + f.getAbsolutePath() + "\n\n"
-                + "The script is now managed in the browser menu (功能 -> 脚本管理). "
-                + (meta.enabled ? "It is enabled and will run on matching pages." : "It is marked as pending/disabled until the user enables it.");
+            return installUserscriptFromTool(f, content, false);
         }
 
         try {
@@ -937,6 +933,50 @@ public class AcidSandboxTools {
         } catch (Exception e) {
             return "Error writing file: " + e.getMessage();
         }
+    }
+
+    private String installUserscriptFromTool(File requestedFile, String content, boolean isEdit) {
+        File userscriptsDir = (mController != null && mController.getUserscriptManager() != null)
+            ? mController.getUserscriptManager().getUserscriptsDir()
+            : new File(mWorkspaceDir, "userscripts");
+        String safeName = UserscriptManager.safeFileName(requestedFile.getName());
+        File actualFile = new File(userscriptsDir, safeName);
+
+        if (mController != null && mController.getUserscriptManager() != null) {
+            String error = mController.installUserscript(requestedFile.getName(), content);
+            if (error != null) {
+                return "Error: " + error;
+            }
+        } else {
+            if (content == null || content.trim().isEmpty()) {
+                return "Error: 脚本内容为空";
+            }
+            if (content.length() > UserscriptManager.MAX_SCRIPT_BYTES) {
+                return "Error: 脚本超过 " + (UserscriptManager.MAX_SCRIPT_BYTES / (1024 * 1024)) + " MB 上限";
+            }
+            UserscriptMeta checkMeta = UserscriptMeta.parse(requestedFile.getName(), content);
+            if (!checkMeta.hasMetadata) {
+                return "Error: 缺少 ==UserScript== 元数据块，无法确定生效范围";
+            }
+            if (checkMeta.matches.isEmpty() && checkMeta.includes.isEmpty()) {
+                return "Error: 缺少 @match 或 @include，无法确定生效范围";
+            }
+            if (!AcidIo.writeFileUtf8Safe(actualFile, content)) {
+                return "Error: 写入文件失败: " + actualFile.getAbsolutePath();
+            }
+        }
+
+        UserscriptMeta meta = UserscriptMeta.parse(safeName, content);
+        if (isEdit) {
+            log("[EDIT] Updated userscript " + safeName);
+            return "Successfully edited userscript \"" + meta.name + "\" at " + actualFile.getAbsolutePath();
+        }
+        return "Installed userscript \"" + meta.name + "\"\n"
+            + "Scope: " + meta.describeScope() + "\n"
+            + "Run at: " + meta.runAt + "\n"
+            + "File: " + actualFile.getAbsolutePath() + "\n\n"
+            + "The script is now managed in the browser menu (功能 -> 脚本管理). "
+            + (meta.enabled ? "It is enabled and will run on matching pages." : "It is marked as pending/disabled until the user enables it.");
     }
 
     private void notifyWorkspaceFileMutated(final File f) {
@@ -1024,11 +1064,14 @@ public class AcidSandboxTools {
         if (isInsideSkills(f)) {
             return "Error: modifying skills/ is only available from the in-app agent chat, not through the MCP gateway.";
         }
+        if (isInsideAdBlock(f)) {
+            return "Error: modifying adblock/ is only available from the in-app agent chat, not through the MCP gateway.";
+        }
         if (isInsideHomepage(f)) {
             return "Error: modifying homepage/ is only available from the in-app agent chat, not through the MCP gateway.";
         }
-        if (isSettingsJsonFile(f)) {
-            return "Error: modifying settings.json is only available from the in-app agent chat, not through the MCP gateway.";
+        if (isProtectedRootStateFile(f)) {
+            return "Error: modifying " + f.getName() + " is only available from the in-app agent chat, not through the MCP gateway.";
         }
         return null;
     }
@@ -1067,11 +1110,14 @@ public class AcidSandboxTools {
         return isInsideDir(f, new File(mWorkspaceDir, "homepage"));
     }
 
-    /** True when {@code f} is the workspace settings.json file. */
-    private boolean isSettingsJsonFile(File f) {
+    /** True when {@code f} is a protected workspace state JSON file (settings, userscript storage, skill sync). */
+    private boolean isProtectedRootStateFile(File f) {
         if (f == null) return false;
         try {
-            return f.getCanonicalFile().equals(new File(mWorkspaceDir, "settings.json").getCanonicalFile());
+            File target = f.getCanonicalFile();
+            return target.equals(new File(mWorkspaceDir, "settings.json").getCanonicalFile())
+                || target.equals(new File(mWorkspaceDir, "userscript_storage.json").getCanonicalFile())
+                || target.equals(new File(mWorkspaceDir, "skills_sync.json").getCanonicalFile());
         } catch (Exception e) {
             return false;
         }
@@ -1115,10 +1161,7 @@ public class AcidSandboxTools {
             }
 
             if (isInsideUserscripts(f)) {
-                UserscriptMeta meta = UserscriptMeta.parse(f.getName(), updated);
-                if (!meta.hasMetadata || (meta.matches.isEmpty() && meta.includes.isEmpty())) {
-                    return "Error: edited userscript must contain a valid ==UserScript== header with @match or @include.";
-                }
+                return installUserscriptFromTool(f, updated, true);
             }
 
             AcidIo.writeFileUtf8(f, updated);
@@ -1143,6 +1186,8 @@ public class AcidSandboxTools {
         log("[BASH] $ " + (cmd.length() > 60 ? cmd.substring(0, 60) + "..." : cmd));
 
         Process proc = null;
+        InputStream stdoutStream = null;
+        Thread readerThread = null;
         try {
             ProcessBuilder pb = new ProcessBuilder("/system/bin/sh", "-c", cmd);
             pb.directory(mWorkspaceDir);
@@ -1153,40 +1198,64 @@ public class AcidSandboxTools {
             } catch (Exception ignored) {}
 
             final InputStream is = proc.getInputStream();
+            stdoutStream = is;
             final ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            Thread readerThread = new Thread(new Runnable() {
+            final Object baosLock = new Object();
+            readerThread = new Thread(new Runnable() {
                 @Override
                 public void run() {
                     try {
                         byte[] buf = new byte[4096];
                         int n;
                         while ((n = is.read(buf)) != -1) {
-                            if (baos.size() < 64 * 1024) {
-                                baos.write(buf, 0, n);
+                            synchronized (baosLock) {
+                                int remaining = 64 * 1024 - baos.size();
+                                if (remaining > 0) {
+                                    baos.write(buf, 0, Math.min(n, remaining));
+                                }
                             }
                         }
                     } catch (Exception e) {
                         Log.w(TAG, "Failed while reading process output", e);
                     }
                 }
-            });
+            }, "AcidBashReader");
             readerThread.start();
 
             boolean finished = waitForProcess(proc, timeoutMs);
             if (!finished) {
-                proc.destroy();
-                return "[timeout after " + timeoutMs + "ms]\n" + new String(baos.toByteArray(), StandardCharsets.UTF_8);
+                try {
+                    proc.destroy();
+                } catch (Exception ignored) {}
+                AcidIo.closeQuietly(stdoutStream);
+                try {
+                    readerThread.join(500);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                String partialOut;
+                synchronized (baosLock) {
+                    partialOut = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+                }
+                return "[timeout after " + timeoutMs + "ms]\n" + partialOut;
             }
             readerThread.join(1000);
             int code = proc.exitValue();
-            String out = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            String out;
+            synchronized (baosLock) {
+                out = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            }
             if (out.length() > 16000) {
                 out = out.substring(0, 16000) + "\n...[output truncated]...";
             }
             return out + "\n[exit code: " + code + "]";
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return "Error executing bash command: interrupted\n[exit code: -1]";
         } catch (Exception e) {
             return "Error executing bash command: " + e.getMessage() + "\n[exit code: -1]";
         } finally {
+            AcidIo.closeQuietly(stdoutStream);
             if (proc != null) {
                 try {
                     proc.destroy();

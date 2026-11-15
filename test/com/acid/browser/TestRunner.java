@@ -1,5 +1,7 @@
 package com.acid.browser;
 
+import android.net.Uri;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -17,6 +19,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -129,6 +132,11 @@ public final class TestRunner {
         // 16. Batch-2 Stability & Infrastructure Convergence Regression
         run("16. Batch-2 Stability: DownloadTask I/O generation lock, HttpProbe registration, Pending-sync overwrite guard, AdBlock flush, IPv6 favicons & Zip caps", new TestCase() {
             @Override public void execute() throws Exception { testStabilityAndInfraConvergenceBatch2(); }
+        });
+
+        // 17. Post-Audit P0 & P1 Security, State & Lifecycle Regression
+        run("17. Post-Audit P0/P1 Fixes: Loopback Origin/SSRF/PSL, MCP .user.js/paths, FileChooser URI/MIME, @unwrap guard, Checkpoint Gen/Status & Null DataStore", new TestCase() {
+            @Override public void execute() throws Exception { testPostAuditP0AndP1Regressions(); }
         });
 
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
@@ -1679,5 +1687,207 @@ public final class TestRunner {
         for (int i = 0; i < 8; i++) {
             assertEquals(Integer.valueOf(i), order.get(i), "AcidAsync.runSerialized preserves strict FIFO ordering at index " + i);
         }
+    }
+
+    // =========================================================================
+    // 17. Post-Audit P0 & P1 Security, State & Lifecycle Regression
+    // =========================================================================
+
+    private static void testPostAuditP0AndP1Regressions() throws Exception {
+        // 1. HttpControlServer loopback literal & Origin lookalike rejection
+        assertTrue(!HttpControlServer.isLoopbackOrLocalLiteralHost("127.evil.com"), "127.evil.com is not loopback");
+        assertTrue(HttpControlServer.isLoopbackOrLocalLiteralHost("127.0.0.2"), "127.0.0.2 is loopback IPv4");
+        assertTrue(HttpControlServer.isLoopbackOrLocalLiteralHost("[::1]"), "[::1] is loopback IPv6");
+        assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("http://127.evil.com:3090"), "127.evil.com Origin rejected");
+        assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("https://127.0.0.1.attacker.test"), "Subdomain loopback Origin rejected");
+        assertTrue(HttpControlServer.isLocalOrTrustedOrigin("http://[::1]:3090"), "[::1] Origin trusted");
+        assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("http://192.168.1.99:3090", false), "LAN Origin rejected when not lanBound");
+        String detectedLanIp = HttpControlServer.getLocalIpAddress();
+        if (detectedLanIp != null && !detectedLanIp.trim().isEmpty() && !"192.168.1.99".equals(detectedLanIp)) {
+            assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("http://192.168.1.99:3090", true), "Foreign LAN IP Origin rejected even when lanBound");
+        }
+        if (detectedLanIp != null && !detectedLanIp.trim().isEmpty() && !HttpControlServer.isLoopbackOrLocalLiteralHost(detectedLanIp)) {
+            String lanOrigin = detectedLanIp.contains(":")
+                ? "http://[" + detectedLanIp + "]:3090"
+                : "http://" + detectedLanIp + ":3090";
+            assertTrue(!HttpControlServer.isLocalOrTrustedOrigin(lanOrigin, false), "Device LAN Origin rejected when not lanBound");
+            assertTrue(HttpControlServer.isLocalOrTrustedOrigin(lanOrigin, true), "Device LAN Origin allowed when lanBound");
+        }
+
+        // 2. AcidHttp SSRF validation & multi-label Public Suffix List (PSL)
+        String[] ssrfBlockedUrls = new String[] {
+            "http://127.0.0.1:8080/x",
+            "http://[::1]:8080/x",
+            "http://169.254.169.254/latest/meta-data",
+            "http://metadata.google.internal/computeMetadata/v1",
+            "file:///etc/passwd"
+        };
+        for (String blockedUrl : ssrfBlockedUrls) {
+            boolean threw = false;
+            try {
+                AcidHttp.REMOTE_FETCH_VALIDATOR.validate(new URL(blockedUrl));
+            } catch (IOException expected) {
+                threw = true;
+            }
+            assertTrue(threw, "REMOTE_FETCH_VALIDATOR must block " + blockedUrl);
+        }
+        AcidHttp.REMOTE_FETCH_VALIDATOR.validate(new URL("https://example.com/skill.zip"));
+
+        assertTrue(AcidHttp.isPublicSuffixOrTld("vercel.app"), "AcidHttp recognizes multi-label PSL vercel.app");
+        assertTrue(AdBlockManager.isPublicSuffixOrTld("vercel.app"), "AdBlockManager delegates PSL check to AcidHttp");
+        assertTrue(!AcidHttp.shouldRetainDownloadCredentials(
+            new URL("https://site-a.vercel.app/f"), new URL("https://site-b.vercel.app/f")),
+            "Public suffix vercel.app cross-tenant redirect strips credentials");
+        assertTrue(!AcidHttp.shouldRetainDownloadCredentials(
+            new URL("https://app1.github.io/a"), new URL("https://app2.github.io/b")),
+            "Public suffix github.io cross-tenant redirect strips credentials");
+
+        // 3. AcidSandboxTools MCP .user.js navigation/tab & sensitive workspace paths
+        File sbxDir = File.createTempFile("acid_p0p1_sbx_", "_dir");
+        sbxDir.delete();
+        sbxDir.mkdirs();
+        try {
+            AcidSandboxTools sbx = new AcidSandboxTools(null, sbxDir);
+            String[] blockedMcpFiles = new String[] {
+                "adblock/custom_rules.txt",
+                "userscript_storage.json",
+                "skills_sync.json"
+            };
+            for (String p : blockedMcpFiles) {
+                AcidSandboxTools.ToolExecResult wRes = sbx.executeTool(
+                    "write",
+                    new JSONObject().put("file_path", p).put("content", "payload"),
+                    AcidSandboxTools.ToolSource.MCP
+                );
+                assertTrue(wRes.outputText.startsWith("Error:"), "MCP write must block " + p);
+
+                AcidIo.writeFileUtf8Safe(new File(sbxDir, p), "initial_state");
+                AcidSandboxTools.ToolExecResult eRes = sbx.executeTool(
+                    "edit",
+                    new JSONObject().put("file_path", p).put("old_string", "initial_state").put("new_string", "pwned"),
+                    AcidSandboxTools.ToolSource.MCP
+                );
+                assertTrue(eRes.outputText.startsWith("Error:"), "MCP edit must block " + p);
+            }
+
+            AcidSandboxTools.ToolExecResult navUserJs = sbx.executeTool(
+                "browser",
+                new JSONObject().put("action", "navigate").put("url", "https://example.com/evil.user.js?v=1"),
+                AcidSandboxTools.ToolSource.MCP
+            );
+            assertTrue(navUserJs.outputText.startsWith("Error:"), "MCP browser navigate must block .user.js");
+
+            AcidSandboxTools.ToolExecResult tabUserJs = sbx.executeTool(
+                "browser",
+                new JSONObject().put("action", "tabs").put("tab_action", "new").put("url", "https://example.com/evil.user.js"),
+                AcidSandboxTools.ToolSource.MCP
+            );
+            assertTrue(tabUserJs.outputText.startsWith("Error:"), "MCP browser tabs(new) must block .user.js");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(sbxDir);
+        }
+
+        // 4. AcidFileProvider FileChooser URI security & accept MIME normalization
+        assertTrue(!AcidFileProvider.isSafeFileChooserUri(
+            null, Uri.parse("content://com.acid.browser.fileprovider/int_private/x")),
+            "Reject own FileProvider content URI");
+        assertTrue(!AcidFileProvider.isSafeFileChooserUri(
+            null, Uri.parse("file:///data/data/com.acid.browser/shared_prefs/x.xml")),
+            "Reject app /data/data private file URI");
+        assertTrue(!AcidFileProvider.isSafeFileChooserUri(
+            null, Uri.parse("file:///data/user/0/com.acid.browser/files/k")),
+            "Reject app /data/user private file URI");
+        assertTrue(!AcidFileProvider.isSafeFileChooserUri(
+            null, Uri.parse("file:///data/user_de/0/com.acid.browser/files/k")),
+            "Reject app /data/user_de private file URI");
+        assertTrue(!AcidFileProvider.isSafeFileChooserUri(
+            null, Uri.parse("file:///proc/self/environ")),
+            "Reject /proc/self file URI");
+        assertTrue(!AcidFileProvider.isSafeFileChooserUri(
+            null, Uri.parse("javascript:alert(1)")),
+            "Reject non-content/file scheme");
+        assertTrue(AcidFileProvider.isSafeFileChooserUri(
+            null, Uri.parse("content://com.android.externalstorage.documents/document/primary%3Aa.pdf")),
+            "Allow external storage document URI");
+        assertTrue(AcidFileProvider.isSafeFileChooserUri(
+            null, Uri.parse("file:///storage/emulated/0/Download/a.pdf")),
+            "Allow external shared storage file URI");
+
+        AcidFileProvider.ExtensionMimeResolver mockResolver = new AcidFileProvider.ExtensionMimeResolver() {
+            @Override
+            public String mimeForExtension(String ext) {
+                return "png".equals(ext) ? "image/png" : null;
+            }
+        };
+        List<String> normMulti = AcidFileProvider.normalizeFileChooserAcceptTypes(
+            new String[] { "image/png, IMAGE/JPEG;charset=utf-8" }, mockResolver);
+        assertEquals(2, Integer.valueOf(normMulti.size()), "Comma-separated accept types normalized");
+        assertEquals("image/png", normMulti.get(0), "First accept MIME normalized");
+        assertEquals("image/jpeg", normMulti.get(1), "Second accept MIME stripped & lowercased");
+
+        List<String> normMixedUnknown = AcidFileProvider.normalizeFileChooserAcceptTypes(
+            new String[] { "image/png, .unknown_xyz" }, mockResolver);
+        assertTrue(normMixedUnknown.isEmpty(), "Unknown extension falls back to unrestricted */*");
+
+        List<String> normExtOnly = AcidFileProvider.normalizeFileChooserAcceptTypes(
+            new String[] { ".PNG" }, mockResolver);
+        assertEquals(1, Integer.valueOf(normExtOnly.size()), "Uppercase extension resolved via ExtensionMimeResolver");
+        assertEquals("image/png", normExtOnly.get(0), ".PNG resolved to image/png");
+
+        // 5. UserscriptMeta & UserscriptShaper @unwrap empty-@grant opt-out + idempotency guard
+        UserscriptMeta unwrapNoGrant = UserscriptMeta.parse(
+            "unwrap_plain.user.js",
+            "// ==UserScript==\n// @name UnwrapNoGrant\n// @unwrap\n// ==/UserScript==\nwindow.__u=1;"
+        );
+        assertTrue(!unwrapNoGrant.isGranted("GM_setValue"), "@unwrap without @grant must not auto-grant GM_setValue");
+        String shapedUnwrap = UserscriptShaper.shape(unwrapNoGrant, null, "unwrap_secret_tok");
+        assertTrue(!shapedUnwrap.contains("unwrap_secret_tok"), "@unwrap without @grant must not embed native secret");
+        assertTrue(shapedUnwrap.contains("window.__acidInjectedUserscripts"), "@unwrap output includes re-entrance guard");
+
+        UserscriptMeta unwrapExplicit = UserscriptMeta.parse(
+            "unwrap_grant.user.js",
+            "// ==UserScript==\n// @name UnwrapExplicit\n// @unwrap\n// @grant GM_setValue\n// ==/UserScript==\nGM_setValue('k','v');"
+        );
+        assertTrue(unwrapExplicit.isGranted("GM_setValue"), "@unwrap with explicit @grant GM_setValue stays granted");
+
+        // 6. DownloadTask generation/state-guarded checkpoint writes
+        File cpDir = File.createTempFile("acid_p0p1_cp_", "_dir");
+        cpDir.delete();
+        cpDir.mkdirs();
+        try {
+            DownloadTask cpTask = new DownloadTask(
+                8801L, "https://example.com/cp.bin", "cp.bin", "application/octet-stream", cpDir, null
+            );
+            int g0 = cpTask.getGeneration();
+            cpTask.status = DownloadTask.STATUS_RUNNING;
+            assertTrue(cpTask.writeActiveCheckpointJson("{\"status\":2}", g0),
+                "Active checkpoint write succeeds for current running generation");
+            assertTrue(cpTask.checkpointFile.exists(), "Checkpoint file created");
+
+            cpTask.checkpointFile.delete();
+            int g1 = cpTask.nextGeneration();
+            assertTrue(!cpTask.writeActiveCheckpointJson("{\"status\":2}", g0),
+                "Stale generation active checkpoint write must be rejected");
+            assertTrue(!cpTask.checkpointFile.exists(), "Stale write must not resurrect deleted checkpoint");
+
+            cpTask.status = DownloadTask.STATUS_SUCCESSFUL;
+            assertTrue(!cpTask.writeSnapshotCheckpointForState("{\"status\":4}", g1, DownloadTask.STATUS_PAUSED),
+                "Snapshot checkpoint write rejected when state already transitioned");
+            assertTrue(!cpTask.checkpointFile.exists(), "Mismatched state write must not resurrect checkpoint");
+
+            cpTask.status = DownloadTask.STATUS_PAUSED;
+            assertTrue(cpTask.writeSnapshotCheckpointForState("{\"status\":4}", g1, DownloadTask.STATUS_PAUSED),
+                "Snapshot checkpoint write succeeds when generation and state match");
+            assertTrue(cpTask.checkpointFile.exists(), "Matching snapshot checkpoint written");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(cpDir);
+        }
+
+        // 7. AdBlockManager null BrowserDataStore safety
+        AdBlockManager nullAb = new AdBlockManager((File) null, (File) null, (BrowserDataStore) null);
+        nullAb.setEnabled(false);
+        assertTrue(!nullAb.isEnabled(), "setEnabled works safely when dataStore is null");
+        assertTrue(nullAb.getSubscriptionUrl() != null, "getSubscriptionUrl returns non-null default when dataStore is null");
+        nullAb.setSubscriptionUrl("https://example.com/rules.txt");
     }
 }

@@ -6,13 +6,19 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URL;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Shared HTTP client utility with unified User-Agent, timeout policy, response size cap,
@@ -54,6 +60,108 @@ public final class AcidHttp {
             return shouldRetainDownloadCredentials(fromUrl, toUrl);
         }
     };
+
+    public static final UrlValidator REMOTE_FETCH_VALIDATOR = new UrlValidator() {
+        @Override
+        public void validate(URL url) throws IOException {
+            try {
+                validateHttpTargetForSsrf(url, true, "AcidHttp");
+            } catch (SecurityException se) {
+                throw new IOException(se.getMessage(), se);
+            }
+        }
+    };
+
+    public static final Set<String> PUBLIC_SUFFIXES = Collections.unmodifiableSet(new HashSet<String>(Arrays.asList(
+        "com", "cn", "net", "org", "edu", "gov", "io", "cc", "me", "info", "top", "xyz", "biz", "app", "dev", "ai",
+        "co", "tv", "fm", "ly", "gg", "sh", "to", "uk", "jp", "de", "fr", "kr", "tw", "hk", "sg", "au", "ca", "in", "br", "ru",
+        "com.cn", "net.cn", "org.cn", "edu.cn", "gov.cn", "ac.cn",
+        "co.uk", "org.uk", "ac.uk", "gov.uk",
+        "co.jp", "ne.jp", "or.jp", "ac.jp",
+        "com.hk", "org.hk", "edu.hk",
+        "com.tw", "org.tw", "net.tw",
+        "com.sg", "com.au", "net.au", "org.au", "edu.au",
+        "co.kr", "or.kr", "co.in", "net.in", "org.in", "com.br", "org.br",
+        "com.mx", "com.tr", "co.za", "co.nz", "co.id", "com.my", "com.ph", "com.vn",
+        "github.io", "gitlab.io", "vercel.app", "pages.dev", "netlify.app",
+        "herokuapp.com", "appspot.com", "blogspot.com", "wordpress.com", "workers.dev",
+        "r2.dev", "fly.dev", "ondigitalocean.app", "azurewebsites.net", "cloudfront.net",
+        "s3.amazonaws.com", "googleapis.com", "firebaseapp.com", "web.app",
+        "eu.org", "us.org", "uk.com"
+    )));
+
+    public static boolean isPublicSuffixOrTld(String domain) {
+        if (domain == null || domain.trim().isEmpty()) return true;
+        String d = domain.trim().toLowerCase(Locale.ROOT);
+        while (d.endsWith(".")) {
+            d = d.substring(0, d.length() - 1).trim();
+        }
+        if (d.isEmpty() || !d.contains(".")) return true; // Single label like "com", "cn", "localhost"
+        return PUBLIC_SUFFIXES.contains(d);
+    }
+
+    /**
+     * Validates an HTTP(S) target URL against SSRF to the local Acid MCP gateway,
+     * cloud link-local metadata endpoints, and (when {@code blockAllLoopbackAndLocal} is true)
+     * any loopback / local-interface address.
+     */
+    public static void validateHttpTargetForSsrf(URL url, boolean blockAllLoopbackAndLocal, String callerTag)
+            throws SecurityException {
+        if (url == null) {
+            throw new SecurityException("Null request URL");
+        }
+        String proto = url.getProtocol() != null ? url.getProtocol().toLowerCase(Locale.ROOT) : "";
+        if (!"http".equals(proto) && !"https".equals(proto)) {
+            throw new SecurityException("Unsupported protocol in " + callerTag + ": " + proto);
+        }
+        String rawHost = url.getHost() != null ? url.getHost().toLowerCase(Locale.ROOT).trim() : "";
+        if (rawHost.startsWith("[") && rawHost.endsWith("]") && rawHost.length() > 2) {
+            rawHost = rawHost.substring(1, rawHost.length() - 1);
+        }
+        while (rawHost.endsWith(".")) {
+            rawHost = rawHost.substring(0, rawHost.length() - 1);
+        }
+        if (rawHost.isEmpty()) {
+            throw new SecurityException("Empty host in " + callerTag);
+        }
+        int port = url.getPort() != -1 ? url.getPort() : url.getDefaultPort();
+        int activeMcpPort = HttpControlServer.getActiveMcpPort();
+        boolean isMcpPort = (port == HttpControlServer.DEFAULT_PORT) || (activeMcpPort > 0 && port == activeMcpPort);
+
+        if ("metadata.google.internal".equals(rawHost) || "169.254.169.254".equals(rawHost)) {
+            throw new SecurityException("Blocked SSRF access to cloud metadata endpoint: " + rawHost);
+        }
+        if ((blockAllLoopbackAndLocal || isMcpPort) && HttpControlServer.isLoopbackOrLocalLiteralHost(rawHost)) {
+            throw new SecurityException("Blocked SSRF access to local/loopback target " + rawHost + ":" + port);
+        }
+        if (rawHost.endsWith(".local") && blockAllLoopbackAndLocal) {
+            throw new SecurityException("Blocked SSRF access to mDNS/local host " + rawHost);
+        }
+
+        try {
+            InetAddress[] addrs = InetAddress.getAllByName(rawHost);
+            String lanIp = HttpControlServer.getLocalIpAddress();
+            for (InetAddress addr : addrs) {
+                if (addr.isLinkLocalAddress() || addr.isAnyLocalAddress() || addr.isMulticastAddress()) {
+                    throw new SecurityException("Blocked SSRF access to link-local/any/multicast target " + rawHost);
+                }
+                if (addr.isLoopbackAddress() && (blockAllLoopbackAndLocal || isMcpPort)) {
+                    throw new SecurityException("Blocked SSRF access to loopback address " + rawHost + ":" + port);
+                }
+                String hostIp = addr.getHostAddress();
+                if (lanIp != null && lanIp.equals(hostIp) && (blockAllLoopbackAndLocal || isMcpPort)) {
+                    throw new SecurityException("Blocked SSRF access to local device address " + rawHost + ":" + port);
+                }
+                if (isMcpPort && addr.isSiteLocalAddress()) {
+                    throw new SecurityException("Blocked SSRF access to site-local MCP port " + port);
+                }
+            }
+        } catch (SecurityException se) {
+            throw se;
+        } catch (UnknownHostException ignored) {
+            // Defer DNS resolution failure cleanly (matches offline unit tests such as https://example.com/api).
+        } catch (Throwable ignored) {}
+    }
 
     private AcidHttp() {}
 
@@ -150,9 +258,7 @@ public final class AcidHttp {
         if (dot <= 0 || dot >= host.length() - 1) return null;
         String parent = host.substring(dot + 1);
         if (!parent.contains(".")) return null;
-        if ("com.cn".equals(parent) || "net.cn".equals(parent) || "org.cn".equals(parent)
-            || "co.uk".equals(parent) || "co.jp".equals(parent) || "com.hk".equals(parent)
-            || "github.io".equals(parent) || "gitlab.io".equals(parent)) {
+        if (isPublicSuffixOrTld(parent)) {
             return null;
         }
         return parent;
@@ -285,7 +391,7 @@ public final class AcidHttp {
     ) throws IOException {
         return openConnectionWithRedirects(
             urlStr, "GET", null, connectTimeoutMs, readTimeoutMs, MAX_REDIRECTS,
-            null, SAME_ORIGIN_CREDENTIALS, null
+            REMOTE_FETCH_VALIDATOR, SAME_ORIGIN_CREDENTIALS, null
         );
     }
 

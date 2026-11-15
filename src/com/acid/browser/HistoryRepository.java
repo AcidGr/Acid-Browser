@@ -11,6 +11,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Repository managing user browsing history, in-memory caching, SharedPreferences persistence,
@@ -26,12 +27,13 @@ public class HistoryRepository {
 
     private final Context mContext;
     private final SharedPreferences mPrefsOverride;
-    private File mHistoryJsonFile;
+    private volatile File mHistoryJsonFile;
+    private final Object mFileLock = new Object();
     private BrowserDataStore.OnHistoryChangedListener mHistoryChangedListener;
     private BrowserDataStore.CallbackDispatcher mDispatcher;
     private volatile long mLastSelfSaveTime = 0;
     private volatile String mLastSyncedJson = null;
-    private long mHistoryRevision = 0;
+    private final AtomicLong mHistoryRevision = new AtomicLong(0);
 
     public HistoryRepository(Context context) {
         this(context, null, null);
@@ -109,27 +111,31 @@ public class HistoryRepository {
         return list;
     }
 
-    public synchronized void clearHistory() {
-        final long rev = ++mHistoryRevision;
-        prefs()
-            .edit()
-            .putString(PREF_HISTORY, "[]")
-            .putBoolean(PREF_HISTORY_PENDING_SYNC, true)
-            .apply();
-
-        if (mHistoryJsonFile != null) {
-            final JSONArray empty = new JSONArray();
-            if (AcidAsync.isMainThread()) {
-                AcidAsync.runSerialized(new Runnable() {
-                    @Override
-                    public void run() {
-                        saveHistoryToJsonFile(empty, rev);
-                    }
-                });
-            } else {
-                saveHistoryToJsonFile(empty, rev);
-            }
+    private void dispatchJsonSave(final JSONArray snapshot, final long rev) {
+        if (mHistoryJsonFile == null) return;
+        if (AcidAsync.isMainThread()) {
+            AcidAsync.runSerialized(new Runnable() {
+                @Override
+                public void run() {
+                    saveHistoryToJsonFile(snapshot, rev);
+                }
+            });
+        } else {
+            saveHistoryToJsonFile(snapshot, rev);
         }
+    }
+
+    public void clearHistory() {
+        final long rev;
+        synchronized (this) {
+            rev = mHistoryRevision.incrementAndGet();
+            prefs()
+                .edit()
+                .putString(PREF_HISTORY, "[]")
+                .putBoolean(PREF_HISTORY_PENDING_SYNC, true)
+                .apply();
+        }
+        dispatchJsonSave(new JSONArray(), rev);
 
         dispatchCallback(new Runnable() {
             @Override
@@ -141,57 +147,65 @@ public class HistoryRepository {
         });
     }
 
-    public synchronized boolean saveHistoryToJsonFile() {
+    public boolean saveHistoryToJsonFile() {
         return saveHistoryToJsonFile(null, 0);
     }
 
-    public synchronized boolean saveHistoryToJsonFile(JSONArray cachedArr) {
+    public boolean saveHistoryToJsonFile(JSONArray cachedArr) {
         return saveHistoryToJsonFile(cachedArr, 0);
     }
 
-    public synchronized boolean saveHistoryToJsonFile(JSONArray cachedArr, long expectedRevision) {
-        if (mHistoryJsonFile == null) return false;
-        if (expectedRevision > 0 && expectedRevision < mHistoryRevision) {
-            // A newer history write or clearHistory() superseded this async snapshot
-            return false;
-        }
-        try {
-            JSONArray arr = cachedArr;
-            if (arr == null) {
-                List<BrowserDataStore.EntryItem> list = loadHistory();
-                arr = new JSONArray();
-                for (BrowserDataStore.EntryItem item : list) {
-                    if (item == null) continue;
+    public boolean saveHistoryToJsonFile(JSONArray cachedArr, long expectedRevision) {
+        File file = mHistoryJsonFile;
+        if (file == null) return false;
+        JSONArray arr = cachedArr;
+        if (arr == null) {
+            List<BrowserDataStore.EntryItem> list = loadHistory();
+            arr = new JSONArray();
+            for (BrowserDataStore.EntryItem item : list) {
+                if (item == null) continue;
+                try {
                     JSONObject o = new JSONObject();
                     o.put("title", item.title);
                     o.put("url", item.url);
                     o.put("time", item.time);
                     arr.put(o);
-                }
+                } catch (Exception ignored) {}
             }
-            mLastSelfSaveTime = System.currentTimeMillis();
-            String formatted;
+        }
+        synchronized (mFileLock) {
+            file = mHistoryJsonFile;
+            if (file == null) return false;
+            if (expectedRevision > 0 && expectedRevision < mHistoryRevision.get()) {
+                // A newer history write or clearHistory() superseded this async snapshot
+                return false;
+            }
             try {
-                formatted = arr.toString(2);
+                mLastSelfSaveTime = System.currentTimeMillis();
+                String formatted;
+                try {
+                    formatted = arr.toString(2);
+                } catch (Exception e) {
+                    formatted = arr.toString();
+                }
+                AcidIo.writeFileUtf8(file, formatted);
+                mLastSyncedJson = formatted.trim();
+                if (expectedRevision <= 0 || expectedRevision == mHistoryRevision.get()) {
+                    prefs().edit().putBoolean(PREF_HISTORY_PENDING_SYNC, false).apply();
+                }
+                return true;
             } catch (Exception e) {
-                formatted = arr.toString();
+                Log.w(TAG, "Failed to save history to " + file, e);
+                return false;
             }
-            AcidIo.writeFileUtf8(mHistoryJsonFile, formatted);
-            mLastSyncedJson = formatted.trim();
-            if (expectedRevision <= 0 || expectedRevision == mHistoryRevision) {
-                prefs().edit().putBoolean(PREF_HISTORY_PENDING_SYNC, false).apply();
-            }
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to save history to " + mHistoryJsonFile, e);
-            return false;
         }
     }
 
     public boolean reloadHistoryFromObserver() {
-        if (mHistoryJsonFile == null || !mHistoryJsonFile.exists()) return false;
+        File file = mHistoryJsonFile;
+        if (file == null || !file.exists()) return false;
         try {
-            String trimmed = AcidIo.readFileUtf8(mHistoryJsonFile).trim();
+            String trimmed = AcidIo.readFileUtf8(file).trim();
             if (trimmed.isEmpty() || trimmed.equals(mLastSyncedJson)) {
                 return false;
             }
@@ -199,108 +213,106 @@ public class HistoryRepository {
         return reloadHistoryFromJsonFile();
     }
 
-    public synchronized boolean reloadHistoryFromJsonFile() {
-        if (mHistoryJsonFile == null || !mHistoryJsonFile.exists()) return false;
-        try {
-            String jsonStr = AcidIo.readFileUtf8(mHistoryJsonFile).trim();
-            if (jsonStr.isEmpty()) return false;
-            mLastSyncedJson = jsonStr;
+    public boolean reloadHistoryFromJsonFile() {
+        synchronized (mFileLock) {
+            File file = mHistoryJsonFile;
+            if (file == null || !file.exists()) return false;
+            try {
+                String jsonStr = AcidIo.readFileUtf8(file).trim();
+                if (jsonStr.isEmpty()) return false;
 
-            JSONArray arr = new JSONArray(jsonStr);
-            List<BrowserDataStore.EntryItem> list = new ArrayList<BrowserDataStore.EntryItem>();
-            for (int i = 0; i < arr.length(); i++) {
-                BrowserDataStore.EntryItem item = decodeHistoryEntry(arr.optJSONObject(i), i);
-                if (item != null) list.add(item);
-            }
-
-            JSONArray next = new JSONArray();
-            for (BrowserDataStore.EntryItem item : list) {
-                JSONObject o = new JSONObject();
-                o.put("title", item.title);
-                o.put("url", item.url);
-                o.put("time", item.time);
-                next.put(o);
-            }
-            ++mHistoryRevision;
-            prefs()
-                .edit()
-                .putString(PREF_HISTORY, next.toString())
-                .putBoolean(PREF_HISTORY_PENDING_SYNC, false)
-                .apply();
-
-            dispatchCallback(new Runnable() {
-                @Override
-                public void run() {
-                    if (mHistoryChangedListener != null) {
-                        mHistoryChangedListener.onHistoryChanged();
-                    }
+                JSONArray arr = new JSONArray(jsonStr);
+                List<BrowserDataStore.EntryItem> list = new ArrayList<BrowserDataStore.EntryItem>();
+                for (int i = 0; i < arr.length(); i++) {
+                    BrowserDataStore.EntryItem item = decodeHistoryEntry(arr.optJSONObject(i), i);
+                    if (item != null) list.add(item);
                 }
-            });
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to reload history from " + mHistoryJsonFile + ": " + e.getMessage(), e);
-            return false;
+
+                JSONArray next = new JSONArray();
+                for (BrowserDataStore.EntryItem item : list) {
+                    JSONObject o = new JSONObject();
+                    o.put("title", item.title);
+                    o.put("url", item.url);
+                    o.put("time", item.time);
+                    next.put(o);
+                }
+                synchronized (this) {
+                    mHistoryRevision.incrementAndGet();
+                    prefs()
+                        .edit()
+                        .putString(PREF_HISTORY, next.toString())
+                        .putBoolean(PREF_HISTORY_PENDING_SYNC, false)
+                        .apply();
+                }
+                mLastSyncedJson = jsonStr;
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to reload history from " + file + ": " + e.getMessage(), e);
+                return false;
+            }
         }
+
+        dispatchCallback(new Runnable() {
+            @Override
+            public void run() {
+                if (mHistoryChangedListener != null) {
+                    mHistoryChangedListener.onHistoryChanged();
+                }
+            }
+        });
+        return true;
     }
 
-    public synchronized void recordHistory(String url, String title, boolean incognitoMode) {
+    public void recordHistory(String url, String title, boolean incognitoMode) {
         if (incognitoMode) return;
         if (url == null || url.isEmpty() || url.equals(BrowserController.HOME_URL)
             || url.contains("/acid_workspace/homepage/index.html")
             || "acid://home".equalsIgnoreCase(url) || "about:home".equalsIgnoreCase(url)) {
             return;
         }
-        SharedPreferences prefs = prefs();
-        String raw = prefs.getString(PREF_HISTORY, "[]");
-        JSONArray next = new JSONArray();
-        try {
-            JSONObject cur = new JSONObject();
-            cur.put("title", TextUtils.isEmpty(title) ? url : title);
-            cur.put("url", url);
-            cur.put("time", System.currentTimeMillis());
-            next.put(cur);
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to encode history entry: " + url, e);
-            return;
-        }
-
-        // Bounded retention policy up to MAX_HISTORY_RETENTION_ENTRIES, skipping corrupt items and deduplicating
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length() && next.length() < MAX_HISTORY_RETENTION_ENTRIES; i++) {
-                JSONObject o = arr.optJSONObject(i);
-                if (o == null) {
-                    Log.w(TAG, "history[" + i + "] is not a JSON object; dropped on rewrite");
-                    continue;
-                }
-                if (!url.equals(o.optString("url", ""))) {
-                    next.put(o);
-                }
+        final JSONArray snapshot;
+        final long rev;
+        synchronized (this) {
+            SharedPreferences prefs = prefs();
+            String raw = prefs.getString(PREF_HISTORY, "[]");
+            JSONArray next = new JSONArray();
+            try {
+                JSONObject cur = new JSONObject();
+                cur.put("title", TextUtils.isEmpty(title) ? url : title);
+                cur.put("url", url);
+                cur.put("time", System.currentTimeMillis());
+                next.put(cur);
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to encode history entry: " + url, e);
+                return;
             }
-        } catch (Exception e) {
-            Log.w(TAG, "Previous history is unreadable; starting a fresh list", e);
-        }
 
-        final long rev = ++mHistoryRevision;
-        prefs
-            .edit()
-            .putString(PREF_HISTORY, next.toString())
-            .putBoolean(PREF_HISTORY_PENDING_SYNC, true)
-            .apply();
-
-        if (mHistoryJsonFile != null) {
-            if (AcidAsync.isMainThread()) {
-                final JSONArray snapshot = next;
-                AcidAsync.runSerialized(new Runnable() {
-                    @Override
-                    public void run() {
-                        saveHistoryToJsonFile(snapshot, rev);
+            // Bounded retention policy up to MAX_HISTORY_RETENTION_ENTRIES, skipping corrupt items and deduplicating
+            try {
+                JSONArray arr = new JSONArray(raw);
+                for (int i = 0; i < arr.length() && next.length() < MAX_HISTORY_RETENTION_ENTRIES; i++) {
+                    JSONObject o = arr.optJSONObject(i);
+                    if (o == null) {
+                        Log.w(TAG, "history[" + i + "] is not a JSON object; dropped on rewrite");
+                        continue;
                     }
-                });
-            } else {
-                saveHistoryToJsonFile(next, rev);
+                    if (!url.equals(o.optString("url", ""))) {
+                        next.put(o);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Previous history is unreadable; starting a fresh list", e);
             }
+
+            rev = mHistoryRevision.incrementAndGet();
+            prefs
+                .edit()
+                .putString(PREF_HISTORY, next.toString())
+                .putBoolean(PREF_HISTORY_PENDING_SYNC, true)
+                .apply();
+            snapshot = next;
         }
+
+        dispatchJsonSave(snapshot, rev);
 
         dispatchCallback(new Runnable() {
             @Override

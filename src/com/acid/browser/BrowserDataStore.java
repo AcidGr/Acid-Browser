@@ -539,42 +539,43 @@ public class BrowserDataStore {
     }
 
     public boolean reloadFromJsonFile() {
-        if (mSettingsJsonFile == null || !mSettingsJsonFile.exists()) return false;
-        try {
-            String content = AcidIo.readFileUtf8(mSettingsJsonFile);
-            JSONObject o = new JSONObject(content);
-            mLastSyncedSettingsJson = content;
+        final List<ChangedKeyEntry<?>> changedEntries = new ArrayList<ChangedKeyEntry<?>>();
+        synchronized (mSettingsFileLock) {
+            if (mSettingsJsonFile == null || !mSettingsJsonFile.exists()) return false;
+            try {
+                String content = AcidIo.readFileUtf8(mSettingsJsonFile);
+                JSONObject o = new JSONObject(content);
+                mLastSyncedSettingsJson = content;
 
-            SharedPreferences.Editor ed = prefs().edit();
-            final List<ChangedKeyEntry<?>> changedEntries = new ArrayList<ChangedKeyEntry<?>>();
-            for (int i = 0; i < AcidSettings.ALL_KEYS.size(); i++) {
-                ChangedKeyEntry<?> diff = stageKeyFromJson(o, ed, AcidSettings.ALL_KEYS.get(i));
-                if (diff != null) {
-                    changedEntries.add(diff);
-                }
-            }
-            ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, false);
-            ed.apply();
-            mSettingsRevision.incrementAndGet();
-
-            for (int i = 0; i < changedEntries.size(); i++) {
-                changedEntries.get(i).notifyOn(this);
-            }
-            if (mSettingsChangedListener != null) {
-                dispatchCallback(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (mSettingsChangedListener != null) {
-                            mSettingsChangedListener.onSettingsChanged();
-                        }
+                SharedPreferences.Editor ed = prefs().edit();
+                for (int i = 0; i < AcidSettings.ALL_KEYS.size(); i++) {
+                    ChangedKeyEntry<?> diff = stageKeyFromJson(o, ed, AcidSettings.ALL_KEYS.get(i));
+                    if (diff != null) {
+                        changedEntries.add(diff);
                     }
-                });
+                }
+                ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, false);
+                ed.apply();
+                mSettingsRevision.incrementAndGet();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to reload settings from " + mSettingsJsonFile, e);
+                return false;
             }
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to reload settings from " + mSettingsJsonFile, e);
-            return false;
         }
+        for (int i = 0; i < changedEntries.size(); i++) {
+            changedEntries.get(i).notifyOn(this);
+        }
+        if (mSettingsChangedListener != null) {
+            dispatchCallback(new Runnable() {
+                @Override
+                public void run() {
+                    if (mSettingsChangedListener != null) {
+                        mSettingsChangedListener.onSettingsChanged();
+                    }
+                }
+            });
+        }
+        return true;
     }
 
     // Convenience typed delegates (backed by AcidSettings registry)
@@ -913,7 +914,7 @@ public class BrowserDataStore {
                     Log.w(TAG, "download[" + i + "] is not a JSON object; skipped");
                     continue;
                 }
-                list.add(new DownloadItem(
+                DownloadItem item = new DownloadItem(
                     o.optLong("downloadId", 0),
                     o.optString("fileName", "file"),
                     o.optString("url", ""),
@@ -922,7 +923,9 @@ public class BrowserDataStore {
                     o.optLong("downloadedBytes", 0),
                     o.optInt("status", 0),
                     o.optLong("timestamp", System.currentTimeMillis())
-                ));
+                );
+                item.isSystemDownload = o.optBoolean("isSystemDownload", false);
+                list.add(item);
             }
         } catch (Exception e) {
             Log.w(TAG, "Download store is unreadable; returning what could be recovered", e);
@@ -945,6 +948,7 @@ public class BrowserDataStore {
                     o.put("downloadedBytes", item.downloadedBytes);
                     o.put("status", item.status);
                     o.put("timestamp", item.timestamp);
+                    o.put("isSystemDownload", item.isSystemDownload);
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to encode download record: " + item.fileName, e);
                     continue;

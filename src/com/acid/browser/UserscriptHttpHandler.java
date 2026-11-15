@@ -415,37 +415,6 @@ public class UserscriptHttpHandler {
      * Enforces HTTP(S)-only transport and blocks SSRF attempts against the local Acid MCP control port.
      */
     public static void validateAllowedHttpTarget(URL url) throws SecurityException {
-        if (url == null) {
-            throw new SecurityException("Null request URL");
-        }
-        String proto = url.getProtocol() != null ? url.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
-        if (!"http".equals(proto) && !"https".equals(proto)) {
-            throw new SecurityException("Unsupported protocol in GM_xmlhttpRequest: " + proto);
-        }
-        String host = url.getHost() != null ? url.getHost().toLowerCase(java.util.Locale.ROOT).trim() : "";
-        int port = url.getPort() != -1 ? url.getPort() : url.getDefaultPort();
-        if (port == HttpControlServer.DEFAULT_PORT) {
-            boolean isLoopback = "localhost".equals(host)
-                || "127.0.0.1".equals(host)
-                || "::1".equals(host)
-                || "[::1]".equals(host)
-                || host.startsWith("127.")
-                || "0.0.0.0".equals(host);
-            if (isLoopback) {
-                throw new SecurityException("Blocked SSRF access to local Acid MCP gateway port " + port);
-            }
-            try {
-                java.net.InetAddress addr = java.net.InetAddress.getByName(host);
-                if (addr.isLoopbackAddress() || addr.isAnyLocalAddress()) {
-                    throw new SecurityException("Blocked SSRF access to local Acid MCP gateway port " + port);
-                }
-                String lanIp = HttpControlServer.getLocalIpAddress();
-                if (lanIp != null && lanIp.equals(addr.getHostAddress())) {
-                    throw new SecurityException("Blocked SSRF access to local Acid MCP gateway port " + port);
-                }
-            } catch (SecurityException se) {
-                throw se;
-            } catch (Throwable ignored) {}
-        }
+        AcidHttp.validateHttpTargetForSsrf(url, false, "GM_xmlhttpRequest");
     }
 }

@@ -193,4 +193,36 @@ window.__acid_dispatch_http_cb('missing_cb', { responseText: '{}' }, true);
 assert.strictEqual(hostileCalled, false, 'Hostile page-defined __acid_dispatch_http_cb must be overwritten, not reused via ||');
 console.log('✓ Case 4: runtime_shim.js replaces preexisting __acid_dispatch_http_cb');
 
-console.log('\n[TestBridgeBatch1] All 4 Batch-1 JS regression checks PASSED!\n');
+// Case 5: runtime_shim.js does NOT force 'use strict' so legacy @require scripts work,
+// and @unwrap idempotency guard executes @require + body at most once across repeated injections.
+let rawShim = fs.readFileSync('assets/userscripts/runtime_shim.js', 'utf8');
+assert.ok(!rawShim.includes("'use strict'") && !rawShim.includes('"use strict"'),
+    'runtime_shim.js must not inject top-level use strict into legacy @require closures');
+let sloppyShim = rawShim
+    .replaceAll('/*__GUARD_KEY__*/', JSON.stringify('shim_sloppy_test.user.js'))
+    .replaceAll('/*__SAFE_SID__*/""', JSON.stringify('shim_sloppy_test.user.js'))
+    .replaceAll('/*__SAFE_SID__*/', JSON.stringify('shim_sloppy_test.user.js'))
+    .replaceAll('/*__SAFE_SECRET__*/""', JSON.stringify('tok2'))
+    .replaceAll('/*__GM_INFO__*/{}', '{}');
+delete global.acidSloppyGlobalFromRequire;
+sloppyShim += '\nacidSloppyGlobalFromRequire = 4242;\n} catch(e) { throw e; }\n})();\n';
+eval(sloppyShim);
+assert.strictEqual(global.acidSloppyGlobalFromRequire, 4242,
+    'Legacy sloppy-mode @require assigning undeclared variable must succeed inside runtime_shim.js');
+delete global.acidSloppyGlobalFromRequire;
+
+let unwrapExecCount = 0;
+const unwrapGuardKey = 'unwrap_once_test.user.js';
+const runUnwrapSnippet = () => {
+    window.__acidInjectedUserscripts = window.__acidInjectedUserscripts || {};
+    if (!window.__acidInjectedUserscripts[unwrapGuardKey]) {
+        window.__acidInjectedUserscripts[unwrapGuardKey] = true;
+        unwrapExecCount++;
+    }
+};
+runUnwrapSnippet();
+runUnwrapSnippet();
+assert.strictEqual(unwrapExecCount, 1, '@unwrap injection guard must prevent duplicate execution across onPageStarted/onPageFinished');
+console.log('✓ Case 5: runtime_shim.js non-strict @require compatibility & @unwrap idempotency guard');
+
+console.log('\n[TestBridgeBatch1] All 5 Batch-1 JS regression checks PASSED!\n');

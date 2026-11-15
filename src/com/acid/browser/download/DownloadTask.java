@@ -376,7 +376,40 @@ public class DownloadTask {
     public boolean writeCheckpointJson(String json) {
         if (json == null || checkpointFile == null || isCanceled) return false;
         synchronized (mCheckpointIoLock) {
-            if (isCanceled) return false;
+            if (isCanceled || status == STATUS_SUCCESSFUL) return false;
+            return AcidIo.writeFileUtf8Safe(checkpointFile, json);
+        }
+    }
+
+    /**
+     * Writes an active-progress checkpoint only if the task has not been paused, canceled,
+     * completed, failed, or superseded by a newer generation.
+     */
+    public boolean writeActiveCheckpointJson(String json, int expectedGen) {
+        if (json == null || checkpointFile == null) return false;
+        synchronized (mCheckpointIoLock) {
+            if (isCanceled || isPaused || mGeneration.get() != expectedGen
+                || status == STATUS_SUCCESSFUL || status == STATUS_FAILED) {
+                return false;
+            }
+            return AcidIo.writeFileUtf8Safe(checkpointFile, json);
+        }
+    }
+
+    /**
+     * Persists a terminal/state-transition checkpoint snapshot (such as PAUSED or FAILED)
+     * only if the generation and state still match, preventing late writes from resurrecting
+     * deleted checkpoints after cancel or restart.
+     */
+    public boolean writeSnapshotCheckpointForState(String json, int expectedGen, int expectedStatus) {
+        if (json == null || checkpointFile == null) return false;
+        synchronized (mCheckpointIoLock) {
+            if (mGeneration.get() != expectedGen || status != expectedStatus) {
+                return false;
+            }
+            if (expectedStatus != STATUS_FAILED && isCanceled) {
+                return false;
+            }
             return AcidIo.writeFileUtf8Safe(checkpointFile, json);
         }
     }

@@ -178,13 +178,14 @@ public class AcidDownloader {
         }
         final List<HttpURLConnection> connsToAbort;
         final String cpJson;
+        final int pauseGen;
         synchronized (task) {
             if (task.status != DownloadTask.STATUS_RUNNING && task.status != DownloadTask.STATUS_PENDING) {
                 return false;
             }
             task.isPaused = true;
             task.status = DownloadTask.STATUS_PAUSED;
-            task.nextGeneration();
+            pauseGen = task.nextGeneration();
             connsToAbort = task.drainActiveConnections();
             cpJson = task.buildCheckpointJson();
         }
@@ -192,9 +193,7 @@ public class AcidDownloader {
             @Override
             public void run() {
                 DownloadTask.disconnectConnections(connsToAbort);
-                if (!task.isCanceled) {
-                    task.writeCheckpointJson(cpJson);
-                }
+                task.writeSnapshotCheckpointForState(cpJson, pauseGen, DownloadTask.STATUS_PAUSED);
             }
         });
         task.setPendingCheckpointFuture(f);
@@ -227,6 +226,8 @@ public class AcidDownloader {
             task.nextGeneration();
             connsToAbort = task.drainActiveConnections();
             mTasks.remove(taskId);
+            // Unlink tiny .part.cfg synchronously after advancing generation so subsequent delete/redownload sees a clean state.
+            task.cleanCheckpointFile();
         }
         AcidAsync.runSerialized(new Runnable() {
             @Override
@@ -371,7 +372,8 @@ public class AcidDownloader {
                     if (t.getGeneration() != runGen || t.isPaused || t.isCanceled) return;
                     long now = System.currentTimeMillis();
                     if (t.shouldSaveCheckpoint(now)) {
-                        t.saveCheckpoint();
+                        String cpJson = t.buildCheckpointJson();
+                        t.writeActiveCheckpointJson(cpJson, runGen);
                     }
                     if (t.shouldDispatchProgress(now)) {
                         dispatchProgress(t);
@@ -380,6 +382,7 @@ public class AcidDownloader {
 
                 @Override
                 public void onChunkCompleted(DownloadTask t, DownloadChunk c) {
+                    String cpJson = null;
                     synchronized (t) {
                         if (t.getGeneration() != runGen || t.isCanceled || t.isPaused
                             || t.status == DownloadTask.STATUS_FAILED
@@ -395,41 +398,18 @@ public class AcidDownloader {
                             t.cleanCheckpointFile();
                             dispatchCompleted(t);
                         } else {
-                            t.saveCheckpoint();
+                            cpJson = t.buildCheckpointJson();
                         }
+                    }
+                    if (cpJson != null) {
+                        t.writeActiveCheckpointJson(cpJson, runGen);
                     }
                 }
 
                 @Override
                 public void onChunkFailed(DownloadTask t, DownloadChunk c, Exception error) {
-                    final List<HttpURLConnection> connsToAbort;
-                    String cpJson = null;
-                    boolean saveCp = false;
-                    synchronized (t) {
-                        if (t.getGeneration() != runGen || t.isPaused || t.isCanceled || t.status == DownloadTask.STATUS_FAILED) return;
-                        t.isCanceled = true; // Signal all active worker threads to halt immediately
-                        t.status = DownloadTask.STATUS_FAILED;
-                        t.errorMessage = (error != null) ? error.getMessage() : "Download error";
-                        t.nextGeneration();
-                        connsToAbort = t.drainActiveConnections();
-                        if (t.supportsRange) {
-                            cpJson = t.buildCheckpointJson();
-                            saveCp = true;
-                        } else {
-                            // Non-range downloads cannot resume; purge dirty partial file and checkpoint
-                            t.cleanCheckpointFile();
-                            if (t.destinationFile != null && t.destinationFile.exists()) {
-                                try {
-                                    t.destinationFile.delete();
-                                } catch (Exception ignored) {}
-                            }
-                        }
-                    }
-                    DownloadTask.disconnectConnections(connsToAbort);
-                    if (saveCp && cpJson != null) {
-                        AcidIo.writeFileUtf8Safe(t.checkpointFile, cpJson);
-                    }
-                    dispatchFailed(t, t.errorMessage);
+                    String msg = (error != null) ? error.getMessage() : "Download error";
+                    failTaskWithCleanup(t, runGen, msg);
                 }
             };
 
@@ -457,36 +437,46 @@ public class AcidDownloader {
             }
 
         } catch (Exception e) {
-            final List<HttpURLConnection> connsToAbort;
-            String cpJson = null;
-            boolean saveCp = false;
-            synchronized (task) {
-                if (task.getGeneration() != runGen || task.isPaused || task.isCanceled || task.status == DownloadTask.STATUS_FAILED) {
-                    return;
-                }
-                task.isCanceled = true;
-                task.status = DownloadTask.STATUS_FAILED;
-                task.errorMessage = e.getMessage() != null ? e.getMessage() : e.toString();
-                task.nextGeneration();
-                connsToAbort = task.drainActiveConnections();
-                if (task.supportsRange) {
-                    cpJson = task.buildCheckpointJson();
-                    saveCp = true;
-                } else {
-                    task.cleanCheckpointFile();
-                    if (task.destinationFile != null && task.destinationFile.exists()) {
-                        try {
-                            task.destinationFile.delete();
-                        } catch (Exception ignored) {}
-                    }
-                }
-            }
-            DownloadTask.disconnectConnections(connsToAbort);
-            if (saveCp && cpJson != null) {
-                AcidIo.writeFileUtf8Safe(task.checkpointFile, cpJson);
-            }
-            dispatchFailed(task, task.errorMessage);
+            String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+            failTaskWithCleanup(task, runGen, msg);
         }
+    }
+
+    private void failTaskWithCleanup(DownloadTask t, int expectedRunGen, String errorMessage) {
+        if (t == null) return;
+        final List<HttpURLConnection> connsToAbort;
+        String cpJson = null;
+        boolean saveCp = false;
+        int failGen;
+        synchronized (t) {
+            if (t.getGeneration() != expectedRunGen || t.isPaused || t.isCanceled
+                || t.status == DownloadTask.STATUS_FAILED
+                || t.status == DownloadTask.STATUS_SUCCESSFUL) {
+                return;
+            }
+            t.isCanceled = true; // Signal all active worker threads to halt immediately
+            t.status = DownloadTask.STATUS_FAILED;
+            t.errorMessage = (errorMessage != null && !errorMessage.isEmpty()) ? errorMessage : "Download error";
+            failGen = t.nextGeneration();
+            connsToAbort = t.drainActiveConnections();
+            if (t.supportsRange) {
+                cpJson = t.buildCheckpointJson();
+                saveCp = true;
+            } else {
+                // Non-range downloads cannot resume; purge dirty partial file and checkpoint
+                t.cleanCheckpointFile();
+                if (t.destinationFile != null && t.destinationFile.exists()) {
+                    try {
+                        t.destinationFile.delete();
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+        DownloadTask.disconnectConnections(connsToAbort);
+        if (saveCp && cpJson != null) {
+            t.writeSnapshotCheckpointForState(cpJson, failGen, DownloadTask.STATUS_FAILED);
+        }
+        dispatchFailed(t, t.errorMessage);
     }
 
     private void runOnMain(Runnable r) {

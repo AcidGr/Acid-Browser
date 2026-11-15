@@ -114,10 +114,11 @@ public class AdBlockManager {
             int savedCount = mDataStore.getAdBlockBlockedCount();
             mBlockedCount.set(savedCount);
             mPersistedBlockedCount = savedCount;
-        } else {
-            BrowserDataStore initialStore = new BrowserDataStore(context);
-            mEnabled = initialStore.isAdBlockEnabled();
-            int savedCount = initialStore.getAdBlockBlockedCount();
+        } else if (context != null) {
+            mDataStore = new BrowserDataStore(context);
+            mDataStore.observe(AcidSettings.ADBLOCK_ENABLED, mEnabledSettingObserver);
+            mEnabled = mDataStore.isAdBlockEnabled();
+            int savedCount = mDataStore.getAdBlockBlockedCount();
             mBlockedCount.set(savedCount);
             mPersistedBlockedCount = savedCount;
         }
@@ -210,6 +211,11 @@ public class AdBlockManager {
     public void syncFromDataStore() {
         if (mDataStore != null) {
             mEnabled = mDataStore.isAdBlockEnabled();
+            int savedCount = mDataStore.getAdBlockBlockedCount();
+            if (savedCount > mBlockedCount.get()) {
+                mBlockedCount.set(savedCount);
+                mPersistedBlockedCount = savedCount;
+            }
         }
     }
 
@@ -219,7 +225,9 @@ public class AdBlockManager {
 
     public void setEnabled(boolean enabled) {
         mEnabled = enabled;
-        mDataStore.setAdBlockEnabled(enabled);
+        if (mDataStore != null) {
+            mDataStore.setAdBlockEnabled(enabled);
+        }
     }
 
     public int getBlockedCount() {
@@ -239,11 +247,13 @@ public class AdBlockManager {
     }
 
     public String getSubscriptionUrl() {
-        return mDataStore.getAdBlockSubscriptionUrl();
+        return mDataStore != null ? mDataStore.getAdBlockSubscriptionUrl() : "";
     }
 
     public void setSubscriptionUrl(String url) {
-        mDataStore.setAdBlockSubscriptionUrl(url);
+        if (mDataStore != null) {
+            mDataStore.setAdBlockSubscriptionUrl(url);
+        }
     }
 
     public int getAppLaunchPolicy() {
@@ -344,17 +354,8 @@ public class AdBlockManager {
         }
     }
 
-    private static final Set<String> COMMON_PUBLIC_SUFFIXES = new HashSet<String>(Arrays.asList(
-        "com", "cn", "net", "org", "edu", "gov", "io", "cc", "me", "info", "top", "xyz", "biz", "app", "dev", "ai",
-        "com.cn", "net.cn", "org.cn", "edu.cn", "gov.cn", "co.uk", "org.uk", "co.jp", "ne.jp", "com.hk", "org.hk",
-        "com.tw", "com.sg", "com.au", "co.kr", "co.in", "com.br", "github.io", "gitlab.io", "vercel.app", "pages.dev"
-    ));
-
     public static boolean isPublicSuffixOrTld(String domain) {
-        if (domain == null || domain.trim().isEmpty()) return true;
-        String d = domain.trim().toLowerCase(Locale.ROOT);
-        if (!d.contains(".")) return true; // Single label like "com", "cn", "localhost" is a TLD
-        return COMMON_PUBLIC_SUFFIXES.contains(d);
+        return AcidHttp.isPublicSuffixOrTld(domain);
     }
 
     static boolean isSafeCssSelector(String selector) {

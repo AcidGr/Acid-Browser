@@ -8,6 +8,6 @@ public class Looper {
     }
 
     public static Looper myLooper() {
-        return sMainLooper;
+        return null;
     }
 }

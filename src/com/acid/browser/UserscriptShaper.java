@@ -94,6 +94,8 @@ public class UserscriptShaper {
 
         if (meta.unwrap && !hasAnyNativeBridgeGrant(meta)) {
             StringBuilder sb = new StringBuilder();
+            sb.append("if (!window.__acidInjectedUserscripts || !window.__acidInjectedUserscripts[")
+                .append(guardKey).append("]) {\n");
             sb.append(shimHeader);
             sb.append("\n  try { window.GM_info = GM_info;"
                 + " window.unsafeWindow = window; window.wrappedJSObject = window; } catch(e){}\n");
@@ -112,6 +114,7 @@ public class UserscriptShaper {
             }
             sb.append("/* === Script Body (@unwrap: page scope) === */\n");
             sb.append(meta.body).append("\n");
+            sb.append("}\n");
             return sb.toString();
         }
 
@@ -174,7 +177,7 @@ public class UserscriptShaper {
     }
 
     private static boolean hasAnyNativeBridgeGrant(UserscriptMeta meta) {
-        if (meta == null) return false;
+        if (meta == null || (meta.unwrap && meta.grants.isEmpty())) return false;
         for (String api : APIS) {
             if ("GM_addStyle".equals(api) || "GM_addElement".equals(api)
                 || "GM_registerMenuCommand".equals(api) || "GM_unregisterMenuCommand".equals(api)

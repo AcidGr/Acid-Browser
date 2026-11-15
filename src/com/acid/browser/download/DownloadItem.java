@@ -22,6 +22,7 @@ public class DownloadItem {
     public volatile long speedBytesPerSec = 0;
     public volatile String formattedSpeed = "";
     public volatile String remainingTime = "";
+    public volatile boolean isSystemDownload = false;
 
     /** Saved in download manager for on-demand download (collapsed from confirm sheet). */
     public static final int STATUS_SAVED = 0;

@@ -105,6 +105,12 @@ public class HttpControlServer {
         return mHeartbeatExecutor;
     }
 
+    private static volatile int sActiveMcpPort = -1;
+
+    public static int getActiveMcpPort() {
+        return sActiveMcpPort;
+    }
+
     private ServerSocket mServerSocket;
     private volatile boolean mRunning = false;
     private volatile boolean mLanBound = false;
@@ -205,6 +211,19 @@ public class HttpControlServer {
         return null;
     }
 
+    public static boolean isLoopbackOrLocalLiteralHost(String host) {
+        if (host == null) return false;
+        String h = host.trim().toLowerCase(Locale.ROOT);
+        if (h.startsWith("[") && h.endsWith("]") && h.length() > 2) {
+            h = h.substring(1, h.length() - 1);
+        }
+        return "localhost".equals(h)
+            || "::1".equals(h)
+            || "::ffff:127.0.0.1".equals(h)
+            || isLoopbackIpv4(h)
+            || "0.0.0.0".equals(h);
+    }
+
     public static boolean isLocalOrTrustedHost(String hostHeader, boolean lanBound) {
         if (hostHeader == null) return false;
         String h = hostHeader.trim().toLowerCase(Locale.ROOT);
@@ -219,11 +238,7 @@ public class HttpControlServer {
                 h = h.substring(0, colon);
             }
         }
-        if ("localhost".equals(h)
-            || "::1".equals(h)
-            || "::ffff:127.0.0.1".equals(h)
-            || isLoopbackIpv4(h)
-            || "0.0.0.0".equals(h)) {
+        if (isLoopbackOrLocalLiteralHost(h)) {
             return true;
         }
         if (lanBound) {
@@ -254,6 +269,10 @@ public class HttpControlServer {
     }
 
     public static boolean isLocalOrTrustedOrigin(String origin) {
+        return isLocalOrTrustedOrigin(origin, false);
+    }
+
+    public static boolean isLocalOrTrustedOrigin(String origin, boolean lanBound) {
         if (origin == null || origin.trim().isEmpty()) return true;
         String o = origin.trim().toLowerCase(Locale.ROOT);
         if ("null".equals(o)) return false;
@@ -261,12 +280,20 @@ public class HttpControlServer {
             URI uri = URI.create(o);
             String host = uri.getHost();
             if (host == null) return false;
-            return "localhost".equalsIgnoreCase(host)
-                || "127.0.0.1".equals(host)
-                || "::1".equals(host)
-                || "[::1]".equals(host)
-                || host.startsWith("127.")
-                || "0.0.0.0".equals(host);
+            if (isLoopbackOrLocalLiteralHost(host)) {
+                return true;
+            }
+            if (lanBound) {
+                String lanIp = getLocalIpAddress();
+                String normalizedHost = host;
+                if (normalizedHost.startsWith("[") && normalizedHost.endsWith("]") && normalizedHost.length() > 2) {
+                    normalizedHost = normalizedHost.substring(1, normalizedHost.length() - 1);
+                }
+                if (lanIp != null && lanIp.equalsIgnoreCase(normalizedHost)) {
+                    return true;
+                }
+            }
+            return false;
         } catch (Exception e) {
             return false;
         }
@@ -289,6 +316,7 @@ public class HttpControlServer {
                     ss.setReuseAddress(true);
                     ss.bind(new InetSocketAddress(bindAddr, mPort), 32);
                     mServerSocket = ss;
+                    sActiveMcpPort = ss.getLocalPort();
                     emitLog("[MCP] Acid MCP Server listening on " + (lanEnabled ? "0.0.0.0" : "127.0.0.1") + ":" + mPort
                         + (lanEnabled ? " (LAN enabled)" : " (Localhost only)"));
                     while (mRunning && mServerGeneration.get() == gen) {
@@ -312,6 +340,7 @@ public class HttpControlServer {
                 } finally {
                     if (mServerGeneration.get() == gen) {
                         mRunning = false;
+                        sActiveMcpPort = -1;
                     }
                 }
             }
@@ -321,6 +350,7 @@ public class HttpControlServer {
     public synchronized void stop() {
         mServerGeneration.incrementAndGet();
         mRunning = false;
+        sActiveMcpPort = -1;
         try {
             if (mServerSocket != null) {
                 mServerSocket.close();
@@ -627,7 +657,7 @@ public class HttpControlServer {
             return false;
         }
         String origin = headers.get("origin");
-        if (origin != null && !isLocalOrTrustedOrigin(origin)) {
+        if (origin != null && !isLocalOrTrustedOrigin(origin, mLanBound)) {
             sendJsonResponse(os, 403, new JSONObject()
                 .put("jsonrpc", "2.0")
                 .put("error", new JSONObject()

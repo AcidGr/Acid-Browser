@@ -1,5 +1,4 @@
 (function(){
-'use strict';
 try {
   window.__acidInjectedUserscripts = window.__acidInjectedUserscripts || {};
   if (window.__acidInjectedUserscripts[/*__GUARD_KEY__*/]) return;

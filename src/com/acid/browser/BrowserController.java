@@ -143,6 +143,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     /** WebView 的未决文件选择回调：同一时刻只能有一个，旧的必须收到 null 否则页面永久挂起。 */
     private ValueCallback<Uri[]> mFileChooserCallback = null;
     private boolean mFileChooserAllowMultiple = false;
+    private int mFileChooserTabId = -1;
     private BrowserDataStore mDataStore = null;
     private boolean mApplyingHotReload = false;
     /**
@@ -449,12 +450,15 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
         if (toRemove == null) return false;
 
+        if (mFileChooserTabId == tabId) {
+            cancelPendingFileChooser("tab-closed");
+        }
         if (mAgentBoundTabId == tabId) {
-            // The agent's target is gone. Mark it lost rather than merely unbinding: without the
-            // flag, getTargetTab() would fall back to mActiveTab and the agent would silently
-            // start driving whatever page the user switched to.
+            // The agent's target is gone when actively driving. Mark it lost rather than merely unbinding:
+            // without the flag, getTargetTab() would fall back to mActiveTab and the agent would silently
+            // start driving whatever page the user switched to. In human mode, unbind without locking out.
             mAgentBoundTabId = -1;
-            mAgentTargetLost = true;
+            mAgentTargetLost = (getControlMode() != AgentOverlayView.MODE_HUMAN);
         }
 
         boolean wasActive = mActiveTab != null && mActiveTab.id == tabId;
@@ -510,9 +514,12 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void closeOtherTabs(int keepTabId) {
+        if (mFileChooserTabId > 0 && mFileChooserTabId != keepTabId && !isTabDrivenByAgent(mFileChooserTabId)) {
+            cancelPendingFileChooser("tab-closed");
+        }
         if (mAgentBoundTabId > 0 && mAgentBoundTabId != keepTabId && !isTabDrivenByAgent(mAgentBoundTabId)) {
             mAgentBoundTabId = -1;
-            mAgentTargetLost = true;
+            mAgentTargetLost = (getControlMode() != AgentOverlayView.MODE_HUMAN);
         }
         if (isCustomViewShowing() && mActiveTab != null && mActiveTab.id != keepTabId) {
             hideCustomView();
@@ -885,6 +892,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 tab.isLoading = true;
                 tab.url = url;
+                if (mFileChooserTabId == tab.id) {
+                    cancelPendingFileChooser("navigated");
+                }
                 // Install the phase bootstrap first; it reports document-start / end / idle
                 // back to us when the page really reaches them.
                 mUserscriptManager.injectBootstrap(view, url);
@@ -2093,9 +2103,17 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             return true;
         }
 
+        int tabId = -1;
+        for (TabSession t : mTabs) {
+            if (t.webView == view) {
+                tabId = t.id;
+                break;
+            }
+        }
         mFileChooserCallback = callback;
         mFileChooserAllowMultiple = (params != null
             && params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);
+        mFileChooserTabId = tabId;
 
         Intent intent = buildFileChooserIntent(params);
         emitLog("[FILE_CHOOSER] 网页请求选择文件 -> 打开系统文件选择器");
@@ -2119,6 +2137,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         boolean allowMultiple = mFileChooserAllowMultiple;
         mFileChooserCallback = null;
         mFileChooserAllowMultiple = false;
+        mFileChooserTabId = -1;
         if (callback == null) return;
 
         Uri[] picked = null;
@@ -2138,6 +2157,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         ValueCallback<Uri[]> callback = mFileChooserCallback;
         mFileChooserCallback = null;
         mFileChooserAllowMultiple = false;
+        mFileChooserTabId = -1;
         if (callback == null) return;
         try {
             callback.onReceiveValue(null);
@@ -2152,11 +2172,20 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (clip != null) {
             for (int i = 0; i < clip.getItemCount(); i++) {
                 Uri uri = clip.getItemAt(i).getUri();
-                if (uri != null) picked.add(uri);
+                if (AcidFileProvider.isSafeFileChooserUri(mContext, uri)) {
+                    picked.add(uri);
+                } else if (uri != null) {
+                    emitLog("[FILE_CHOOSER] 已拦截不安全的文件 URI: " + uri.getScheme());
+                }
             }
         }
         if (picked.isEmpty() && data.getData() != null) {
-            picked.add(data.getData());
+            Uri uri = data.getData();
+            if (AcidFileProvider.isSafeFileChooserUri(mContext, uri)) {
+                picked.add(uri);
+            } else {
+                emitLog("[FILE_CHOOSER] 已拦截不安全的文件 URI: " + uri.getScheme());
+            }
         }
         if (picked.isEmpty()) return null;
         if (!allowMultiple && picked.size() > 1) {
@@ -2170,14 +2199,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
 
-        ArrayList<String> mimes = new ArrayList<String>();
         String[] acceptTypes = (params != null) ? params.getAcceptTypes() : null;
-        if (acceptTypes != null) {
-            for (int i = 0; i < acceptTypes.length; i++) {
-                String mime = normalizeAcceptType(acceptTypes[i]);
-                if (mime != null && !mimes.contains(mime)) mimes.add(mime);
-            }
-        }
+        List<String> mimes = AcidFileProvider.normalizeFileChooserAcceptTypes(acceptTypes, null);
         if (mimes.size() == 1) {
             intent.setType(mimes.get(0));
         } else if (mimes.size() > 1) {
@@ -2188,17 +2211,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         }
         return intent;
-    }
-
-    /** accept 可能是 "image/*"、".png"、"application/pdf"；认不出来的按「不限」处理。 */
-    private String normalizeAcceptType(String accept) {
-        if (accept == null) return null;
-        String value = accept.trim();
-        if (value.isEmpty()) return null;
-        if (value.indexOf('/') >= 0) return value;
-        String ext = value.startsWith(".") ? value.substring(1) : value;
-        if (ext.isEmpty()) return null;
-        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.toLowerCase());
     }
 
     public void destroy() {

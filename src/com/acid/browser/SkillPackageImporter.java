@@ -403,7 +403,7 @@ public class SkillPackageImporter {
             headers.put("Accept", "application/vnd.github.v3+json, text/markdown, text/plain, */*");
             conn = AcidHttp.openConnectionWithRedirects(
                 urlStr, "GET", headers, 15000, 20000, AcidHttp.MAX_REDIRECTS,
-                null, AcidHttp.SAME_ORIGIN_CREDENTIALS, null
+                AcidHttp.REMOTE_FETCH_VALIDATOR, AcidHttp.SAME_ORIGIN_CREDENTIALS, null
             );
 
             int code = conn.getResponseCode();
