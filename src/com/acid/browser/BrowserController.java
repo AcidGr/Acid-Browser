@@ -115,7 +115,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private final List<Integer> mTabHistory = new CopyOnWriteArrayList<Integer>();
     private int mNextTabId = 1;
     private TabSession mActiveTab = null;
-    private int mAgentBoundTabId = -1;
+    private volatile int mAgentBoundTabId = -1;
     /**
      * True when the agent had a target tab but it disappeared (the user closed it).
      *
@@ -124,7 +124,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
      * from silently falling back to {@link #mActiveTab} — otherwise closing a tab while the
      * agent runs would hand the agent the page the user is currently reading.
      */
-    private boolean mAgentTargetLost = false;
+    private volatile boolean mAgentTargetLost = false;
     private boolean mOverviewShowing = false;
 
     private boolean mIsDesktopMode = false;
@@ -545,6 +545,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
         }
         switchToTab(keepTabId);
+        if (mListener != null) {
+            mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
+        }
     }
 
     public List<TabSession> getTabs() {
@@ -1059,7 +1062,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
             @Override
             public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
-                if (resultMsg == null) return false;
+                if (resultMsg == null || !(resultMsg.obj instanceof WebView.WebViewTransport)) return false;
                 // Checked before allocating anything: refusing after createNewTabBlank() would
                 // already have built the WebView we are trying to avoid.
                 if (!canOpenScriptedTab(mTabs.size())) {
@@ -1067,13 +1070,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     return false;
                 }
                 try {
-                    TabSession newTab = createNewTabBlank(true);
                     WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
-                    if (transport != null) {
-                        transport.setWebView(newTab.webView);
-                        resultMsg.sendToTarget();
-                        return true;
-                    }
+                    TabSession newTab = createNewTabBlank(true);
+                    transport.setWebView(newTab.webView);
+                    resultMsg.sendToTarget();
+                    return true;
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to handle onCreateWindow", e);
                 }
@@ -1948,6 +1949,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void loadUrlWithTab(TabSession tab, String url, boolean userInitiated) {
         if (tab == null || tab.webView == null || url == null) return;
+        if (!url.equals(tab.url)) {
+            tab.title = url;
+            tab.lastHistoryUrl = "";
+            tab.lastHistoryTitle = "";
+        }
         tab.url = url;
         tab.webView.loadUrl(url);
     }
@@ -2262,6 +2268,13 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         cancelPendingFileChooser("destroy");
         if (isCustomViewShowing()) {
             hideCustomView();
+        }
+        mMainHandler.removeCallbacksAndMessages(null);
+        if (mDataStore != null) {
+            mDataStore.setOnBookmarksMutatedListener(null);
+        }
+        if (mContext != null) {
+            AdBlockManager.getInstance(mContext).flushBlockedCount();
         }
         List<TabSession> tabsCopy = new ArrayList<TabSession>(mTabs);
         mTabs.clear();

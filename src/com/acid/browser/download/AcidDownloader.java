@@ -117,6 +117,13 @@ public class AcidDownloader {
     }
 
     /**
+     * Allocates a monotonically increasing unique task id before registering UI records.
+     */
+    public long allocateTaskId() {
+        return mNextId.incrementAndGet();
+    }
+
+    /**
      * Enqueues a new download task with a specific id (or auto-generated if id <= 0).
      */
     public DownloadTask enqueue(long specificId,
@@ -268,11 +275,12 @@ public class AcidDownloader {
                 }
             }
 
+            HttpProbe.ProbeResult probe = null;
             if (resumed) {
                 // Verify remote file consistency before resuming to ensure the server resource hasn't changed
                 int failedResumeCode = 0;
                 try {
-                    HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders, task);
+                    probe = HttpProbe.probe(task.url, task.requestHeaders, task);
                     synchronized (task) {
                         if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
                             return;
@@ -298,6 +306,7 @@ public class AcidDownloader {
                         }
                     }
                 } catch (Exception ignored) {
+                    probe = null;
                     synchronized (task) {
                         if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
                             return;
@@ -311,8 +320,10 @@ public class AcidDownloader {
             }
 
             if (!resumed) {
-                // Pre-flight probe to discover range support & total size
-                HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders, task);
+                // Pre-flight probe to discover range support & total size (reusing valid probe if resume downgraded)
+                if (probe == null || (probe.responseCode >= 400)) {
+                    probe = HttpProbe.probe(task.url, task.requestHeaders, task);
+                }
                 if (probe.responseCode < 200 || probe.responseCode >= 300) {
                     throw new IOException("HTTP " + probe.responseCode + " from pre-flight probe");
                 }
@@ -464,7 +475,6 @@ public class AcidDownloader {
                 || t.status == DownloadTask.STATUS_SUCCESSFUL) {
                 return;
             }
-            t.isCanceled = true; // Signal all active worker threads to halt immediately
             t.status = DownloadTask.STATUS_FAILED;
             t.errorMessage = (errorMessage != null && !errorMessage.isEmpty()) ? errorMessage : "Download error";
             failGen = t.nextGeneration();

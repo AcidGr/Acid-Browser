@@ -91,6 +91,9 @@ public final class FaviconManager {
     // Cooldown tracker for hosts that returned 404 or timed out
     private final ConcurrentHashMap<String, Long> mNegativeCache = new ConcurrentHashMap<String, Long>();
 
+    // Generation counter incremented on clearAllCaches() so in-flight loads do not re-populate cleared state
+    private final java.util.concurrent.atomic.AtomicInteger mCacheGeneration = new java.util.concurrent.atomic.AtomicInteger(0);
+
     // In-flight task queue to deduplicate simultaneous requests for the same host
     private final Map<String, List<FaviconCallback>> mInFlightCallbacks = new HashMap<String, List<FaviconCallback>>();
 
@@ -110,6 +113,7 @@ public final class FaviconManager {
      * Clears in-memory bitmaps, negative-lookup cooldowns, and disk-cached favicons.
      */
     public void clearAllCaches() {
+        mCacheGeneration.incrementAndGet();
         synchronized (mMemCache) {
             mMemCache.evictAll();
         }
@@ -207,13 +211,24 @@ public final class FaviconManager {
         final String host = extractHost(urlOrHost);
         if (host.isEmpty()) return null;
 
+        Bitmap mem = getFaviconFromMemCache(host);
+        if (mem != null) {
+            return mem;
+        }
+        return getFaviconFromDisk(host);
+    }
+
+    private Bitmap getFaviconFromMemCache(String host) {
         synchronized (mMemCache) {
             Bitmap mem = mMemCache.get(host);
             if (mem != null && !mem.isRecycled()) {
                 return mem;
             }
         }
+        return null;
+    }
 
+    private Bitmap getFaviconFromDisk(String host) {
         File file = getCacheFileForHost(host);
         if (file != null && file.exists() && file.length() > 32) {
             byte[] bytes = readFileBytes(file);
@@ -285,7 +300,7 @@ public final class FaviconManager {
             return;
         }
 
-        Bitmap fast = getFaviconFast(host);
+        Bitmap fast = getFaviconFromMemCache(host);
         if (fast != null) {
             if (callback != null) {
                 callback.onFaviconLoaded(host, fast);
@@ -320,29 +335,32 @@ public final class FaviconManager {
             return;
         }
 
+        final int startGen = mCacheGeneration.get();
         mExecutor.execute(new Runnable() {
             @Override
             public void run() {
-                byte[] downloaded = probeAndDownloadFaviconBytes(host);
-                Bitmap resultBmp = null;
-
-                if (downloaded != null && isValidFaviconBytes(downloaded)) {
-                    saveToDisk(host, downloaded);
-                    resultBmp = decodeFaviconBitmap(downloaded);
-                    if (resultBmp != null) {
-                        synchronized (mMemCache) {
-                            mMemCache.put(host, resultBmp);
+                Bitmap resultBmp = getFaviconFromDisk(host);
+                if (resultBmp == null) {
+                    byte[] downloaded = probeAndDownloadFaviconBytes(host);
+                    if (mCacheGeneration.get() == startGen) {
+                        if (downloaded != null && isValidFaviconBytes(downloaded)) {
+                            saveToDisk(host, downloaded);
+                            mNegativeCache.remove(host);
+                            resultBmp = decodeFaviconBitmap(downloaded);
+                            if (resultBmp != null) {
+                                synchronized (mMemCache) {
+                                    if (mCacheGeneration.get() == startGen) {
+                                        mMemCache.put(host, resultBmp);
+                                    }
+                                }
+                            }
+                        } else {
+                            mNegativeCache.put(host, Long.valueOf(System.currentTimeMillis()));
                         }
-                        mNegativeCache.remove(host);
-                    } else {
-                        // Valid icon bytes (e.g. SVG for WebView data URI) that cannot be decoded into Android Bitmap
-                        mNegativeCache.put(host, Long.valueOf(System.currentTimeMillis()));
                     }
-                } else {
-                    mNegativeCache.put(host, Long.valueOf(System.currentTimeMillis()));
                 }
 
-                final Bitmap finalBmp = resultBmp;
+                final Bitmap finalBmp = (mCacheGeneration.get() == startGen) ? resultBmp : null;
                 final List<FaviconCallback> waiting;
                 synchronized (mInFlightCallbacks) {
                     waiting = mInFlightCallbacks.remove(host);
@@ -374,14 +392,21 @@ public final class FaviconManager {
         final String host = extractHost(pageUrl);
         if (host.isEmpty()) return;
 
+        final int startGen = mCacheGeneration.get();
         Bitmap copy = null;
         try {
             Bitmap.Config cfg = icon.getConfig() != null ? icon.getConfig() : Bitmap.Config.ARGB_8888;
             copy = icon.copy(cfg, false);
         } catch (Throwable ignored) {}
-        final Bitmap cachedIcon = (copy != null && !copy.isRecycled()) ? copy : icon;
+        if (copy == null || copy.isRecycled()) {
+            return;
+        }
+        final Bitmap cachedIcon = copy;
 
         synchronized (mMemCache) {
+            if (mCacheGeneration.get() != startGen) {
+                return;
+            }
             mMemCache.put(host, cachedIcon);
         }
         mNegativeCache.remove(host);
@@ -390,11 +415,11 @@ public final class FaviconManager {
             @Override
             public void run() {
                 try {
-                    if (cachedIcon.isRecycled()) return;
+                    if (mCacheGeneration.get() != startGen || cachedIcon.isRecycled()) return;
                     ByteArrayOutputStream bos = new ByteArrayOutputStream();
                     cachedIcon.compress(Bitmap.CompressFormat.PNG, 95, bos);
                     byte[] bytes = bos.toByteArray();
-                    if (bytes.length > 32) {
+                    if (bytes.length > 32 && mCacheGeneration.get() == startGen) {
                         saveToDisk(host, bytes);
                     }
                 } catch (Exception ignored) {}
@@ -626,16 +651,20 @@ public final class FaviconManager {
     }
 
     private static byte[] readFileBytes(File f) {
+        if (f == null || !f.exists()) return null;
+        FileInputStream fis = null;
         try {
-            FileInputStream fis = new FileInputStream(f);
-            ByteArrayOutputStream bos = new ByteArrayOutputStream((int) f.length());
+            fis = new FileInputStream(f);
+            int initCap = (int) Math.min(Math.max(f.length(), 256L), 512L * 1024L);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(initCap);
             byte[] buf = new byte[4096];
             int n;
             while ((n = fis.read(buf)) != -1) bos.write(buf, 0, n);
-            fis.close();
             return bos.toByteArray();
         } catch (Exception e) {
             return null;
+        } finally {
+            AcidIo.closeQuietly(fis);
         }
     }
 }

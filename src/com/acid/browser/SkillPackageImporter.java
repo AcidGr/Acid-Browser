@@ -179,12 +179,19 @@ public class SkillPackageImporter {
         }
     }
 
+    private static SkillSlug avoidBuiltinShadowing(SkillSlug slug) {
+        if (slug != null && (SkillManager.isBuiltin(slug.value() + ".md") || SkillManager.isBuiltin(slug.value()))) {
+            return SkillSlug.from("custom_" + slug.value(), "custom_skill");
+        }
+        return slug;
+    }
+
     public SkillManager.ImportResult importFromGitHubDirectory(GitHubSkillCoordinates gh) {
         if (mSkillsDir == null || mVault == null) return SkillManager.ImportResult.error("技能目录未就绪");
         String rawSlug = gh.path.isEmpty()
             ? gh.repo
             : gh.path.substring(gh.path.lastIndexOf('/') + 1);
-        SkillSlug slug = SkillSlug.from(rawSlug, "imported_skill");
+        SkillSlug slug = avoidBuiltinShadowing(SkillSlug.from(rawSlug, "imported_skill"));
         String dirSlug = slug.value();
 
         File stagingDir = mVault.createStagingDir();
@@ -302,7 +309,7 @@ public class SkillPackageImporter {
         if (mSkillsDir == null || mVault == null) {
             return SkillManager.ImportResult.error("技能目录未就绪");
         }
-        SkillSlug slug = SkillSlug.from(fallbackSlug, "imported_skill");
+        SkillSlug slug = avoidBuiltinShadowing(SkillSlug.from(fallbackSlug, "imported_skill"));
 
         File tempExtractDir = mVault.createStagingDir();
 
@@ -363,8 +370,8 @@ public class SkillPackageImporter {
             File[] topChildren = tempExtractDir.listFiles();
             if (topChildren != null && topChildren.length == 1 && topChildren[0].isDirectory()) {
                 sourceRoot = topChildren[0];
-                if ("imported_skill".equals(slug.value()) || slug.value().endsWith(".zip")) {
-                    slug = SkillSlug.from(sourceRoot.getName(), slug.value());
+                if ("imported_skill".equals(slug.value())) {
+                    slug = avoidBuiltinShadowing(SkillSlug.from(sourceRoot.getName(), slug.value()));
                 }
             }
 
@@ -438,20 +445,28 @@ public class SkillPackageImporter {
             String path = new URL(urlStr).getPath();
             if (path == null) return "imported_skill";
             while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
-            String last = path.substring(path.lastIndexOf('/') + 1);
-            if (last.toLowerCase(Locale.US).endsWith(".zip")) {
-                last = last.substring(0, last.length() - 4);
-            } else if (last.toLowerCase(Locale.US).endsWith(".md")) {
-                last = last.substring(0, last.length() - 3);
-            }
-            if ("skill".equalsIgnoreCase(last) || "main".equalsIgnoreCase(last) || "master".equalsIgnoreCase(last)) {
-                String parent = path.substring(0, Math.max(0, path.lastIndexOf('/')));
-                if (parent.contains("/")) {
-                    String parentSeg = parent.substring(parent.lastIndexOf('/') + 1);
-                    if (!parentSeg.isEmpty()) last = parentSeg;
+            String[] segs = path.split("/");
+            String picked = "";
+            for (int i = segs.length - 1; i >= 0; i--) {
+                String seg = segs[i];
+                if (seg == null || seg.isEmpty()) continue;
+                if (i == segs.length - 1) {
+                    if (seg.toLowerCase(Locale.US).endsWith(".zip")) {
+                        seg = seg.substring(0, seg.length() - 4);
+                    } else if (seg.toLowerCase(Locale.US).endsWith(".md")) {
+                        seg = seg.substring(0, seg.length() - 3);
+                    }
                 }
+                String lower = seg.toLowerCase(Locale.US);
+                if ("skill".equals(lower) || "main".equals(lower) || "master".equals(lower)
+                    || "heads".equals(lower) || "tags".equals(lower)
+                    || "refs".equals(lower) || "archive".equals(lower)) {
+                    continue;
+                }
+                picked = seg;
+                break;
             }
-            String slug = sanitizeSlug(last);
+            String slug = sanitizeSlug(picked);
             return slug.isEmpty() ? "imported_skill" : slug;
         } catch (Exception e) {
             return "imported_skill";

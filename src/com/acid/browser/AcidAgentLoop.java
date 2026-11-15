@@ -405,32 +405,20 @@ public class AcidAgentLoop {
             return;
         }
 
+        final AcidSessionStore.AgentSession session = mSessionStore.getActiveSession();
+        if (session == null) {
+            addErrorItem("当前会话不可用，请重试。");
+            return;
+        }
+        final BrowserController.TabSession activeTab = mController.getActiveTab();
+        final int bindTabId = activeTab != null ? activeTab.id : -1;
+
         mStopRequested = false;
         mPausedForTakeover = false;
         mRunning = true;
         final int runGen = mRunGeneration.incrementAndGet();
 
-        // Bind the current active tab to this session/loop turn
-        BrowserController.TabSession activeTab = mController.getActiveTab();
-        if (activeTab != null) {
-            mController.setAgentBoundTabId(activeTab.id);
-        }
-
-        final AcidSessionStore.AgentSession session = mSessionStore.getActiveSession();
-        mSessionStore.updateTitleIfDefault(userPrompt);
-
-        // Create and display User UI bubble
-        AcidSessionStore.UiMessageItem userItem = new AcidSessionStore.UiMessageItem();
-        userItem.type = AcidSessionStore.TYPE_USER;
-        userItem.text = userPrompt;
-        userItem.timestamp = System.currentTimeMillis();
-        synchronized (mSessionStore) {
-            session.uiItems.add(userItem);
-            mSessionStore.saveActiveSession();
-        }
-        notifyItemAdded(userItem);
-
-        mWorkerThread = new Thread(new Runnable() {
+        final Thread worker = new Thread(new Runnable() {
             @Override
             public void run() {
                 if (prevWorker != null && prevWorker.isAlive() && Thread.currentThread() != prevWorker) {
@@ -444,9 +432,12 @@ public class AcidAgentLoop {
                         Thread.currentThread().interrupt();
                     }
                     if (prevWorker.isAlive()) {
+                        if (mWorkerThread == Thread.currentThread()) {
+                            mWorkerThread = prevWorker;
+                        }
                         if (!isRunCancelled(runGen)) {
                             mRunning = false;
-                            addErrorItem("上一轮请求仍在清理连接，请稍后重试。");
+                            addErrorItem(session, "上一轮请求仍在清理连接，请稍后重试。");
                             mMainHandler.post(new Runnable() {
                                 @Override
                                 public void run() {
@@ -462,6 +453,28 @@ public class AcidAgentLoop {
                 if (isRunCancelled(runGen)) {
                     return;
                 }
+
+                if (bindTabId > 0) {
+                    mController.setAgentBoundTabId(bindTabId);
+                }
+
+                // Create and display User UI bubble after previous worker has unwound cleanly
+                AcidSessionStore.UiMessageItem userItem = new AcidSessionStore.UiMessageItem();
+                userItem.type = AcidSessionStore.TYPE_USER;
+                userItem.text = userPrompt;
+                userItem.timestamp = System.currentTimeMillis();
+                synchronized (mSessionStore) {
+                    if (isRunCancelled(runGen)) {
+                        return;
+                    }
+                    if (mSessionStore.getActiveSession() == session) {
+                        mSessionStore.updateTitleIfDefault(userPrompt);
+                    }
+                    session.uiItems.add(userItem);
+                    mSessionStore.saveSession(session);
+                }
+                notifyItemAdded(userItem);
+
                 // Run history alignment after previous worker unwinds so turns never overlap on apiMessages.
                 sanitizeAndAlignApiMessages(session, mSessionStore);
                 if (isRunCancelled(runGen)) {
@@ -470,7 +483,8 @@ public class AcidAgentLoop {
                 runAgentLoopInternal(session, userPrompt, runGen);
             }
         }, "AcidAgentLoopThread");
-        mWorkerThread.start();
+        mWorkerThread = worker;
+        worker.start();
     }
 
     public void resumeFromTakeover() {
@@ -547,7 +561,7 @@ public class AcidAgentLoop {
             for (int step = 1; ; step++) {
                 if (isRunCancelled(runGen)) break;
                 if (step > mMaxLoopSteps) {
-                    addErrorItem("已达到单次任务最大自主执行步数上限 (" + mMaxLoopSteps + " 步)，智能体已暂停以防止死循环。如需继续，请发送新指令。");
+                    addErrorItem(session, "已达到单次任务最大自主执行步数上限 (" + mMaxLoopSteps + " 步)，智能体已暂停以防止死循环。如需继续，请发送新指令。");
                     break;
                 }
                 notifyState(true, false, step);
@@ -561,7 +575,7 @@ public class AcidAgentLoop {
                 String content = responseMsg.isNull("content") ? "" : responseMsg.optString("content", "");
                 JSONArray toolCalls = responseMsg.optJSONArray("tool_calls");
 
-                // Save assistant API message
+                // Save assistant API message (guarded inside session lock so stop/takeover cannot interleave)
                 JSONObject assistantEntry = new JSONObject();
                 assistantEntry.put("role", "assistant");
                 if (!content.isEmpty()) {
@@ -576,6 +590,7 @@ public class AcidAgentLoop {
                     assistantEntry.put("tool_calls", toolCalls);
                 }
                 synchronized (mSessionStore) {
+                    if (isRunCancelled(runGen)) break;
                     session.apiMessages.add(assistantEntry);
                     mSessionStore.saveSession(session);
                 }
@@ -671,6 +686,9 @@ public class AcidAgentLoop {
                         toolMsg.put("name", toolName);
                         toolMsg.put("content", execRes.outputText);
                         synchronized (mSessionStore) {
+                            if (mStopRequested || mRunGeneration.get() != runGen) {
+                                break;
+                            }
                             session.apiMessages.add(toolMsg);
                             mSessionStore.saveSession(session);
                         }
@@ -683,11 +701,16 @@ public class AcidAgentLoop {
                         }
                     }
                 } finally {
-                    if (mRunGeneration.get() == runGen && executedToolCount < toolCalls.length()) {
-                        String skipReason = takeoverTriggered
-                            ? "[Execution paused: previous tool requested user takeover]"
-                            : (mStopRequested ? "[Execution stopped: task stopped by user]" : "[Execution skipped]");
-                        ensureToolCallsAlignment(session, toolCalls, executedToolCount, skipReason, mSessionStore);
+                    if (executedToolCount < toolCalls.length()) {
+                        if (mRunGeneration.get() == runGen) {
+                            String skipReason = takeoverTriggered
+                                ? "[Execution paused: previous tool requested user takeover]"
+                                : (mStopRequested ? "[Execution stopped: task stopped by user]" : "[Execution skipped]");
+                            ensureToolCallsAlignment(session, toolCalls, executedToolCount, skipReason, mSessionStore);
+                        } else {
+                            // stopLoop()/pauseForTakeover() may have run concurrently before/after assistantEntry
+                            sanitizeAndAlignApiMessages(session, mSessionStore);
+                        }
                     }
                 }
 
@@ -697,7 +720,7 @@ public class AcidAgentLoop {
             }
         } catch (final Exception e) {
             if (!mStopRequested && mRunGeneration.get() == runGen) {
-                addErrorItem("请求异常: " + e.getMessage());
+                addErrorItem(session, "请求异常: " + e.getMessage());
             }
         } finally {
             if (mRunGeneration.get() == runGen) {
@@ -723,7 +746,12 @@ public class AcidAgentLoop {
     }
 
     private void addErrorItem(String errorMsg) {
-        AcidSessionStore.AgentSession session = mSessionStore.getActiveSession();
+        addErrorItem(null, errorMsg);
+    }
+
+    private void addErrorItem(AcidSessionStore.AgentSession targetSession, String errorMsg) {
+        AcidSessionStore.AgentSession session = targetSession != null ? targetSession : mSessionStore.getActiveSession();
+        if (session == null) return;
         AcidSessionStore.UiMessageItem errItem = new AcidSessionStore.UiMessageItem();
         errItem.type = AcidSessionStore.TYPE_ERROR;
         errItem.text = errorMsg;
@@ -731,7 +759,7 @@ public class AcidAgentLoop {
         errItem.timestamp = System.currentTimeMillis();
         synchronized (mSessionStore) {
             session.uiItems.add(errItem);
-            mSessionStore.saveActiveSession();
+            mSessionStore.saveSession(session);
         }
         notifyItemAdded(errItem);
     }
@@ -1273,31 +1301,6 @@ public class AcidAgentLoop {
 
         HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
         mActiveConnection = conn;
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(90000);
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        conn.setRequestProperty("Accept", "text/event-stream");
-        String key = getApiKey();
-        if (!key.isEmpty()) {
-            conn.setRequestProperty("Authorization", "Bearer " + key);
-        }
-
-        OutputStream os = conn.getOutputStream();
-        os.write(payload);
-        os.flush();
-        os.close();
-
-        int code = conn.getResponseCode();
-        if (code < 200 || code >= 300) {
-            String errStr = AcidIo.readStreamUtf8(conn.getErrorStream());
-            conn.disconnect();
-            throw new Exception("HTTP " + code + ": " + (errStr.length() > 300 ? errStr.substring(0, 300) : errStr));
-        }
-
-        InputStream is = conn.getInputStream();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
 
         ThinkStreamParser streamParser = new ThinkStreamParser();
         StringBuilder reasoningSb = streamParser.reasoningSb;
@@ -1310,7 +1313,36 @@ public class AcidAgentLoop {
         long lastUiUpdate = 0;
         final long THROTTLE_MS = 60;
 
+        OutputStream os = null;
+        InputStream is = null;
+        BufferedReader reader = null;
         try {
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(90000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setRequestProperty("Accept", "text/event-stream");
+            String key = getApiKey();
+            if (!key.isEmpty()) {
+                conn.setRequestProperty("Authorization", "Bearer " + key);
+            }
+
+            os = conn.getOutputStream();
+            os.write(payload);
+            os.flush();
+            os.close();
+            os = null;
+
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) {
+                String errStr = AcidIo.readStreamUtf8(conn.getErrorStream());
+                throw new Exception("HTTP " + code + ": " + (errStr.length() > 300 ? errStr.substring(0, 300) : errStr));
+            }
+
+            is = conn.getInputStream();
+            reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+
             String line;
             while ((line = reader.readLine()) != null) {
                 if (isRunCancelled(runGen)) {
@@ -1356,10 +1388,12 @@ public class AcidAgentLoop {
                         if (cached == 0) {
                             cached = u.optInt("prompt_cache_hit_tokens", 0);
                         }
-                        session.lastPromptTokens = pt;
-                        session.lastCompletionTokens = ct;
-                        session.lastTotalTokens = tt;
-                        session.lastCachedTokens = cached;
+                        synchronized (mSessionStore) {
+                            session.lastPromptTokens = pt;
+                            session.lastCompletionTokens = ct;
+                            session.lastTotalTokens = tt;
+                            session.lastCachedTokens = cached;
+                        }
                         notifyContextUsage(session);
                     }
                 }
@@ -1450,9 +1484,18 @@ public class AcidAgentLoop {
             if (mActiveConnection == conn) {
                 mActiveConnection = null;
             }
+            if (os != null) {
+                try {
+                    os.close();
+                } catch (Exception ignored) {}
+            }
             if (reader != null) {
                 try {
                     reader.close();
+                } catch (Exception ignored) {}
+            } else if (is != null) {
+                try {
+                    is.close();
                 } catch (Exception ignored) {}
             }
             try {

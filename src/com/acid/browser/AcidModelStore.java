@@ -230,6 +230,7 @@ public class AcidModelStore {
     }
 
     private final Context mContext;
+    private final SharedPreferences mTestPrefs;
     private final List<ConfiguredProvider> mProviders = new ArrayList<ConfiguredProvider>();
     private String mSelectedProviderId = "deepseek";
     private String mSelectedModelId = "deepseek-flash";
@@ -242,7 +243,20 @@ public class AcidModelStore {
 
     public AcidModelStore(Context context) {
         mContext = context;
+        mTestPrefs = null;
         loadFromPrefs();
+    }
+
+    AcidModelStore(SharedPreferences testPrefs) {
+        mContext = null;
+        mTestPrefs = testPrefs;
+        loadFromPrefs();
+    }
+
+    private SharedPreferences openModelPrefs() {
+        return mTestPrefs != null
+            ? mTestPrefs
+            : mContext.getSharedPreferences(PREF_MODELS, Context.MODE_PRIVATE);
     }
 
     /**
@@ -325,7 +339,7 @@ public class AcidModelStore {
     // =========================================================================
 
     private synchronized void loadFromPrefs() {
-        SharedPreferences sp = mContext.getSharedPreferences(PREF_MODELS, Context.MODE_PRIVATE);
+        SharedPreferences sp = openModelPrefs();
         String raw = sp.getString(KEY_PROVIDERS_JSON, null);
         mProviders.clear();
 
@@ -357,18 +371,20 @@ public class AcidModelStore {
         int savedVer = sp.getInt(KEY_CATALOG_VERSION, 0);
 
         if (mProviders.isEmpty()) {
-            migrateOrSeedDefaults();
-            sp.edit().putInt(KEY_CATALOG_VERSION, CURRENT_CATALOG_VERSION).apply();
+            migrateOrSeedDefaults(true);
         } else {
-            if (savedVer < CURRENT_CATALOG_VERSION) {
-                upgradeBuiltinCatalog(sp);
-            }
             mSelectedProviderId = sp.getString(KEY_SELECTED_PROVIDER, mProviders.get(0).id);
             mSelectedModelId = sp.getString(KEY_SELECTED_MODEL, "");
-            if ("deepseek-chat".equals(mSelectedModelId) || TextUtils.isEmpty(mSelectedModelId)) {
-                mSelectedModelId = "deepseek-flash";
-            }
             mSelectedEffort = sp.getString(KEY_SELECTED_EFFORT, EFFORT_DEFAULT);
+            if ("deepseek".equals(mSelectedProviderId) && "deepseek-chat".equals(mSelectedModelId)) {
+                ConfiguredProvider ds = getProvider("deepseek");
+                if (ds != null && ds.findModel("deepseek-chat") == null) {
+                    mSelectedModelId = "deepseek-flash";
+                }
+            }
+            if (savedVer < CURRENT_CATALOG_VERSION) {
+                upgradeBuiltinCatalog();
+            }
             ensureValidSelection();
         }
     }
@@ -395,7 +411,7 @@ public class AcidModelStore {
         }
     }
 
-    private void upgradeBuiltinCatalog(SharedPreferences sp) {
+    private void upgradeBuiltinCatalog() {
         for (ConfiguredProvider p : mProviders) {
             if (!p.isCustom) {
                 CatalogProviderPreset preset = findBuiltinPreset(p.id);
@@ -410,18 +426,16 @@ public class AcidModelStore {
             || ("deepseek".equals(mSelectedProviderId) && selectionMissing)) {
             mSelectedModelId = "deepseek-flash";
         }
-        sp.edit()
-            .putInt(KEY_CATALOG_VERSION, CURRENT_CATALOG_VERSION)
-            .putString(KEY_SELECTED_MODEL, mSelectedModelId)
-            .apply();
-        saveToPrefs();
+        saveToPrefsInternal(true);
     }
 
-    private void migrateOrSeedDefaults() {
-        SharedPreferences legacy = mContext.getSharedPreferences(LEGACY_PREF_AGENT, Context.MODE_PRIVATE);
-        String legacyUrl = legacy.getString(LEGACY_KEY_BASE_URL, AcidAgentLoop.DEFAULT_BASE_URL);
-        String legacyKey = legacy.getString(LEGACY_KEY_API_KEY, "");
-        String legacyModel = legacy.getString(LEGACY_KEY_MODEL, AcidAgentLoop.DEFAULT_MODEL);
+    private void migrateOrSeedDefaults(boolean writeCatalogVersion) {
+        SharedPreferences legacy = mContext != null
+            ? mContext.getSharedPreferences(LEGACY_PREF_AGENT, Context.MODE_PRIVATE)
+            : null;
+        String legacyUrl = legacy != null ? legacy.getString(LEGACY_KEY_BASE_URL, AcidAgentLoop.DEFAULT_BASE_URL) : AcidAgentLoop.DEFAULT_BASE_URL;
+        String legacyKey = legacy != null ? legacy.getString(LEGACY_KEY_API_KEY, "") : "";
+        String legacyModel = legacy != null ? legacy.getString(LEGACY_KEY_MODEL, AcidAgentLoop.DEFAULT_MODEL) : AcidAgentLoop.DEFAULT_MODEL;
 
         CatalogProviderPreset dsPreset = findBuiltinPreset("deepseek");
         boolean isLegacyDeepSeek = legacyUrl == null || legacyUrl.contains("deepseek.com");
@@ -461,8 +475,10 @@ public class AcidModelStore {
 
         mSelectedEffort = EFFORT_DEFAULT;
         ensureValidSelection();
-        saveToPrefs();
-        legacy.edit().clear().apply();
+        saveToPrefsInternal(writeCatalogVersion);
+        if (legacy != null) {
+            legacy.edit().clear().apply();
+        }
     }
 
     private void ensureValidSelection() {
@@ -488,6 +504,10 @@ public class AcidModelStore {
     }
 
     public synchronized void saveToPrefs() {
+        saveToPrefsInternal(false);
+    }
+
+    private synchronized void saveToPrefsInternal(boolean updateCatalogVersion) {
         if (mStorageCorrupted) {
             // Refuse to write: the in-memory list is empty because parsing failed, not because
             // the user has no providers. Persisting it would destroy the recoverable original.
@@ -498,13 +518,16 @@ public class AcidModelStore {
         for (ConfiguredProvider p : mProviders) {
             arr.put(p.toJson());
         }
-        mContext.getSharedPreferences(PREF_MODELS, Context.MODE_PRIVATE)
+        SharedPreferences.Editor ed = openModelPrefs()
             .edit()
             .putString(KEY_PROVIDERS_JSON, arr.toString())
             .putString(KEY_SELECTED_PROVIDER, mSelectedProviderId)
             .putString(KEY_SELECTED_MODEL, mSelectedModelId)
-            .putString(KEY_SELECTED_EFFORT, mSelectedEffort)
-            .apply();
+            .putString(KEY_SELECTED_EFFORT, mSelectedEffort);
+        if (updateCatalogVersion) {
+            ed.putInt(KEY_CATALOG_VERSION, CURRENT_CATALOG_VERSION);
+        }
+        ed.apply();
     }
 
     // =========================================================================

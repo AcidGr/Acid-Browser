@@ -225,4 +225,152 @@ runUnwrapSnippet();
 assert.strictEqual(unwrapExecCount, 1, '@unwrap injection guard must prevent duplicate execution across onPageStarted/onPageFinished');
 console.log('✓ Case 5: runtime_shim.js non-strict @require compatibility & @unwrap idempotency guard');
 
-console.log('\n[TestBridgeBatch1] All 5 Batch-1 JS regression checks PASSED!\n');
+// Case 6: paginated observe(offset>0) resets stale refMap when viewportOnly changes
+const offscreenBtn = makeEl('button', {
+    id: 'off_btn',
+    text: 'Offscreen Button',
+    rect: { left: 10, top: 2500, width: 120, height: 32, right: 130, bottom: 2532 }
+});
+const visibleBtn = makeEl('button', {
+    id: 'vis_btn',
+    text: 'Visible Button',
+    rect: { left: 10, top: 20, width: 120, height: 32, right: 130, bottom: 52 }
+});
+bodyEl.children = [offscreenBtn, visibleBtn];
+const obsAll = bridge.observe({ offset: 0, limit: 1, viewportOnly: false, includeSom: false });
+assert.strictEqual(obsAll.collapsed.total, 2, 'viewportOnly=false counts both visible and offscreen buttons');
+assert.strictEqual(obsAll.elements[0].ref, 'e1');
+const obsVpChanged = bridge.observe({ offset: 1, limit: 10, viewportOnly: true, includeSom: false });
+assert.strictEqual(obsVpChanged.collapsed.total, 1, 'viewportOnly=true excludes offscreen button');
+assert.strictEqual(bridge.prepareClick({ ref: 'e1' }).ok, false, 'Changing viewportOnly with offset>0 clears stale e1 from prior refMap');
+const obsVpFresh = bridge.observe({ offset: 0, limit: 10, viewportOnly: true, includeSom: false });
+assert.strictEqual(obsVpFresh.elements.length, 1);
+assert.strictEqual(obsVpFresh.elements[0].label, 'Visible Button');
+console.log('✓ Case 6: observe() resets cached refMap when viewportOnly toggles');
+
+// Case 7: textExcerpt slices normalized body text once without whitespace-chunk skew
+bodyEl.innerText = '   Alpha\n\n\t   Beta   \n\n   Gamma   ';
+bodyEl.children = [];
+const obsText1 = bridge.observe({ offset: 0, limit: 10, textOffset: 0, textLimit: 10, includeSom: false });
+assert.strictEqual(obsText1.textExcerpt.totalChars, 16, 'Normalized text length collapses whitespace before slicing');
+assert.strictEqual(obsText1.textExcerpt.hasMore, true, 'First text slice reports remaining chars accurately');
+assert.ok(obsText1.compactText.includes('Alpha Beta'), 'First slice contains exact leading normalized window');
+const obsText2 = bridge.observe({ offset: 0, limit: 10, textOffset: 10, textLimit: 10, includeSom: false });
+assert.strictEqual(obsText2.textExcerpt.hasMore, false, 'Second slice reaches exact end of normalized text');
+assert.ok(obsText2.compactText.includes(' Gamma'), 'Second slice continues seamlessly without whitespace skew');
+bodyEl.innerText = '';
+console.log('✓ Case 7: observe() textExcerpt slices normalized whitespace consistently across pages');
+
+// Case 8: Same-origin iframe coordinate propagation into observe/prepareClick
+const innerBtn = makeEl('button', {
+    id: 'iframe_pay_btn',
+    text: 'Confirm Payment',
+    rect: { left: 10, top: 20, width: 80, height: 30, right: 90, bottom: 50 }
+});
+const iframeDoc = {
+    body: makeEl('body', {
+        rect: { left: 0, top: 0, width: 200, height: 200, right: 200, bottom: 200 },
+        children: [innerBtn]
+    }),
+    elementFromPoint() { return innerBtn; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; }
+};
+const iframeEl = makeEl('iframe', {
+    id: 'checkout_frame',
+    rect: { left: 100, top: 200, width: 200, height: 200, right: 300, bottom: 400 }
+});
+iframeEl.ownerDocument = global.document;
+iframeEl.contentDocument = iframeDoc;
+const iframeWin = { frameElement: iframeEl, getComputedStyle: global.getComputedStyle };
+iframeDoc.defaultView = iframeWin;
+iframeDoc.body.ownerDocument = iframeDoc;
+innerBtn.ownerDocument = iframeDoc;
+bodyEl.children = [iframeEl];
+
+const obsIframe = bridge.observe({ offset: 0, limit: 10, includeSom: false });
+assert.ok(obsIframe.elements.some(e => e.label === 'Confirm Payment'), 'observe() traverses same-origin iframe content');
+const iframeBtnRef = obsIframe.elements.find(e => e.label === 'Confirm Payment').ref;
+const prepIframe = bridge.prepareClick({ ref: iframeBtnRef });
+assert.strictEqual(prepIframe.ok, true);
+assert.strictEqual(prepIframe.cssX, 150, 'prepareClick adds enclosing iframe left offset (100 + 10 + 40 = 150)');
+assert.strictEqual(prepIframe.cssY, 235, 'prepareClick adds enclosing iframe top offset (200 + 20 + 15 = 235)');
+console.log('✓ Case 8: Same-origin iframe offsets propagate to observe() & prepareClick()');
+
+// Case 9: findElementByFingerprint scopes [name=...] candidates by tag and full label
+const decoyInput = makeEl('input', {
+    text: 'Wrong Input',
+    attrs: { name: 'action_item' },
+    rect: { left: 10, top: 10, width: 100, height: 30, right: 110, bottom: 40 }
+});
+const realBtn = makeEl('button', {
+    text: 'This is a very long button label exceeding eighty characters so prefix truncation never breaks exact healing match',
+    attrs: { name: 'action_item' },
+    rect: { left: 10, top: 60, width: 160, height: 36, right: 170, bottom: 96 }
+});
+const reRenderedBtn = makeEl('button', {
+    text: 'This is a very long button label exceeding eighty characters so prefix truncation never breaks exact healing match',
+    attrs: { name: 'action_item' },
+    rect: { left: 10, top: 60, width: 160, height: 36, right: 170, bottom: 96 }
+});
+const oldQuerySelectorAll = global.document.querySelectorAll;
+global.document.querySelectorAll = (sel) => {
+    if (sel === 'button[name="action_item"]') return [reRenderedBtn];
+    if (sel === '[name="action_item"]') return [decoyInput, reRenderedBtn];
+    return [];
+};
+bodyEl.children = [decoyInput, realBtn];
+const obsHeal = bridge.observe({ offset: 0, limit: 10, includeSom: false });
+const targetBtnItem = obsHeal.elements.find(e => e.tag === 'button');
+// Simulate DOM re-render detaching the old element while preserving tag+name+full label
+realBtn.isConnected = false;
+decoyInput.isConnected = true;
+reRenderedBtn.isConnected = true;
+const prepHeal = bridge.prepareClick({ ref: targetBtnItem.ref });
+global.document.querySelectorAll = oldQuerySelectorAll;
+assert.strictEqual(prepHeal.ok, true, 'Detached element auto-heals across DOM replacement');
+assert.strictEqual(prepHeal.re_resolved, true);
+assert.strictEqual(prepHeal.cssY, 78, 'Auto-healing resolves the matching tag+label button rather than the [name] input decoy');
+console.log('✓ Case 9: Auto-healing scopes [name] locators by tag and preserves full >80-char labels');
+
+// Case 10: runtime_shim.js GM_xmlhttpRequest.abort() delivers details.onabort before cleanup
+global.navigator = global.navigator || { userAgent: 'AcidTest/1.0' };
+let capturedXmlReq = null;
+let capturedAbortCall = null;
+window.__acid_gm_host__ = {
+    call: (act, payloadJson) => {
+        const p = JSON.parse(payloadJson || '{}');
+        if (act === 'xmlhttpRequest') capturedXmlReq = p;
+        if (act === 'abortRequest') capturedAbortCall = p;
+        return '{}';
+    }
+};
+let abortShim = fs.readFileSync('assets/userscripts/runtime_shim.js', 'utf8')
+    .replaceAll('/*__GUARD_KEY__*/', JSON.stringify('shim_abort_test.user.js'))
+    .replaceAll('/*__SAFE_SID__*/""', JSON.stringify('shim_abort_test.user.js'))
+    .replaceAll('/*__SAFE_SID__*/', JSON.stringify('shim_abort_test.user.js'))
+    .replaceAll('/*__SAFE_SECRET__*/""', JSON.stringify('tok3'))
+    .replaceAll('/*__GM_INFO__*/{}', '{}');
+abortShim += `
+var reqHandle = GM_xmlhttpRequest({
+    url: 'https://example.test/stream',
+    onload: function() {},
+    onabort: function(res) { global.__acidTestAbortFired = res && res.aborted === true; }
+});
+reqHandle.abort();
+} catch(e) { throw e; }
+})();
+`;
+delete global.__acidTestAbortFired;
+eval(abortShim);
+assert.ok(capturedXmlReq && capturedXmlReq.onabort && capturedXmlReq.onload, 'xmlhttpRequest registers onload and onabort keys');
+assert.ok(capturedAbortCall && capturedAbortCall.id === capturedXmlReq.id, 'abort() notifies host with matching request id');
+assert.strictEqual(typeof window[capturedXmlReq.onload], 'undefined', 'Non-abort callback keys are pruned immediately on abort()');
+assert.strictEqual(typeof window[capturedXmlReq.onabort], 'function', 'onabort handler remains registered until host dispatches abort callback');
+window.__acid_dispatch_http_cb(capturedXmlReq.onabort, { aborted: true }, true);
+assert.strictEqual(global.__acidTestAbortFired, true, 'details.onabort fires cleanly after abort()');
+assert.strictEqual(typeof window[capturedXmlReq.onabort], 'undefined', 'onabort handler is cleaned up after delivery');
+delete global.__acidTestAbortFired;
+console.log('✓ Case 10: runtime_shim.js preserves onabort across GM_xmlhttpRequest().abort() until callback delivery');
+
+console.log('\n[TestBridgeBatch1] All 10 Batch-1/Batch-2 JS regression checks PASSED!\n');

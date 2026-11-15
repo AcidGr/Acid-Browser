@@ -333,10 +333,24 @@ public class HttpControlServer {
         }
     }
 
+    public interface StartCallback {
+        void onStartResult(boolean success, String errorMessage);
+    }
+
     public synchronized void start() {
-        if (mRunning) return;
+        start(null);
+    }
+
+    public synchronized void start(final StartCallback callback) {
+        if (mRunning) {
+            if (callback != null) {
+                notifyStartCallback(callback, true, null);
+            }
+            return;
+        }
         mRunning = true;
         final int gen = mServerGeneration.incrementAndGet();
+        final java.util.concurrent.atomic.AtomicBoolean cbFired = new java.util.concurrent.atomic.AtomicBoolean(false);
         final ExecutorService pool = getOrCreatePool();
         pool.execute(new Runnable() {
             @Override
@@ -353,6 +367,9 @@ public class HttpControlServer {
                     sActiveMcpPort = ss.getLocalPort();
                     emitLog("[MCP] Acid MCP Server listening on " + (lanEnabled ? "0.0.0.0" : "127.0.0.1") + ":" + mPort
                         + (lanEnabled ? " (LAN enabled)" : " (Localhost only)"));
+                    if (cbFired.compareAndSet(false, true) && callback != null) {
+                        notifyStartCallback(callback, true, null);
+                    }
                     while (mRunning && mServerGeneration.get() == gen) {
                         final Socket client = mServerSocket.accept();
                         try {
@@ -371,14 +388,37 @@ public class HttpControlServer {
                     if (mRunning && mServerGeneration.get() == gen) {
                         Log.e(TAG, "MCP Server error", e);
                     }
+                    if (cbFired.compareAndSet(false, true) && callback != null) {
+                        notifyStartCallback(callback, false, e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+                    }
                 } finally {
                     if (mServerGeneration.get() == gen) {
                         mRunning = false;
                         sActiveMcpPort = -1;
+                        if (cbFired.compareAndSet(false, true) && callback != null) {
+                            notifyStartCallback(callback, false, "MCP server stopped before binding");
+                        }
                     }
                 }
             }
         });
+    }
+
+    private static void notifyStartCallback(final StartCallback callback, final boolean success, final String errorMessage) {
+        if (callback == null) return;
+        try {
+            android.os.Looper mainLooper = android.os.Looper.getMainLooper();
+            if (mainLooper != null) {
+                new android.os.Handler(mainLooper).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        callback.onStartResult(success, errorMessage);
+                    }
+                });
+                return;
+            }
+        } catch (Throwable ignored) {}
+        callback.onStartResult(success, errorMessage);
     }
 
     public synchronized void stop() {
@@ -827,6 +867,17 @@ public class HttpControlServer {
 
     private void handleMcpMessagePost(OutputStream os, Map<String, String> query, byte[] bodyBytes) throws Exception {
         String sessionId = query.get("sessionId");
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            sendJsonResponse(os, 400, new JSONObject().put("error", "Missing sessionId query parameter"));
+            return;
+        }
+        sessionId = sessionId.trim();
+        SseSession sse = mSseSessions.get(sessionId);
+        if (sse == null) {
+            sendJsonResponse(os, 404, new JSONObject().put("error", "Unknown or expired SSE session: " + sessionId));
+            return;
+        }
+
         String bodyStr = new String(bodyBytes, StandardCharsets.UTF_8).trim();
         if (bodyStr.isEmpty()) {
             sendJsonResponse(os, 400, new JSONObject().put("error", "Empty body"));
@@ -843,25 +894,20 @@ public class HttpControlServer {
 
         JSONObject rpcResponse = processJsonRpc(reqJson);
 
-        SseSession sse = (sessionId != null) ? mSseSessions.get(sessionId) : null;
-        if (sse != null && rpcResponse != null) {
+        if (rpcResponse != null) {
             boolean sent = sse.sendEvent("message", rpcResponse.toString());
             if (!sent) {
                 mSseSessions.remove(sessionId);
                 try { sse.socket.close(); } catch (Exception ignored) {}
                 emitLog("[MCP] SSE Client disconnected on send failure (session: " + sessionId + ")");
-            }
-            JSONObject ack = new JSONObject();
-            ack.put("status", "accepted");
-            ack.put("sessionId", sessionId);
-            sendJsonResponse(os, 202, ack);
-        } else {
-            if (rpcResponse != null) {
-                sendJsonResponse(os, 200, rpcResponse);
-            } else {
-                sendJsonResponse(os, 204, new JSONObject());
+                sendJsonResponse(os, 404, new JSONObject().put("error", "SSE session closed before response delivery: " + sessionId));
+                return;
             }
         }
+        JSONObject ack = new JSONObject();
+        ack.put("status", "accepted");
+        ack.put("sessionId", sessionId);
+        sendJsonResponse(os, 202, ack);
     }
 
     private void handleDirectMcpPost(OutputStream os, byte[] bodyBytes) throws Exception {
@@ -1021,8 +1067,27 @@ public class HttpControlServer {
             }
             if (parsedSize == 0) {
                 sawTerminator = true;
-                while ((b = is.read()) != -1) {
-                    if (b == '\n') break;
+                while (true) {
+                    StringBuilder trailerSb = new StringBuilder();
+                    boolean sawLf = false;
+                    while ((b = is.read()) != -1) {
+                        if (b == '\n') {
+                            sawLf = true;
+                            break;
+                        }
+                        if (b != '\r') {
+                            if (trailerSb.length() >= 8192) {
+                                throw new java.io.IOException("Chunk trailer line too long");
+                            }
+                            trailerSb.append((char) b);
+                        }
+                    }
+                    if (!sawLf) {
+                        throw new java.io.IOException("Premature EOF in terminating chunk trailer");
+                    }
+                    if (trailerSb.length() == 0) {
+                        break;
+                    }
                 }
                 break;
             }
@@ -1040,7 +1105,12 @@ public class HttpControlServer {
             baos.write(chunk, 0, read);
             int cr = is.read();
             if (cr == '\r') {
-                is.read();
+                int lf = is.read();
+                if (lf != '\n') {
+                    throw new java.io.IOException("Malformed chunk terminator: expected LF after CR");
+                }
+            } else if (cr != '\n') {
+                throw new java.io.IOException("Malformed chunk terminator: expected CRLF");
             }
         }
         if (!sawTerminator) {

@@ -61,6 +61,116 @@ public final class AcidHttp {
         }
     };
 
+    public static UrlValidator createDownloadValidator(final String initialUrlStr) {
+        final boolean initialIsPrivateOrLocal = isPrivateOrLocalEndpoint(initialUrlStr);
+        URL parsedInitial = null;
+        try {
+            parsedInitial = initialUrlStr != null ? new URL(initialUrlStr.trim()) : null;
+        } catch (Exception ignored) {}
+        final String initialHost = parsedInitial != null ? normalizeHost(parsedInitial.getHost()) : "";
+
+        return new UrlValidator() {
+            @Override
+            public void validate(URL url) throws IOException {
+                try {
+                    String targetHost = url != null ? normalizeHost(url.getHost()) : "";
+                    boolean blockLocal = !initialIsPrivateOrLocal || !initialHost.equals(targetHost);
+                    validateHttpTargetForSsrf(url, blockLocal, "AcidDownload");
+                } catch (SecurityException se) {
+                    throw new IOException(se.getMessage(), se);
+                }
+            }
+        };
+    }
+
+    private static boolean isPrivateOrLocalEndpoint(String urlStr) {
+        if (urlStr == null || urlStr.trim().isEmpty()) return false;
+        try {
+            URL u = new URL(urlStr.trim());
+            String host = normalizeHost(u.getHost());
+            if (host.startsWith("[") && host.endsWith("]") && host.length() > 2) {
+                host = host.substring(1, host.length() - 1);
+            }
+            if (host.isEmpty()) return false;
+            if (HttpControlServer.isLoopbackOrLocalLiteralHost(host) || host.endsWith(".local")) {
+                return true;
+            }
+            InetAddress[] addrs = InetAddress.getAllByName(host);
+            for (InetAddress addr : addrs) {
+                if (addr.isLoopbackAddress() || addr.isSiteLocalAddress()
+                    || isIpv4CgnatAddress(addr) || isBlockedIpv6UlaAddress(addr, host)) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private static boolean isIpv4CgnatAddress(InetAddress addr) {
+        if (addr == null) return false;
+        byte[] raw = addr.getAddress();
+        if (raw == null || raw.length != 4) return false;
+        return (raw[0] & 0xFF) == 100 && (raw[1] & 0xC0) == 64;
+    }
+
+    private static boolean isAlibabaCloudMetadataAddress(InetAddress addr) {
+        if (addr == null) return false;
+        byte[] raw = addr.getAddress();
+        if (raw == null || raw.length != 4) return false;
+        return (raw[0] & 0xFF) == 100
+            && (raw[1] & 0xFF) == 100
+            && (raw[2] & 0xFF) == 100
+            && (raw[3] & 0xFF) == 200;
+    }
+
+    private static boolean isIpv6UlaAddress(InetAddress addr) {
+        if (addr == null) return false;
+        byte[] raw = addr.getAddress();
+        return raw != null && raw.length == 16 && (raw[0] & 0xFE) == 0xFC;
+    }
+
+    /**
+     * Checks whether an IPv6 address lies in Clash/Mihomo's default Fake-IPv6 prefix
+     * {@code fdfe:dcba:9876::/48} so TUN proxy DNS mappings do not trigger false SSRF blocks.
+     */
+    private static boolean isClashFakeIpv6Address(InetAddress addr) {
+        if (addr == null) return false;
+        byte[] raw = addr.getAddress();
+        return raw != null && raw.length == 16
+            && (raw[0] & 0xFF) == 0xFD && (raw[1] & 0xFF) == 0xFE
+            && (raw[2] & 0xFF) == 0xDC && (raw[3] & 0xFF) == 0xBA
+            && (raw[4] & 0xFF) == 0x98 && (raw[5] & 0xFF) == 0x76;
+    }
+
+    private static boolean isIpLiteralHost(String normalizedHost) {
+        if (normalizedHost == null || normalizedHost.isEmpty()) return false;
+        if (normalizedHost.indexOf(':') >= 0) return true;
+        for (int i = 0; i < normalizedHost.length(); i++) {
+            char c = normalizedHost.charAt(i);
+            if ((c < '0' || c > '9') && c != '.') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isBlockedIpv6UlaAddress(InetAddress addr, String normalizedHost) {
+        if (!isIpv6UlaAddress(addr)) return false;
+        return isIpLiteralHost(normalizedHost) || !isClashFakeIpv6Address(addr);
+    }
+
+    private static boolean isAwsIpv6MetadataAddress(InetAddress addr) {
+        if (addr == null) return false;
+        byte[] raw = addr.getAddress();
+        if (raw == null || raw.length != 16) return false;
+        return (raw[0] & 0xFF) == 0xFD && raw[1] == 0
+            && raw[2] == 0x0E && (raw[3] & 0xFF) == 0xC2
+            && raw[4] == 0 && raw[5] == 0 && raw[6] == 0 && raw[7] == 0
+            && raw[8] == 0 && raw[9] == 0 && raw[10] == 0 && raw[11] == 0
+            && raw[12] == 0 && raw[13] == 0
+            && (raw[14] & 0xFF) == 0x02 && (raw[15] & 0xFF) == 0x54;
+    }
+
     public static final UrlValidator REMOTE_FETCH_VALIDATOR = new UrlValidator() {
         @Override
         public void validate(URL url) throws IOException {
@@ -77,17 +187,17 @@ public final class AcidHttp {
         "co", "tv", "fm", "ly", "gg", "sh", "to", "uk", "jp", "de", "fr", "kr", "tw", "hk", "sg", "au", "ca", "in", "br", "ru",
         "com.cn", "net.cn", "org.cn", "edu.cn", "gov.cn", "ac.cn",
         "co.uk", "org.uk", "ac.uk", "gov.uk",
-        "co.jp", "ne.jp", "or.jp", "ac.jp",
+        "co.jp", "ne.jp", "or.jp", "ac.jp", "blogspot.jp",
         "com.hk", "org.hk", "edu.hk",
         "com.tw", "org.tw", "net.tw",
-        "com.sg", "com.au", "net.au", "org.au", "edu.au",
+        "com.sg", "com.au", "net.au", "org.au", "edu.au", "gov.au",
         "co.kr", "or.kr", "co.in", "net.in", "org.in", "com.br", "org.br",
-        "com.mx", "com.tr", "co.za", "co.nz", "co.id", "com.my", "com.ph", "com.vn",
-        "github.io", "gitlab.io", "vercel.app", "pages.dev", "netlify.app",
-        "herokuapp.com", "appspot.com", "blogspot.com", "wordpress.com", "workers.dev",
+        "com.mx", "com.tr", "co.za", "co.nz", "co.id", "co.il", "co.th", "com.my", "com.ph", "com.vn",
+        "github.io", "gitlab.io", "bitbucket.io", "vercel.app", "pages.dev", "netlify.app",
+        "herokuapp.com", "appspot.com", "blogspot.com", "blogspot.co.uk", "wordpress.com", "workers.dev",
         "r2.dev", "fly.dev", "ondigitalocean.app", "azurewebsites.net", "cloudfront.net",
-        "s3.amazonaws.com", "googleapis.com", "firebaseapp.com", "web.app",
-        "eu.org", "us.org", "uk.com"
+        "s3.amazonaws.com", "s3.us-east-1.amazonaws.com", "googleapis.com", "firebaseapp.com", "web.app",
+        "eu.org", "us.org", "uk.com", "onrender.com", "railway.app", "deno.dev", "glitch.me"
     )));
 
     public static boolean isPublicSuffixOrTld(String domain) {
@@ -142,8 +252,9 @@ public final class AcidHttp {
             InetAddress[] addrs = InetAddress.getAllByName(rawHost);
             String lanIp = HttpControlServer.getLocalIpAddress();
             for (InetAddress addr : addrs) {
-                if (addr.isLinkLocalAddress() || addr.isAnyLocalAddress() || addr.isMulticastAddress()) {
-                    throw new SecurityException("Blocked SSRF access to link-local/any/multicast target " + rawHost);
+                if (addr.isLinkLocalAddress() || addr.isAnyLocalAddress() || addr.isMulticastAddress()
+                    || isAlibabaCloudMetadataAddress(addr) || isAwsIpv6MetadataAddress(addr)) {
+                    throw new SecurityException("Blocked SSRF access to link-local/any/multicast/metadata target " + rawHost);
                 }
                 if (addr.isLoopbackAddress() && (blockAllLoopbackAndLocal || isMcpPort)) {
                     throw new SecurityException("Blocked SSRF access to loopback address " + rawHost + ":" + port);
@@ -152,8 +263,9 @@ public final class AcidHttp {
                 if (lanIp != null && lanIp.equals(hostIp) && (blockAllLoopbackAndLocal || isMcpPort)) {
                     throw new SecurityException("Blocked SSRF access to local device address " + rawHost + ":" + port);
                 }
-                if ((blockAllLoopbackAndLocal || isMcpPort) && addr.isSiteLocalAddress()) {
-                    throw new SecurityException("Blocked SSRF access to site-local network address " + rawHost + ":" + port);
+                if ((blockAllLoopbackAndLocal || isMcpPort)
+                    && (addr.isSiteLocalAddress() || isIpv4CgnatAddress(addr) || isBlockedIpv6UlaAddress(addr, rawHost))) {
+                    throw new SecurityException("Blocked SSRF access to private/internal network address " + rawHost + ":" + port);
                 }
             }
         } catch (SecurityException se) {
@@ -226,7 +338,10 @@ public final class AcidHttp {
         if (is115DriveHost(fromHost) && is115DriveHost(toHost)) return true;
         if (isSubdomainOf(fromHost, "quark.cn") && isSubdomainOf(toHost, "quark.cn")) return true;
         if (isSubdomainOf(fromHost, "uc.cn") && isSubdomainOf(toHost, "uc.cn")) return true;
-        if (toHost.endsWith("." + fromHost) || fromHost.endsWith("." + toHost)) return true;
+        if ((toHost.endsWith("." + fromHost) && !isPublicSuffixOrTld(fromHost))
+            || (fromHost.endsWith("." + toHost) && !isPublicSuffixOrTld(toHost))) {
+            return true;
+        }
         String parentFrom = parentDomainIfSafe(fromHost);
         String parentTo = parentDomainIfSafe(toHost);
         return parentFrom != null && parentFrom.equals(parentTo);
@@ -345,7 +460,8 @@ public final class AcidHttp {
                     byte[] buf = new byte[8192];
                     int total = 0;
                     int n;
-                    while ((n = in.read(buf)) > 0) {
+                    while ((n = in.read(buf)) != -1) {
+                        if (n == 0) continue;
                         if (maxBytes > 0 && total + n > maxBytes) {
                             throw new IOException("文件超过大小上限 (" + (maxBytes / (1024 * 1024)) + " MB)");
                         }
@@ -411,7 +527,7 @@ public final class AcidHttp {
         RedirectCredentialPolicy policy = credentialPolicy != null ? credentialPolicy : SAME_ORIGIN_CREDENTIALS;
         Map<String, String> activeHeaders = headers != null ? new HashMap<String, String>(headers) : null;
 
-        for (int redirects = 0; redirects < limit; redirects++) {
+        for (int redirects = 0; redirects <= limit; redirects++) {
             URL u = parseAllowedHttpUrl(currentUrl);
             if (urlValidator != null) {
                 urlValidator.validate(u);

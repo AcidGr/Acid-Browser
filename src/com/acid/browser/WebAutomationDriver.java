@@ -358,8 +358,17 @@ public class WebAutomationDriver {
             " var p=m[" + q + "]; delete m[" + q + "]; return p;})()";
         while (SystemClock.uptimeMillis() < deadline) {
             String r = evaluateJsSync(expr, 1000);
-            if (r != null && r.startsWith("{") && !r.contains("\"error\":\"TIMEOUT\"")) {
-                return r;
+            if (r != null && r.startsWith("{")) {
+                try {
+                    JSONObject parsed = new JSONObject(r);
+                    boolean isTimeoutSentinel = !parsed.optBoolean("ok", true)
+                        && "TIMEOUT".equals(parsed.optString("error", ""));
+                    if (!isTimeoutSentinel) {
+                        return r;
+                    }
+                } catch (Exception e) {
+                    return r;
+                }
             }
             try {
                 Thread.sleep(50);
@@ -712,9 +721,9 @@ public class WebAutomationDriver {
                         }
                     } else {
                         String e = res.optString("error", "");
-                        if ("NO_ACTIVE_TAB".equals(e)) {
-                            errorCode = "NO_ACTIVE_TAB";
-                            errorMsg = "no active tab";
+                        if ("NO_ACTIVE_TAB".equals(e) || "NO_TARGET_TAB".equals(e)) {
+                            errorCode = e;
+                            errorMsg = "NO_TARGET_TAB".equals(e) ? "no target tab" : "no active tab";
                             break;
                         }
                         if (!"BRIDGE_NOT_READY".equals(e) && !"TIMEOUT".equals(e)) {
@@ -910,10 +919,11 @@ public class WebAutomationDriver {
             if (useNativeMotionEvent && isForeground) {
                 final AtomicReference<Float> viewXRef = new AtomicReference<Float>(0f);
                 final AtomicReference<Float> viewYRef = new AtomicReference<Float>(0f);
+                final boolean[] dispatchedRef = new boolean[] { false };
 
                 if (isMainLooper()) {
                     BrowserController.TabSession activeTab = mHost.getTargetTab();
-                    if (activeTab != null) {
+                    if (activeTab != null && activeTab.webView != null) {
                         WebView wv = activeTab.webView;
                         float scale = getSafeWebViewScale(wv);
                         final float vx = (float) (cssX * scale);
@@ -926,6 +936,7 @@ public class WebAutomationDriver {
                             overlay.showClickPulse(vx, vy, "[" + targetRef + "] " + label);
                         }
                         dispatchHardwareMotionTap(wv, vx, vy);
+                        dispatchedRef[0] = true;
                     }
                 } else {
                     final CountDownLatch tapLatch = new CountDownLatch(1);
@@ -949,6 +960,7 @@ public class WebAutomationDriver {
                                     overlay.showClickPulse(vx, vy, "[" + targetRef + "] " + label);
                                 }
                                 dispatchHardwareMotionTap(wv, vx, vy);
+                                dispatchedRef[0] = true;
                             } catch (Throwable t) {
                                 Log.w(TAG, "Native motion tap failed on UI thread: " + t.getMessage());
                             } finally {
@@ -958,10 +970,16 @@ public class WebAutomationDriver {
                     });
                     try {
                         tapLatch.await(2000, TimeUnit.MILLISECONDS);
-                        Thread.sleep(220);
+                        if (dispatchedRef[0]) {
+                            Thread.sleep(260);
+                        }
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
+                }
+
+                if (!dispatchedRef[0]) {
+                    return new JSONObject("{\"ok\":false,\"error\":\"NO_TARGET_TAB\"}");
                 }
 
                 String stateRaw = evaluateJsSync("(function(){ return JSON.stringify(window.__acidBridge.getState()); })()", 2000);
@@ -975,28 +993,6 @@ public class WebAutomationDriver {
                 boolean focusChanged = !activeBefore.equals(activeAfter);
                 boolean effectChanged = domChanged || urlChanged || focusChanged;
                 String strategy = "ANDROID_NATIVE_MOTION_EVENT";
-
-                if (!effectChanged && !occluded) {
-                    String fallbackRaw = evaluateJsSync(
-                        "(function(){ return JSON.stringify(window.__acidBridge.jsClick(" +
-                        (targetOpts != null ? targetOpts.toString() : "{}") + ")); })()",
-                        2000
-                    );
-                    try {
-                        JSONObject fb = new JSONObject(fallbackRaw);
-                        JSONObject fbEffect = fb.optJSONObject("effect");
-                        if (fbEffect != null) {
-                            effectChanged = fbEffect.optBoolean("changed", false);
-                            revAfter = fb.optInt("revisionAfter", revAfter);
-                            domChanged = fbEffect.optInt("dom_mutations", 0) > 0;
-                            urlChanged = fbEffect.optBoolean("url_changed", urlChanged);
-                            focusChanged = fbEffect.optBoolean("focus_changed", focusChanged);
-                        }
-                        strategy = "DOM_SYNTHETIC_FALLBACK";
-                    } catch (Exception e) {
-                        Log.w(TAG, "JS-synthetic click fallback returned invalid JSON", e);
-                    }
-                }
 
                 mHost.emitLog("[CLICK] [" + targetRef + "] \"" + label + "\" @(" +
                     Math.round(viewXRef.get()) + "," + Math.round(viewYRef.get()) + ")" +
@@ -1066,9 +1062,11 @@ public class WebAutomationDriver {
     public JSONObject clickCoordinateSync(final float viewX, final float viewY) {
         final boolean isForeground = mHost.isTargetTabActive();
         final float[] scaleRef = new float[] { getSafeWebViewScale(null) };
+        final boolean[] hasTabRef = new boolean[] { false };
         if (isMainLooper()) {
             BrowserController.TabSession targetTab = mHost.getTargetTab();
-            if (targetTab != null) {
+            if (targetTab != null && targetTab.webView != null) {
+                hasTabRef[0] = true;
                 scaleRef[0] = getSafeWebViewScale(targetTab.webView);
                 if (isForeground) {
                     AgentOverlayView overlay = mHost.getOverlayView();
@@ -1086,6 +1084,7 @@ public class WebAutomationDriver {
                     try {
                         BrowserController.TabSession targetTab = mHost.getTargetTab();
                         if (targetTab != null && targetTab.webView != null) {
+                            hasTabRef[0] = true;
                             scaleRef[0] = getSafeWebViewScale(targetTab.webView);
                             if (isForeground) {
                                 AgentOverlayView overlay = mHost.getOverlayView();
@@ -1104,10 +1103,20 @@ public class WebAutomationDriver {
             });
             try {
                 latch.await(2000, TimeUnit.MILLISECONDS);
-                Thread.sleep(200);
+                if (hasTabRef[0]) {
+                    Thread.sleep(200);
+                }
             } catch (Exception e) {
                 Log.w(TAG, "Coordinate click wait interrupted", e);
             }
+        }
+        if (!hasTabRef[0]) {
+            JSONObject err = new JSONObject();
+            try {
+                err.put("ok", false);
+                err.put("error", "NO_TARGET_TAB");
+            } catch (Exception ignored) {}
+            return err;
         }
         if (!isForeground) {
             float cssX = viewX / scaleRef[0];

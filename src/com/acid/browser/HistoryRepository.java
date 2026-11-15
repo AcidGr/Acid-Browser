@@ -85,12 +85,17 @@ public class HistoryRepository {
     }
 
     public void syncJsonFile() {
-        if (mHistoryJsonFile == null) return;
-        boolean pending = prefs().getBoolean(PREF_HISTORY_PENDING_SYNC, false);
-        if (pending || !mHistoryJsonFile.exists()) {
-            saveHistoryToJsonFile();
-        } else {
-            reloadHistoryFromJsonFile();
+        synchronized (mFileLock) {
+            if (mHistoryJsonFile == null) return;
+            boolean pending;
+            synchronized (this) {
+                pending = prefs().getBoolean(PREF_HISTORY_PENDING_SYNC, false);
+            }
+            if (pending || !mHistoryJsonFile.exists()) {
+                saveHistoryToJsonFile();
+            } else {
+                reloadHistoryFromJsonFile(false);
+            }
         }
     }
 
@@ -188,9 +193,8 @@ public class HistoryRepository {
                 } catch (Exception e) {
                     formatted = arr.toString();
                 }
-                // Update mLastSyncedJson before atomic write so FileObserver never observes the prior value.
-                mLastSyncedJson = formatted.trim();
                 AcidIo.writeFileUtf8(file, formatted);
+                mLastSyncedJson = formatted.trim();
                 synchronized (this) {
                     if (expectedRevision <= 0 || expectedRevision == mHistoryRevision.get()) {
                         prefs().edit().putBoolean(PREF_HISTORY_PENDING_SYNC, false).apply();
@@ -205,24 +209,34 @@ public class HistoryRepository {
     }
 
     public boolean reloadHistoryFromObserver() {
-        File file = mHistoryJsonFile;
-        if (file == null || !file.exists()) return false;
-        try {
-            String trimmed = AcidIo.readFileUtf8(file).trim();
-            if (trimmed.isEmpty() || trimmed.equals(mLastSyncedJson)) {
-                return false;
-            }
-        } catch (Exception ignored) {}
-        return reloadHistoryFromJsonFile();
+        return reloadHistoryInternal(false, true);
     }
 
     public boolean reloadHistoryFromJsonFile() {
+        return reloadHistoryInternal(false, false);
+    }
+
+    public boolean reloadHistoryFromJsonFile(boolean forceOverwritePending) {
+        return reloadHistoryInternal(forceOverwritePending, false);
+    }
+
+    private boolean reloadHistoryInternal(boolean forceOverwritePending, boolean checkObserverBaseline) {
         synchronized (mFileLock) {
             File file = mHistoryJsonFile;
             if (file == null || !file.exists()) return false;
+            if (!forceOverwritePending) {
+                synchronized (this) {
+                    if (prefs().getBoolean(PREF_HISTORY_PENDING_SYNC, false)) {
+                        return false;
+                    }
+                }
+            }
             try {
                 String jsonStr = AcidIo.readFileUtf8(file).trim();
                 if (jsonStr.isEmpty()) return false;
+                if (checkObserverBaseline && jsonStr.equals(mLastSyncedJson)) {
+                    return false;
+                }
 
                 JSONArray arr = new JSONArray(jsonStr);
                 List<BrowserDataStore.EntryItem> list = new ArrayList<BrowserDataStore.EntryItem>();

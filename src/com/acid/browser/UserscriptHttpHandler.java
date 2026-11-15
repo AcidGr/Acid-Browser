@@ -158,88 +158,101 @@ public class UserscriptHttpHandler {
         for (int redirects = 0; redirects < 5; redirects++) {
             URL url = new URL(currentUrl);
             validateAllowedHttpTarget(url);
-            conn = (HttpURLConnection) url.openConnection();
-            flight.conn = conn;
-            conn.setRequestMethod(method);
-            conn.setConnectTimeout(timeout);
-            conn.setReadTimeout(timeout);
-            conn.setInstanceFollowRedirects(false); // Manually handle redirects to enforce security policy and sync cookies
-            conn.setRequestProperty("User-Agent", ua);
-
-            // Inject site cookies if available
+            HttpURLConnection nextConn = (HttpURLConnection) url.openConnection();
+            conn = nextConn;
+            flight.conn = nextConn;
+            boolean transferOwnership = false;
             try {
-                CookieManager cm = CookieManager.getInstance();
-                if (cm != null) {
-                    String cookie = cm.getCookie(currentUrl);
-                    if (cookie != null && !cookie.isEmpty()) {
-                        conn.setRequestProperty("Cookie", cookie);
+                nextConn.setRequestMethod(method);
+                nextConn.setConnectTimeout(timeout);
+                nextConn.setReadTimeout(timeout);
+                nextConn.setInstanceFollowRedirects(false); // Manually handle redirects to enforce security policy and sync cookies
+                nextConn.setRequestProperty("User-Agent", ua);
+
+                // Inject site cookies if available
+                try {
+                    CookieManager cm = CookieManager.getInstance();
+                    if (cm != null) {
+                        String cookie = cm.getCookie(currentUrl);
+                        if (cookie != null && !cookie.isEmpty()) {
+                            nextConn.setRequestProperty("Cookie", cookie);
+                        }
+                    }
+                } catch (Throwable ignored) {}
+
+                // Apply custom headers
+                for (Map.Entry<String, String> entry : customHeaders.entrySet()) {
+                    nextConn.setRequestProperty(entry.getKey(), entry.getValue());
+                }
+
+                // Request body for POST / PUT / PATCH
+                if (data != null && ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method))) {
+                    nextConn.setDoOutput(true);
+                    byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
+                    nextConn.setFixedLengthStreamingMode(bytes.length);
+                    OutputStream out = nextConn.getOutputStream();
+                    try {
+                        out.write(bytes);
+                        out.flush();
+                    } finally {
+                        out.close();
                     }
                 }
-            } catch (Throwable ignored) {}
 
-            // Apply custom headers
-            for (Map.Entry<String, String> entry : customHeaders.entrySet()) {
-                conn.setRequestProperty(entry.getKey(), entry.getValue());
-            }
+                statusCode = nextConn.getResponseCode();
+                statusText = nextConn.getResponseMessage();
+                if (statusText == null) statusText = "";
 
-            // Request body for POST / PUT / PATCH
-            if (data != null && ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method))) {
-                conn.setDoOutput(true);
-                byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
-                conn.setFixedLengthStreamingMode(bytes.length);
-                OutputStream out = conn.getOutputStream();
-                try {
-                    out.write(bytes);
-                    out.flush();
-                } finally {
-                    out.close();
-                }
-            }
-
-            statusCode = conn.getResponseCode();
-            statusText = conn.getResponseMessage();
-            if (statusText == null) statusText = "";
-
-            // Synchronize Set-Cookie headers back to CookieManager
-            headerFields = conn.getHeaderFields();
-            if (headerFields != null) {
-                for (Map.Entry<String, List<String>> entry : headerFields.entrySet()) {
-                    String key = entry.getKey();
-                    if (key != null && "set-cookie".equalsIgnoreCase(key)) {
-                        for (String val : entry.getValue()) {
-                            try {
-                                CookieManager cm = CookieManager.getInstance();
-                                if (cm != null && val != null) {
-                                    cm.setCookie(currentUrl, val);
-                                }
-                            } catch (Throwable ignored) {}
+                // Synchronize Set-Cookie headers back to CookieManager
+                headerFields = nextConn.getHeaderFields();
+                if (headerFields != null) {
+                    for (Map.Entry<String, List<String>> entry : headerFields.entrySet()) {
+                        String key = entry.getKey();
+                        if (key != null && "set-cookie".equalsIgnoreCase(key)) {
+                            for (String val : entry.getValue()) {
+                                try {
+                                    CookieManager cm = CookieManager.getInstance();
+                                    if (cm != null && val != null) {
+                                        cm.setCookie(currentUrl, val);
+                                    }
+                                } catch (Throwable ignored) {}
+                            }
                         }
                     }
                 }
-            }
 
-            // Handle cross-protocol/cross-origin redirects according to RFC 7235 & Fetch standard
-            if (AcidHttp.isRedirectStatus(statusCode)) {
-                String loc = conn.getHeaderField("Location");
-                if (loc != null && !loc.trim().isEmpty()) {
-                    URL nextUrl = new URL(new URL(currentUrl), loc.trim());
-                    validateAllowedHttpTarget(nextUrl);
-                    if (!AcidHttp.isSameOrigin(new URL(currentUrl), nextUrl)) {
-                        AcidHttp.stripSensitiveHeaders(customHeaders);
+                // Handle cross-protocol/cross-origin redirects according to RFC 7235 & Fetch standard
+                if (AcidHttp.isRedirectStatus(statusCode)) {
+                    String loc = nextConn.getHeaderField("Location");
+                    if (loc != null && !loc.trim().isEmpty()) {
+                        URL nextUrl = new URL(new URL(currentUrl), loc.trim());
+                        validateAllowedHttpTarget(nextUrl);
+                        if (!AcidHttp.isSameOrigin(new URL(currentUrl), nextUrl)) {
+                            AcidHttp.stripSensitiveHeaders(customHeaders);
+                        }
+                        currentUrl = nextUrl.toString();
+                        if (statusCode == HttpURLConnection.HTTP_SEE_OTHER
+                            || statusCode == HttpURLConnection.HTTP_MOVED_PERM
+                            || statusCode == HttpURLConnection.HTTP_MOVED_TEMP) {
+                            method = "GET";
+                            data = null;
+                        }
+                        continue;
                     }
-                    currentUrl = nextUrl.toString();
-                    conn.disconnect();
-                    if (statusCode == HttpURLConnection.HTTP_SEE_OTHER
-                        || statusCode == HttpURLConnection.HTTP_MOVED_PERM
-                        || statusCode == HttpURLConnection.HTTP_MOVED_TEMP) {
-                        method = "GET";
-                        data = null;
+                }
+                connected = true;
+                transferOwnership = true;
+                break;
+            } finally {
+                if (!transferOwnership) {
+                    if (flight.conn == nextConn) {
+                        flight.conn = null;
                     }
-                    continue;
+                    try {
+                        nextConn.disconnect();
+                    } catch (Throwable ignored) {}
                 }
             }
-            connected = true;
-            break;
         }
 
         if (!connected || conn == null) {

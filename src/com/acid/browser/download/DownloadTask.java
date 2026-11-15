@@ -217,6 +217,23 @@ public class DownloadTask {
     }
 
     /**
+     * Opens {@link #destinationFile} under {@code mIoLock} only while the task is still active
+     * for {@code expectedGen}, preventing cancelled tasks from recreating deleted files.
+     */
+    public RandomAccessFile openDestinationForWrite(int expectedGen) throws IOException {
+        synchronized (mIoLock) {
+            if (isPaused || isCanceled || getGeneration() != expectedGen || destinationFile == null) {
+                return null;
+            }
+            File parentDir = destinationFile.getParentFile();
+            if (parentDir != null && !parentDir.exists()) {
+                parentDir.mkdirs();
+            }
+            return new RandomAccessFile(destinationFile, "rw");
+        }
+    }
+
+    /**
      * Atomically writes a chunk buffer slice under {@code mIoLock} and checks the generation token
      * so stale or paused workers never mutate the destination file or chunk offsets concurrently.
      */

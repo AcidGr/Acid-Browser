@@ -89,16 +89,25 @@ public class BookmarkRepository {
     }
 
     public void syncJsonFile() {
-        if (mBookmarksJsonFile == null) return;
-        boolean pending = prefs().getBoolean(PREF_BOOKMARKS_PENDING_SYNC, false);
-        if (pending || !mBookmarksJsonFile.exists()) {
-            saveBookmarksToJsonFile();
-        } else {
-            reloadBookmarksFromJsonFile();
+        synchronized (mFileLock) {
+            if (mBookmarksJsonFile == null) return;
+            boolean pending;
+            synchronized (this) {
+                pending = prefs().getBoolean(PREF_BOOKMARKS_PENDING_SYNC, false);
+            }
+            if (pending || !mBookmarksJsonFile.exists()) {
+                saveBookmarksToJsonFile();
+            } else {
+                reloadBookmarksFromJsonFile(false);
+            }
         }
     }
 
     public List<BrowserDataStore.EntryItem> loadBookmarks() {
+        return loadBookmarksInternal(true);
+    }
+
+    private List<BrowserDataStore.EntryItem> loadBookmarksInternal(boolean dispatchSave) {
         List<BrowserDataStore.EntryItem> list = new ArrayList<BrowserDataStore.EntryItem>();
         JSONArray initArrToFlush = null;
         long initRev = 0;
@@ -115,7 +124,7 @@ public class BookmarkRepository {
                 list.add(new BrowserDataStore.EntryItem("Hacker News", "https://news.ycombinator.com"));
                 list.add(new BrowserDataStore.EntryItem("百度", "https://www.baidu.com"));
                 initArrToFlush = encodeBookmarksArray(list);
-                initRev = commitBookmarksToPrefsLocked(initArrToFlush, false);
+                initRev = commitBookmarksToPrefsLocked(initArrToFlush, dispatchSave);
             } else {
                 try {
                     JSONArray arr = new JSONArray(raw);
@@ -129,7 +138,7 @@ public class BookmarkRepository {
                 }
             }
         }
-        if (initArrToFlush != null && mBookmarksJsonFile != null) {
+        if (dispatchSave && initArrToFlush != null && mBookmarksJsonFile != null) {
             dispatchJsonSave(initArrToFlush, initRev);
         }
         return list;
@@ -211,7 +220,7 @@ public class BookmarkRepository {
         if (file == null) return false;
         JSONArray arr = cachedArr;
         if (arr == null) {
-            arr = encodeBookmarksArray(loadBookmarks());
+            arr = encodeBookmarksArray(loadBookmarksInternal(false));
         }
         synchronized (mFileLock) {
             file = mBookmarksJsonFile;
@@ -227,9 +236,8 @@ public class BookmarkRepository {
                 } catch (Exception e) {
                     formatted = arr.toString();
                 }
-                // Update mLastSyncedJson before atomic write so FileObserver never observes the prior value.
-                mLastSyncedJson = formatted.trim();
                 AcidIo.writeFileUtf8(file, formatted);
+                mLastSyncedJson = formatted.trim();
                 synchronized (this) {
                     if (expectedRevision <= 0 || expectedRevision == mBookmarksRevision.get()) {
                         prefs().edit().putBoolean(PREF_BOOKMARKS_PENDING_SYNC, false).apply();
@@ -244,24 +252,35 @@ public class BookmarkRepository {
     }
 
     public boolean reloadBookmarksFromObserver() {
-        File file = mBookmarksJsonFile;
-        if (file == null || !file.exists()) return false;
-        try {
-            String trimmed = AcidIo.readFileUtf8(file).trim();
-            if (trimmed.isEmpty() || trimmed.equals(mLastSyncedJson)) {
-                return false;
-            }
-        } catch (Exception ignored) {}
-        return reloadBookmarksFromJsonFile();
+        return reloadBookmarksInternal(false, true);
     }
 
     public boolean reloadBookmarksFromJsonFile() {
+        return reloadBookmarksInternal(false, false);
+    }
+
+    public boolean reloadBookmarksFromJsonFile(boolean forceOverwritePending) {
+        return reloadBookmarksInternal(forceOverwritePending, false);
+    }
+
+    private boolean reloadBookmarksInternal(boolean forceOverwritePending, boolean checkObserverBaseline) {
+        Runnable mutated = null;
         synchronized (mFileLock) {
             File file = mBookmarksJsonFile;
             if (file == null || !file.exists()) return false;
+            if (!forceOverwritePending) {
+                synchronized (this) {
+                    if (prefs().getBoolean(PREF_BOOKMARKS_PENDING_SYNC, false)) {
+                        return false;
+                    }
+                }
+            }
             try {
                 String jsonStr = AcidIo.readFileUtf8(file).trim();
                 if (jsonStr.isEmpty()) return false;
+                if (checkObserverBaseline && jsonStr.equals(mLastSyncedJson)) {
+                    return false;
+                }
 
                 JSONArray arr = new JSONArray(jsonStr);
                 List<BrowserDataStore.EntryItem> list = new ArrayList<BrowserDataStore.EntryItem>();
@@ -271,19 +290,18 @@ public class BookmarkRepository {
                 }
 
                 JSONArray cleanArr = encodeBookmarksArray(list);
-                Runnable mutated;
                 synchronized (this) {
                     commitBookmarksToPrefsLocked(cleanArr, false);
                     mutated = mBookmarksMutatedListener;
                 }
                 mLastSyncedJson = jsonStr;
-                if (mutated != null) {
-                    dispatchCallback(mutated);
-                }
             } catch (Exception e) {
                 Log.w(TAG, "Failed to reload bookmarks from " + file + ": " + e.getMessage(), e);
                 return false;
             }
+        }
+        if (mutated != null) {
+            dispatchCallback(mutated);
         }
         dispatchCallback(new Runnable() {
             @Override

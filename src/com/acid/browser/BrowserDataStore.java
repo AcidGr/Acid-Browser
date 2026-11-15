@@ -116,6 +116,7 @@ public class BrowserDataStore {
     private final AtomicLong mSettingsRevision = new AtomicLong(0);
     private final Object mSettingsFileLock = new Object();
     private final Object mSettingsStateLock = new Object();
+    private final Object mDownloadsLock = new Object();
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
@@ -213,20 +214,12 @@ public class BrowserDataStore {
                     @Override
                     public void onEvent(int event, String path) {
                         if (path == null) return;
-                        if (path.endsWith("settings.json")) {
-                            if (System.currentTimeMillis() - mLastSelfSaveTime < 800) {
-                                return; // Ignore own writes
-                            }
+                        String fileName = new File(path).getName();
+                        if ("settings.json".equals(fileName)) {
                             reloadSettingsFromObserver();
-                        } else if (path.endsWith("bookmarks.json")) {
-                            if (System.currentTimeMillis() - mBookmarkRepo.getLastSelfSaveTime() < 800) {
-                                return; // Ignore own writes
-                            }
+                        } else if ("bookmarks.json".equals(fileName)) {
                             mBookmarkRepo.reloadBookmarksFromObserver();
-                        } else if (path.endsWith("history.json")) {
-                            if (System.currentTimeMillis() - mHistoryRepo.getLastSelfSaveTime() < 800) {
-                                return; // Ignore own writes
-                            }
+                        } else if ("history.json".equals(fileName)) {
                             mHistoryRepo.reloadHistoryFromObserver();
                         }
                     }
@@ -293,12 +286,17 @@ public class BrowserDataStore {
     }
 
     public void syncSettingsJsonFile() {
-        if (mSettingsJsonFile == null) return;
-        boolean pending = prefs().getBoolean(PREF_SETTINGS_PENDING_SYNC, false);
-        if (!pending && mSettingsJsonFile.exists()) {
-            reloadFromJsonFile();
-        } else {
-            saveToJsonFile();
+        synchronized (mSettingsFileLock) {
+            if (mSettingsJsonFile == null) return;
+            boolean pending;
+            synchronized (mSettingsStateLock) {
+                pending = prefs().getBoolean(PREF_SETTINGS_PENDING_SYNC, false);
+            }
+            if (!pending && mSettingsJsonFile.exists()) {
+                reloadFromJsonFile(false);
+            } else {
+                saveToJsonFile();
+            }
         }
     }
 
@@ -497,8 +495,8 @@ public class BrowserDataStore {
                     o = exportToJson();
                 }
                 String jsonText = o.toString(2);
-                mLastSyncedSettingsJson = jsonText;
                 AcidIo.writeFileUtf8(mSettingsJsonFile, jsonText);
+                mLastSyncedSettingsJson = jsonText;
                 synchronized (mSettingsStateLock) {
                     if (expectedRevision <= 0 || expectedRevision == mSettingsRevision.get()) {
                         prefs().edit().putBoolean(PREF_SETTINGS_PENDING_SYNC, false).apply();
@@ -511,14 +509,7 @@ public class BrowserDataStore {
     }
 
     private void reloadSettingsFromObserver() {
-        if (mSettingsJsonFile == null || !mSettingsJsonFile.exists()) return;
-        try {
-            String content = AcidIo.readFileUtf8(mSettingsJsonFile);
-            if (content.equals(mLastSyncedSettingsJson)) {
-                return;
-            }
-        } catch (Exception ignored) {}
-        reloadFromJsonFile();
+        reloadSettingsInternal(false, true);
     }
 
     private static final class ChangedKeyEntry<T> {
@@ -549,11 +540,29 @@ public class BrowserDataStore {
     }
 
     public boolean reloadFromJsonFile() {
+        return reloadFromJsonFile(false);
+    }
+
+    public boolean reloadFromJsonFile(boolean forceOverwritePending) {
+        return reloadSettingsInternal(forceOverwritePending, false);
+    }
+
+    private boolean reloadSettingsInternal(boolean forceOverwritePending, boolean checkObserverBaseline) {
         final List<ChangedKeyEntry<?>> changedEntries = new ArrayList<ChangedKeyEntry<?>>();
         synchronized (mSettingsFileLock) {
             if (mSettingsJsonFile == null || !mSettingsJsonFile.exists()) return false;
+            if (!forceOverwritePending) {
+                synchronized (mSettingsStateLock) {
+                    if (prefs().getBoolean(PREF_SETTINGS_PENDING_SYNC, false)) {
+                        return false;
+                    }
+                }
+            }
             try {
                 String content = AcidIo.readFileUtf8(mSettingsJsonFile);
+                if (checkObserverBaseline && content.equals(mLastSyncedSettingsJson)) {
+                    return false;
+                }
                 JSONObject o = new JSONObject(content);
                 mLastSyncedSettingsJson = content;
 
@@ -851,33 +860,37 @@ public class BrowserDataStore {
         mBookmarkRepo.saveBookmarks(list);
     }
 
-    public synchronized void saveBookmarks(List<EntryItem> list, boolean syncFile) {
+    public void saveBookmarks(List<EntryItem> list, boolean syncFile) {
         mBookmarkRepo.saveBookmarks(list, syncFile);
     }
 
-    public synchronized boolean saveBookmarksToJsonFile() {
+    public boolean saveBookmarksToJsonFile() {
         return mBookmarkRepo.saveBookmarksToJsonFile();
     }
 
-    public synchronized boolean saveBookmarksToJsonFile(JSONArray cachedArr) {
+    public boolean saveBookmarksToJsonFile(JSONArray cachedArr) {
         return mBookmarkRepo.saveBookmarksToJsonFile(cachedArr);
     }
 
-    public synchronized boolean reloadBookmarksFromJsonFile() {
+    public boolean reloadBookmarksFromJsonFile() {
         return mBookmarkRepo.reloadBookmarksFromJsonFile();
+    }
+
+    public boolean reloadBookmarksFromJsonFile(boolean forceOverwritePending) {
+        return mBookmarkRepo.reloadBookmarksFromJsonFile(forceOverwritePending);
     }
 
     public static final int MAX_HISTORY_RETENTION_ENTRIES = HistoryRepository.MAX_HISTORY_RETENTION_ENTRIES;
 
-    public synchronized void addBookmark(String title, String url) {
+    public void addBookmark(String title, String url) {
         mBookmarkRepo.addBookmark(title, url);
     }
 
-    public synchronized void removeBookmark(int index) {
+    public void removeBookmark(int index) {
         mBookmarkRepo.removeBookmark(index);
     }
 
-    public synchronized boolean updateBookmark(int index, String title, String url) {
+    public boolean updateBookmark(int index, String title, String url) {
         return mBookmarkRepo.updateBookmark(index, title, url);
     }
 
@@ -897,52 +910,58 @@ public class BrowserDataStore {
         mHistoryRepo.clearHistory();
     }
 
-    public synchronized boolean saveHistoryToJsonFile() {
+    public boolean saveHistoryToJsonFile() {
         return mHistoryRepo.saveHistoryToJsonFile();
     }
 
-    public synchronized boolean saveHistoryToJsonFile(JSONArray cachedArr) {
+    public boolean saveHistoryToJsonFile(JSONArray cachedArr) {
         return mHistoryRepo.saveHistoryToJsonFile(cachedArr);
     }
 
-    public synchronized boolean reloadHistoryFromJsonFile() {
+    public boolean reloadHistoryFromJsonFile() {
         return mHistoryRepo.reloadHistoryFromJsonFile();
     }
 
-    public synchronized void recordHistory(String url, String title, boolean incognitoMode) {
+    public boolean reloadHistoryFromJsonFile(boolean forceOverwritePending) {
+        return mHistoryRepo.reloadHistoryFromJsonFile(forceOverwritePending);
+    }
+
+    public void recordHistory(String url, String title, boolean incognitoMode) {
         mHistoryRepo.recordHistory(url, title, incognitoMode);
     }
 
     public List<DownloadItem> loadDownloads() {
-        SharedPreferences prefs = prefs();
-        String raw = prefs.getString(PREF_DOWNLOADS, null);
-        List<DownloadItem> list = new ArrayList<DownloadItem>();
-        if (raw == null) return list;
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.optJSONObject(i);
-                if (o == null) {
-                    Log.w(TAG, "download[" + i + "] is not a JSON object; skipped");
-                    continue;
+        synchronized (mDownloadsLock) {
+            SharedPreferences prefs = prefs();
+            String raw = prefs.getString(PREF_DOWNLOADS, null);
+            List<DownloadItem> list = new ArrayList<DownloadItem>();
+            if (raw == null) return list;
+            try {
+                JSONArray arr = new JSONArray(raw);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.optJSONObject(i);
+                    if (o == null) {
+                        Log.w(TAG, "download[" + i + "] is not a JSON object; skipped");
+                        continue;
+                    }
+                    DownloadItem item = new DownloadItem(
+                        o.optLong("downloadId", 0),
+                        o.optString("fileName", "file"),
+                        o.optString("url", ""),
+                        o.optString("mimeType", ""),
+                        o.optLong("contentLength", 0),
+                        o.optLong("downloadedBytes", 0),
+                        o.optInt("status", 0),
+                        o.optLong("timestamp", System.currentTimeMillis())
+                    );
+                    item.isSystemDownload = o.optBoolean("isSystemDownload", false);
+                    list.add(item);
                 }
-                DownloadItem item = new DownloadItem(
-                    o.optLong("downloadId", 0),
-                    o.optString("fileName", "file"),
-                    o.optString("url", ""),
-                    o.optString("mimeType", ""),
-                    o.optLong("contentLength", 0),
-                    o.optLong("downloadedBytes", 0),
-                    o.optInt("status", 0),
-                    o.optLong("timestamp", System.currentTimeMillis())
-                );
-                item.isSystemDownload = o.optBoolean("isSystemDownload", false);
-                list.add(item);
+            } catch (Exception e) {
+                Log.w(TAG, "Download store is unreadable; returning what could be recovered", e);
             }
-        } catch (Exception e) {
-            Log.w(TAG, "Download store is unreadable; returning what could be recovered", e);
+            return list;
         }
-        return list;
     }
 
     public void saveDownloads(List<DownloadItem> list) {
@@ -968,16 +987,20 @@ public class BrowserDataStore {
                 arr.put(o);
             }
         }
-        prefs()
-            .edit()
-            .putString(PREF_DOWNLOADS, arr.toString())
-            .apply();
+        synchronized (mDownloadsLock) {
+            prefs()
+                .edit()
+                .putString(PREF_DOWNLOADS, arr.toString())
+                .apply();
+        }
     }
 
     public void clearDownloads() {
-        prefs()
-            .edit()
-            .putString(PREF_DOWNLOADS, "[]")
-            .apply();
+        synchronized (mDownloadsLock) {
+            prefs()
+                .edit()
+                .putString(PREF_DOWNLOADS, "[]")
+                .apply();
+        }
     }
 }

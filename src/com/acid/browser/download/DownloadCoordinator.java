@@ -226,9 +226,17 @@ public class DownloadCoordinator {
                 String decoded = HttpProbe.decodeAndSanitizeFileName(val);
                 if (decoded != null && !decoded.isEmpty()) return decoded;
             } else if ("response-content-disposition".equals(key)) {
-                String decodedDisp = HttpProbe.decodeAndSanitizeFileName(val);
-                String parsed = HttpProbe.parseFileNameFromDisposition(decodedDisp != null ? decodedDisp : val);
-                if (parsed != null && !parsed.isEmpty()) return parsed;
+                String urlDecoded = val;
+                try {
+                    urlDecoded = java.net.URLDecoder.decode(val, "UTF-8");
+                } catch (Exception ignored) {}
+                String parsed = HttpProbe.parseFileNameFromDisposition(urlDecoded);
+                if (parsed == null || parsed.isEmpty()) {
+                    parsed = HttpProbe.parseFileNameFromDisposition(val);
+                }
+                if (parsed != null && !parsed.isEmpty()) {
+                    return sanitizeDownloadFileName(parsed);
+                }
             }
         }
         return null;
@@ -812,6 +820,7 @@ public class DownloadCoordinator {
             if (fileName == null || fileName.trim().isEmpty()) {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
+            fileName = sanitizeDownloadFileName(fileName);
             File destDir = getDownloadDestinationDir();
             purgeSavedOrFailedDuplicatesForUrl(url, destDir);
             String safeFileName = generateUniqueFileName(destDir, fileName);
@@ -819,17 +828,17 @@ public class DownloadCoordinator {
 
             Map<String, String> headers = buildCloudDriveAwareHeaders(url, userAgent);
 
-            final DownloadTask task = mDownloader.enqueue(url, safeFileName, effectiveMime, destDir, headers);
-
+            long taskId = mDownloader.allocateTaskId();
+            long now = System.currentTimeMillis();
             DownloadItem item = new DownloadItem(
-                task.id,
-                task.fileName,
+                taskId,
+                safeFileName,
                 url,
                 effectiveMime,
                 contentLength,
                 0,
                 DownloadTask.STATUS_RUNNING,
-                task.createdAt
+                now
             );
 
             synchronized (mDownloads) {
@@ -837,6 +846,19 @@ public class DownloadCoordinator {
                 if (mDataStore != null) {
                     mDataStore.saveDownloads(mDownloads);
                 }
+            }
+
+            final DownloadTask task;
+            try {
+                task = mDownloader.enqueue(taskId, url, safeFileName, effectiveMime, destDir, headers);
+            } catch (Exception enqueueErr) {
+                synchronized (mDownloads) {
+                    mDownloads.remove(item);
+                    if (mDataStore != null) {
+                        mDataStore.saveDownloads(mDownloads);
+                    }
+                }
+                throw enqueueErr;
             }
 
             Log.i(TAG, "[DOWNLOAD] Enqueued multi-thread task: " + safeFileName + " (id=" + task.id + ") -> " + destDir.getAbsolutePath());
@@ -872,6 +894,7 @@ public class DownloadCoordinator {
             if (fileName == null || fileName.trim().isEmpty()) {
                 fileName = smartGuessFileName(url, contentDisposition, mimeType);
             }
+            fileName = sanitizeDownloadFileName(fileName);
             File destDir = getDownloadDestinationDir();
             purgeSavedOrFailedDuplicatesForUrl(url, destDir);
             String safeFileName = generateUniqueFileName(destDir, fileName);
@@ -1058,20 +1081,33 @@ public class DownloadCoordinator {
             }
 
             Map<String, String> headers = buildCloudDriveAwareHeaders(it.url, null);
-            DownloadTask task = mDownloader.enqueue(
-                it.downloadId,
-                it.url,
-                it.fileName,
-                it.mimeType,
-                destDir,
-                headers
-            );
+            final boolean prevSystemDownload = it.isSystemDownload;
+            final int prevStatus = it.status;
             synchronized (mDownloads) {
                 it.isSystemDownload = false;
                 it.status = DownloadTask.STATUS_RUNNING;
                 if (mDataStore != null) {
                     mDataStore.saveDownloads(mDownloads);
                 }
+            }
+            try {
+                mDownloader.enqueue(
+                    it.downloadId,
+                    it.url,
+                    it.fileName,
+                    it.mimeType,
+                    destDir,
+                    headers
+                );
+            } catch (Exception enqueueErr) {
+                synchronized (mDownloads) {
+                    it.isSystemDownload = prevSystemDownload;
+                    it.status = prevStatus;
+                    if (mDataStore != null) {
+                        mDataStore.saveDownloads(mDownloads);
+                    }
+                }
+                throw enqueueErr;
             }
             return true;
         } catch (Exception e) {
@@ -1223,7 +1259,8 @@ public class DownloadCoordinator {
                 boolean activeStatus = it.status == DownloadManager.STATUS_RUNNING
                     || it.status == DownloadManager.STATUS_PENDING
                     || it.status == DownloadManager.STATUS_PAUSED;
-                if (dm == null || (!it.isSystemDownload && !activeStatus)) {
+                boolean isPausedBuiltinTask = !it.isSystemDownload && it.status == DownloadTask.STATUS_PAUSED;
+                if (dm == null || (!it.isSystemDownload && !activeStatus) || isPausedBuiltinTask) {
                     continue;
                 }
                 DownloadManager.Query q = new DownloadManager.Query();
@@ -1517,19 +1554,36 @@ public class DownloadCoordinator {
                             dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
                         }
                     } catch (Exception ignored) {}
+                    File destDir = getDownloadDestinationDir();
                     for (DownloadItem it : snapshot) {
                         if (it == null || it.downloadId <= 0) continue;
                         DownloadTask t = mDownloader.getTask(it.downloadId);
                         if (t != null) {
                             boolean unfinished = t.status != DownloadTask.STATUS_SUCCESSFUL;
                             mDownloader.cancel(it.downloadId, unfinished);
-                        } else if (dm != null
-                            && it.status != DownloadManager.STATUS_SUCCESSFUL
-                            && it.status != DownloadItem.STATUS_SAVED
-                            && (it.isSystemDownload || querySystemDownloadStatus(it.downloadId) != -1)) {
-                            try {
-                                dm.remove(it.downloadId);
-                            } catch (Exception ignored) {}
+                        } else {
+                            if (!it.isSystemDownload
+                                && it.status != DownloadManager.STATUS_SUCCESSFUL
+                                && it.status != DownloadItem.STATUS_SAVED
+                                && destDir != null && it.fileName != null && !it.fileName.isEmpty()) {
+                                String cleanName = sanitizeDownloadFileName(it.fileName);
+                                File cfg = new File(destDir, cleanName + ".part.cfg");
+                                if (cfg.exists() && isCheckpointMatchingUrl(cfg, it.url)) {
+                                    try { cfg.delete(); } catch (Exception ignored) {}
+                                    File partial = new File(destDir, cleanName);
+                                    if (partial.exists()) {
+                                        try { partial.delete(); } catch (Exception ignored) {}
+                                    }
+                                }
+                            }
+                            if (dm != null
+                                && it.status != DownloadManager.STATUS_SUCCESSFUL
+                                && it.status != DownloadItem.STATUS_SAVED
+                                && (it.isSystemDownload || querySystemDownloadStatus(it.downloadId) != -1)) {
+                                try {
+                                    dm.remove(it.downloadId);
+                                } catch (Exception ignored) {}
+                            }
                         }
                     }
                 }

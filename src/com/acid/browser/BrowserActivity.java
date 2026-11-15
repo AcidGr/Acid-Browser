@@ -152,9 +152,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (mBookmarksHistorySheet != null && mBookmarksHistorySheet.isShowing()) {
                     mBookmarksHistorySheet.refreshActivePage();
                 }
-                if (mController != null) {
-                    mController.pushBookmarksToActiveHomeTabs();
-                }
             }
         });
         mDataStore.setOnHistoryChangedListener(new BrowserDataStore.OnHistoryChangedListener() {
@@ -1213,9 +1210,15 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
             if (mHttpServer != null) {
                 boolean wantMcp = mDataStore.isMcpServerEnabled();
-                if (wantMcp && !mHttpServer.isRunning()) {
-                    mHttpServer.start();
-                } else if (!wantMcp && mHttpServer.isRunning()) {
+                boolean wantLan = mDataStore.isMcpLanEnabled();
+                if (wantMcp) {
+                    if (!mHttpServer.isRunning()) {
+                        mHttpServer.start();
+                    } else if (mHttpServer.isLanBound() != wantLan) {
+                        mHttpServer.stop();
+                        mHttpServer.start();
+                    }
+                } else if (mHttpServer.isRunning()) {
                     mHttpServer.stop();
                 }
             }
@@ -1374,20 +1377,30 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     private void startMcpServerInternal() {
         if (mHttpServer == null) return;
-        if (!mHttpServer.isRunning()) {
-            mHttpServer.start();
-        }
-        mDataStore.setMcpServerEnabled(true);
-        boolean lan = mDataStore.isMcpLanEnabled();
-        AcidFeedback.ok(this, "MCP 服务已启动 (" + (lan ? "0.0.0.0:3090 局域网模式" : "127.0.0.1:3090 本机模式") + ")");
-        updateMenuSheetCards();
-        if (mSettingsSheet != null) {
-            mSettingsSheet.setMcpRunning(true);
-            mSettingsSheet.refresh();
-        }
-        if (mMcpSheet != null) {
-            mMcpSheet.renderContent();
-        }
+        final boolean lan = mDataStore.isMcpLanEnabled();
+        mHttpServer.start(new HttpControlServer.StartCallback() {
+            @Override
+            public void onStartResult(boolean success, String errorMessage) {
+                if (isFinishing() || isDestroyed()) return;
+                if (success) {
+                    mDataStore.setMcpServerEnabled(true);
+                    AcidFeedback.ok(BrowserActivity.this,
+                        "MCP 服务已启动 (" + (lan ? "0.0.0.0:3090 局域网模式" : "127.0.0.1:3090 本机模式") + ")");
+                } else {
+                    mDataStore.setMcpServerEnabled(false);
+                    AcidFeedback.error(BrowserActivity.this,
+                        "MCP 服务启动失败" + (errorMessage != null && !errorMessage.isEmpty() ? ": " + errorMessage : ""));
+                }
+                updateMenuSheetCards();
+                if (mSettingsSheet != null) {
+                    mSettingsSheet.setMcpRunning(success);
+                    mSettingsSheet.refresh();
+                }
+                if (mMcpSheet != null) {
+                    mMcpSheet.renderContent();
+                }
+            }
+        });
     }
 
     private void stopMcpServerInternal() {
@@ -1411,13 +1424,34 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mHttpServer == null) return;
         if (mHttpServer.isRunning()) {
             mHttpServer.stop();
-            mHttpServer.start();
-            boolean lan = mDataStore.isMcpLanEnabled();
-            AcidFeedback.ok(this, "MCP 服务已重启 (" + (lan ? "0.0.0.0:3090 局域网模式" : "127.0.0.1:3090 本机模式") + ")");
-        }
-        updateMenuSheetCards();
-        if (mMcpSheet != null) {
-            mMcpSheet.renderContent();
+            final boolean lan = mDataStore.isMcpLanEnabled();
+            mHttpServer.start(new HttpControlServer.StartCallback() {
+                @Override
+                public void onStartResult(boolean success, String errorMessage) {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (success) {
+                        AcidFeedback.ok(BrowserActivity.this,
+                            "MCP 服务已重启 (" + (lan ? "0.0.0.0:3090 局域网模式" : "127.0.0.1:3090 本机模式") + ")");
+                    } else {
+                        mDataStore.setMcpServerEnabled(false);
+                        AcidFeedback.error(BrowserActivity.this,
+                            "MCP 服务重启失败" + (errorMessage != null && !errorMessage.isEmpty() ? ": " + errorMessage : ""));
+                    }
+                    updateMenuSheetCards();
+                    if (mSettingsSheet != null) {
+                        mSettingsSheet.setMcpRunning(success);
+                        mSettingsSheet.refresh();
+                    }
+                    if (mMcpSheet != null) {
+                        mMcpSheet.renderContent();
+                    }
+                }
+            });
+        } else {
+            updateMenuSheetCards();
+            if (mMcpSheet != null) {
+                mMcpSheet.renderContent();
+            }
         }
     }
 
@@ -2000,8 +2034,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mController.destroy();
         }
         if (mDataStore != null) {
+            mDataStore.setOnSettingsChangedListener(null);
+            mDataStore.setOnBookmarksChangedListener(null);
+            mDataStore.setOnHistoryChangedListener(null);
+            mDataStore.setCallbackDispatcher(null);
             mDataStore.stopWatchingSettingsFile();
         }
+        AdBlockManager.getInstance(this).flushBlockedCount();
         super.onDestroy();
     }
 }

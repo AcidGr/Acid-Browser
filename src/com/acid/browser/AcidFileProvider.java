@@ -202,6 +202,8 @@ public class AcidFileProvider extends ContentProvider {
         File targetFile;
         try {
             targetFile = resolveSafeFile(uri);
+        } catch (SecurityException se) {
+            throw se;
         } catch (Exception e) {
             targetFile = null;
         }
@@ -209,13 +211,17 @@ public class AcidFileProvider extends ContentProvider {
         String[] cols = projection != null ? projection : new String[]{
             OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE
         };
+        if (targetFile == null || !targetFile.exists()) {
+            return new MatrixCursor(cols, 0);
+        }
+        String displayName = targetFile.getName() != null ? targetFile.getName() : fileName;
         MatrixCursor cursor = new MatrixCursor(cols, 1);
         MatrixCursor.RowBuilder row = cursor.newRow();
         for (String col : cols) {
             if (OpenableColumns.DISPLAY_NAME.equals(col)) {
-                row.add(fileName);
+                row.add(displayName);
             } else if (OpenableColumns.SIZE.equals(col)) {
-                row.add(targetFile != null && targetFile.exists() ? targetFile.length() : 0L);
+                row.add(targetFile.length());
             } else {
                 row.add(null);
             }

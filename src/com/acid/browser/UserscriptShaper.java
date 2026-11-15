@@ -92,7 +92,7 @@ public class UserscriptShaper {
             .replace("/*__SAFE_SECRET__*/\"\"", safeSecret)
             .replace("/*__GM_INFO__*/{}", gmInfoJson);
 
-        if (meta.unwrap && !hasAnyNativeBridgeGrant(meta)) {
+        if (meta.unwrap && !hasAnyShimApiGrant(meta)) {
             StringBuilder sb = new StringBuilder();
             sb.append("if (!window.__acidInjectedUserscripts || !window.__acidInjectedUserscripts[")
                 .append(guardKey).append("]) {\n");
@@ -174,6 +174,16 @@ public class UserscriptShaper {
 
     private static String grantedExpr(UserscriptMeta meta, String api) {
         return meta.isGranted(api) ? api : "undefined";
+    }
+
+    private static boolean hasAnyShimApiGrant(UserscriptMeta meta) {
+        if (meta == null || (meta.unwrap && meta.grants.isEmpty())) return false;
+        for (String api : APIS) {
+            if (meta.isGranted(api)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasAnyNativeBridgeGrant(UserscriptMeta meta) {

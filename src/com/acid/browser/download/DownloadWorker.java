@@ -83,6 +83,7 @@ public class DownloadWorker implements Runnable {
 
             final long finalSeekOffset = seekOffset;
             final long finalEndByte = endByte;
+            String validatorOrigin = (mTask.url != null && !mTask.url.isEmpty()) ? mTask.url : currentUrl;
             conn = AcidHttp.openConnectionWithRedirects(
                 currentUrl,
                 "GET",
@@ -90,7 +91,7 @@ public class DownloadWorker implements Runnable {
                 CONNECT_TIMEOUT_MS,
                 READ_TIMEOUT_MS,
                 MAX_REDIRECTS,
-                null,
+                AcidHttp.createDownloadValidator(validatorOrigin),
                 AcidHttp.DOWNLOAD_CREDENTIALS,
                 new AcidHttp.RedirectListener() {
                     @Override
@@ -129,7 +130,9 @@ public class DownloadWorker implements Runnable {
             // but the server returned HTTP 200 OK (full file body starting from byte 0),
             // writing it at seekOffset would cause silent data corruption!
             if (code == HttpURLConnection.HTTP_OK && seekOffset > 0) {
-                mTask.supportsRange = false;
+                if (!isAborted()) {
+                    mTask.supportsRange = false;
+                }
                 throw new IOException("Server does not support byte-range resume (HTTP 200 OK returned for Range offset " + seekOffset + ")");
             }
             if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
@@ -139,12 +142,10 @@ public class DownloadWorker implements Runnable {
             if (isAborted()) return;
 
             File dest = mTask.destinationFile;
-            File parentDir = dest.getParentFile();
-            if (parentDir != null && !parentDir.exists()) {
-                parentDir.mkdirs();
+            raf = mTask.openDestinationForWrite(mGeneration);
+            if (raf == null || isAborted()) {
+                return;
             }
-
-            raf = new RandomAccessFile(dest, "rw");
             raf.seek(seekOffset);
 
             is = conn.getInputStream();

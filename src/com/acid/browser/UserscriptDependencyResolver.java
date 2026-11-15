@@ -225,12 +225,10 @@ public class UserscriptDependencyResolver {
     public static String extractResourceUrl(String resourceDeclaration) {
         if (resourceDeclaration == null) return "";
         String trimmed = resourceDeclaration.trim();
-        int space = trimmed.indexOf(' ');
-        if (space < 0) {
-            return trimmed.startsWith("http://") || trimmed.startsWith("https://") ? trimmed : "";
-        }
-        String secondPart = trimmed.substring(space + 1).trim();
-        return secondPart.startsWith("http://") || secondPart.startsWith("https://") ? secondPart : "";
+        if (trimmed.isEmpty()) return "";
+        String[] parts = trimmed.split("\\s+", 2);
+        String candidate = parts.length == 2 ? parts[1].trim() : parts[0];
+        return candidate.startsWith("http://") || candidate.startsWith("https://") ? candidate : "";
     }
 
     private File getLocalFileForUrl(String url) {

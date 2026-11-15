@@ -142,6 +142,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testPostAuditP0AndP1Regressions(); }
         });
 
+        // 18. Deep Audit Round-2 P0 & P1 Regressions
+        run("18. Round-2 P0/P1 Fixes: ModelStore Upgrade, Repo Sync Lock, SSRF CGNAT/ULA/Redirects, MCP Tabs/Takeover, Userscript Shim/Resource, Skill Shadow/YAML, SSE 400/404 & Chunked, AdBlock Google/CSS/Regex, Download Name & FileProvider", new TestCase() {
+            @Override public void execute() throws Exception { testPostAudit2Regressions(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -2055,6 +2060,420 @@ public final class TestRunner {
             downloader.removeListener(dlListener);
             try { errServer.close(); } catch (Exception ignored) {}
             SkillStorageVault.deleteRecursiveSafe(dlProbeDir);
+        }
+    }
+
+    // =========================================================================
+    // 18. Deep Audit Round-2 P0 & P1 Regressions
+    // =========================================================================
+
+    private static void testPostAudit2Regressions() throws Exception {
+        // 1. AcidModelStore preserves non-DeepSeek provider & custom selection across catalog upgrade
+        InMemoryPrefs seedPrefs = new InMemoryPrefs();
+        new AcidModelStore(seedPrefs);
+        String seededJson = seedPrefs.getString("configured_providers_json", "[]");
+
+        AcidModelStore.CatalogProviderPreset kimiPreset = AcidModelStore.findBuiltinPreset("moonshotai-cn");
+        AcidModelStore.ConfiguredProvider kimiProv = new AcidModelStore.ConfiguredProvider(
+            kimiPreset.id, kimiPreset.displayName, false, kimiPreset.defaultBaseUrl, "sk-kimi-test");
+        kimiProv.models.add(new AcidModelStore.ModelEntry("kimi-k3", "Kimi K3"));
+        JSONArray upgradeArr = new JSONArray(seededJson);
+        upgradeArr.put(kimiProv.toJson());
+
+        InMemoryPrefs upgradePrefs = new InMemoryPrefs();
+        upgradePrefs.edit()
+            .putString("configured_providers_json", upgradeArr.toString())
+            .putString("selected_provider_id", "moonshotai-cn")
+            .putString("selected_model_id", "kimi-k3")
+            .putString("selected_reasoning_effort", "high")
+            .putInt("catalog_version", 1)
+            .apply();
+        AcidModelStore upgradedKimi = new AcidModelStore(upgradePrefs);
+        assertEquals("moonshotai-cn", upgradedKimi.getActiveProvider().id,
+            "Catalog upgrade preserves selected non-DeepSeek built-in provider");
+        assertEquals("kimi-k3", upgradedKimi.getActiveModel().id,
+            "Catalog upgrade preserves selected non-DeepSeek model instead of resetting to deepseek-flash");
+        assertEquals("high", upgradedKimi.getSelectedReasoningEffort(),
+            "Catalog upgrade preserves selected reasoning effort");
+
+        JSONArray withCustomArr = new JSONArray(seededJson);
+        AcidModelStore.ConfiguredProvider customProv = new AcidModelStore.ConfiguredProvider(
+            "custom_qwen_test", "Local Qwen", true, "http://127.0.0.1:11434/v1", "");
+        customProv.models.add(new AcidModelStore.ModelEntry("qwen3-coder", "Qwen3 Coder"));
+        withCustomArr.put(customProv.toJson());
+        InMemoryPrefs customUpgradePrefs = new InMemoryPrefs();
+        customUpgradePrefs.edit()
+            .putString("configured_providers_json", withCustomArr.toString())
+            .putString("selected_provider_id", "custom_qwen_test")
+            .putString("selected_model_id", "qwen3-coder")
+            .putString("selected_reasoning_effort", "medium")
+            .putInt("catalog_version", 1)
+            .apply();
+        AcidModelStore upgradedCustom = new AcidModelStore(customUpgradePrefs);
+        assertEquals("custom_qwen_test", upgradedCustom.getActiveProvider().id,
+            "Catalog upgrade preserves selected custom provider");
+        assertEquals("qwen3-coder", upgradedCustom.getActiveModel().id,
+            "Catalog upgrade preserves selected custom model");
+
+        // 2. BookmarkRepository & HistoryRepository PENDING_SYNC guard vs forceOverwritePending
+        File repoDir = File.createTempFile("acid_r2_repo_", "_dir");
+        repoDir.delete();
+        repoDir.mkdirs();
+        try {
+            File sFile = new File(repoDir, "settings.json");
+            File bFile = new File(repoDir, "bookmarks.json");
+            File hFile = new File(repoDir, "history.json");
+            InMemoryPrefs repoPrefs = new InMemoryPrefs();
+            BrowserDataStore repoStore = new BrowserDataStore(
+                repoPrefs, new InMemoryPrefs(), sFile, bFile, hFile);
+            repoStore.syncBookmarksJsonFile();
+            repoStore.syncHistoryJsonFile();
+            int baseBmCount = repoStore.loadBookmarks().size();
+
+            // Write new bookmarks externally, then simulate PENDING_SYNC set locally
+            JSONArray extBm = new JSONArray();
+            extBm.put(new JSONObject().put("title", "External Bookmark").put("url", "https://ext.bm.test/"));
+            repoStore.recordHistory("https://inmem.hist.test/", "InMemory Hist", false);
+            FileOutputStream bOut = new FileOutputStream(bFile);
+            bOut.write(extBm.toString(2).getBytes(StandardCharsets.UTF_8));
+            bOut.close();
+
+            repoPrefs.edit().putBoolean(BookmarkRepository.PREF_BOOKMARKS_PENDING_SYNC, true).apply();
+            assertTrue(!repoStore.reloadBookmarksFromJsonFile(false),
+                "Non-forced observer reload respects PENDING_SYNC and keeps local bookmarks");
+            assertEquals(baseBmCount, Integer.valueOf(repoStore.loadBookmarks().size()),
+                "Local bookmark count untouched when PENDING_SYNC blocks non-forced reload");
+            assertTrue(repoStore.reloadBookmarksFromJsonFile(true),
+                "Force-overwrite reload (sandbox write) applies external bookmarks.json");
+            assertEquals(1, Integer.valueOf(repoStore.loadBookmarks().size()),
+                "Forced bookmark reload applied updated file");
+
+            JSONArray extHist = new JSONArray();
+            extHist.put(new JSONObject()
+                .put("title", "External History")
+                .put("url", "https://ext.hist.test/")
+                .put("time", System.currentTimeMillis()));
+            FileOutputStream hOut = new FileOutputStream(hFile);
+            hOut.write(extHist.toString(2).getBytes(StandardCharsets.UTF_8));
+            hOut.close();
+
+            repoPrefs.edit().putBoolean(HistoryRepository.PREF_HISTORY_PENDING_SYNC, true).apply();
+            assertTrue(!repoStore.reloadHistoryFromJsonFile(false),
+                "Non-forced history reload respects PENDING_SYNC");
+            assertTrue(repoStore.reloadHistoryFromJsonFile(true),
+                "Force-overwrite history reload applies external history.json");
+            assertEquals(1, Integer.valueOf(repoStore.loadHistory().size()),
+                "Forced history reload applied updated file");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(repoDir);
+        }
+
+        // 3. AcidHttp CGNAT, Alibaba/AWS-IPv6 metadata, ULA literal vs Fake-IPv6, PSL, and redirects <= limit
+        String[] extraSsrfBlocked = new String[] {
+            "http://100.64.0.1/internal",
+            "http://100.100.100.200/latest/meta-data",
+            "http://[fc00::1]/private",
+            "http://[fd00:ec2::254]/latest/meta-data",
+            "http://[fdfe:dcba:9876::1]/literal-fakeip6"
+        };
+        for (String u : extraSsrfBlocked) {
+            boolean blocked = false;
+            try {
+                AcidHttp.REMOTE_FETCH_VALIDATOR.validate(new URL(u));
+            } catch (IOException expected) {
+                blocked = true;
+            }
+            assertTrue(blocked, "REMOTE_FETCH_VALIDATOR blocks CGNAT/metadata/ULA literal " + u);
+        }
+        assertTrue(AcidHttp.isPublicSuffixOrTld("cloudfront.net"), "Expanded PSL includes cloudfront.net");
+        assertTrue(AcidHttp.isPublicSuffixOrTld("workers.dev"), "Expanded PSL includes workers.dev");
+        assertTrue(!AcidHttp.shouldRetainDownloadCredentials(
+            new URL("https://a.workers.dev/f"), new URL("https://b.workers.dev/f")),
+            "Expanded PSL workers.dev strips credentials across tenant subdomains");
+
+        // Redirect boundary test: maxRedirects=2 allows 2 hops (3 requests) and rejects 3 hops
+        final ServerSocket redirServer = new ServerSocket(0, 10, InetAddress.getByName("127.0.0.1"));
+        final int redirPort = redirServer.getLocalPort();
+        Thread redirThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!redirServer.isClosed()) {
+                    try {
+                        Socket s = redirServer.accept();
+                        BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.US_ASCII));
+                        String reqLine = r.readLine();
+                        String line;
+                        while ((line = r.readLine()) != null && !line.isEmpty()) {}
+                        OutputStream out = s.getOutputStream();
+                        if (reqLine != null && reqLine.contains("/hop0")) {
+                            out.write(("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:" + redirPort + "/hop1\r\nContent-Length: 0\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                        } else if (reqLine != null && reqLine.contains("/hop1")) {
+                            out.write(("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:" + redirPort + "/final\r\nContent-Length: 0\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                        } else if (reqLine != null && reqLine.contains("/hop2")) {
+                            out.write(("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:" + redirPort + "/hop0\r\nContent-Length: 0\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                        } else {
+                            byte[] okBody = "OK".getBytes(StandardCharsets.US_ASCII);
+                            out.write(("HTTP/1.1 200 OK\r\nContent-Length: " + okBody.length + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                            out.write(okBody);
+                        }
+                        out.flush();
+                        s.close();
+                    } catch (IOException ignored) {
+                        break;
+                    }
+                }
+            }
+        });
+        redirThread.setDaemon(true);
+        redirThread.start();
+        try {
+            java.net.HttpURLConnection okConn = AcidHttp.openConnectionWithRedirects(
+                "http://127.0.0.1:" + redirPort + "/hop0", "GET", null, 3000, 3000, 2, null, null, null);
+            assertEquals(200, Integer.valueOf(okConn.getResponseCode()),
+                "openConnectionWithRedirects(..., maxRedirects=2) succeeds after 2 redirects");
+            okConn.disconnect();
+
+            boolean tooMany = false;
+            try {
+                java.net.HttpURLConnection failConn = AcidHttp.openConnectionWithRedirects(
+                    "http://127.0.0.1:" + redirPort + "/hop2", "GET", null, 3000, 3000, 2, null, null, null);
+                failConn.disconnect();
+            } catch (IOException expected) {
+                tooMany = true;
+            }
+            assertTrue(tooMany, "openConnectionWithRedirects(..., maxRedirects=2) throws on 3rd redirect");
+        } finally {
+            try { redirServer.close(); } catch (Exception ignored) {}
+        }
+
+        // 4. AcidSandboxTools schema & Error prefix / MCP takeover / tab_id guards
+        JSONArray toolsSchema = AcidSandboxTools.buildToolsSchema();
+        JSONObject browserProps = null;
+        for (int i = 0; i < toolsSchema.length(); i++) {
+            JSONObject toolObj = toolsSchema.optJSONObject(i);
+            JSONObject fnObj = toolObj != null ? toolObj.optJSONObject("function") : null;
+            if (fnObj != null && "browser".equals(fnObj.optString("name"))) {
+                JSONObject params = fnObj.optJSONObject("parameters");
+                browserProps = params != null ? params.optJSONObject("properties") : null;
+                break;
+            }
+        }
+        assertTrue(browserProps != null, "browser schema found");
+        assertTrue(browserProps.has("text_limit"), "browser schema exposes text_limit");
+        assertTrue(browserProps.has("viewport_only"), "browser schema exposes viewport_only");
+        assertTrue(browserProps.has("scope"), "browser schema exposes scope");
+
+        File sbx2Dir = File.createTempFile("acid_r2_sbx_", "_dir");
+        sbx2Dir.delete();
+        sbx2Dir.mkdirs();
+        try {
+            AcidSandboxTools sbx2 = new AcidSandboxTools(null, sbx2Dir);
+            AcidSandboxTools.ToolExecResult takeoverMcp = sbx2.executeTool(
+                "browser",
+                new JSONObject().put("action", "request_takeover").put("reason", "Login check"),
+                AcidSandboxTools.ToolSource.MCP
+            );
+            assertTrue(takeoverMcp.outputText != null && takeoverMcp.outputText.startsWith("Error:"),
+                "MCP request_takeover blocked with Error: prefix");
+
+            AcidSandboxTools.ToolExecResult unknownTool = sbx2.executeTool(
+                "nonexistent_tool", new JSONObject(), AcidSandboxTools.ToolSource.MCP);
+            assertTrue(unknownTool.outputText != null && unknownTool.outputText.startsWith("Error:"),
+                "Unknown tool returns Error: prefix");
+
+            AcidSandboxTools.ToolExecResult missingAction = sbx2.executeTool(
+                "browser", new JSONObject(), AcidSandboxTools.ToolSource.AGENT_UI);
+            assertTrue(missingAction.outputText != null && missingAction.outputText.startsWith("Error:"),
+                "Missing browser action returns Error: prefix");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(sbx2Dir);
+        }
+
+        // 5. UserscriptShaper @unwrap + GM_addStyle & UserscriptDependencyResolver tab @resource
+        UserscriptMeta unwrapCssMeta = UserscriptMeta.parse(
+            "unwrap_css.user.js",
+            "// ==UserScript==\n// @name UnwrapCss\n// @unwrap\n// @grant GM_addStyle\n// ==/UserScript==\nGM_addStyle('body{}');"
+        );
+        assertTrue(unwrapCssMeta.isGranted("GM_addStyle"), "@grant GM_addStyle parsed cleanly");
+        String shapedCssUnwrap = UserscriptShaper.shape(unwrapCssMeta, null, "native_sec_token");
+        assertTrue(shapedCssUnwrap.contains("GM_addStyle"),
+            "@unwrap with shim-only GM_addStyle keeps shim wrapper so GM_addStyle exists");
+        assertTrue(!shapedCssUnwrap.contains("native_sec_token"),
+            "@unwrap with shim-only GM_addStyle keeps native secret empty");
+
+        String resUrlTab = UserscriptDependencyResolver.extractResourceUrl(
+            "myIcon\thttps://cdn.example.com/icons/app.png");
+        assertEquals("https://cdn.example.com/icons/app.png", resUrlTab,
+            "extractResourceUrl splits tab-delimited @resource declaration cleanly");
+
+        // 6. SkillManager path traversal delete guard, multi-line YAML meta, built-in shadowing & URL slug
+        File skWork = File.createTempFile("acid_r2_sk_", "_dir");
+        skWork.delete();
+        skWork.mkdirs();
+        try {
+            File outsideTarget = new File(skWork, "do_not_delete.md");
+            FileOutputStream oos = new FileOutputStream(outsideTarget);
+            oos.write("keep".getBytes(StandardCharsets.UTF_8));
+            oos.close();
+
+            SkillManager sm = new SkillManager(null, skWork);
+            assertTrue(!sm.deleteSkill("../do_not_delete.md"), "deleteSkill rejects parent traversal");
+            assertTrue(outsideTarget.exists(), "External file untouched by blocked deleteSkill");
+            assertTrue(!sm.deleteSkill(SkillManager.SKILL_USERSCRIPT), "deleteSkill rejects built-in skill");
+
+            File yamlDir = new File(sm.getSkillsDir(), "yaml_multi");
+            yamlDir.mkdirs();
+            File yamlFile = new File(yamlDir, "SKILL.md");
+            String yamlDoc = "---\nname: yaml_multi\ndescription: >-\n  First YAML line\n  Second YAML line\n---\n# Body\n";
+            FileOutputStream yos = new FileOutputStream(yamlFile);
+            yos.write(yamlDoc.getBytes(StandardCharsets.UTF_8));
+            yos.close();
+
+            List<SkillManager.SkillMeta> loaded = sm.getSkills();
+            String parsedDesc = null;
+            for (SkillManager.SkillMeta m : loaded) {
+                if ("yaml_multi".equals(m.name)) {
+                    parsedDesc = m.description;
+                    break;
+                }
+            }
+            assertTrue(parsedDesc != null && parsedDesc.contains("First YAML line") && parsedDesc.contains("Second YAML line"),
+                "parseSkillMeta appends multi-line YAML description lines");
+
+            assertEquals("cool-skill-repo",
+                SkillPackageImporter.inferSkillSlugFromUrl("https://github.com/org/cool-skill-repo/archive/refs/heads/main.zip"),
+                "inferSkillSlugFromUrl skips archive/refs/heads/main segments");
+            assertEquals("my-cool-skill",
+                SkillPackageImporter.inferSkillSlugFromUrl("https://raw.githubusercontent.com/org/repo/main/my-cool-skill/SKILL.md"),
+                "inferSkillSlugFromUrl skips SKILL.md and picks parent folder");
+
+            ByteArrayOutputStream shadowBos = new ByteArrayOutputStream();
+            ZipOutputStream szos = new ZipOutputStream(shadowBos);
+            szos.putNextEntry(new ZipEntry("userscript_dev/SKILL.md"));
+            szos.write("# Shadow\nDo not shadow builtin".getBytes(StandardCharsets.UTF_8));
+            szos.closeEntry();
+            szos.close();
+            SkillPackageImporter skImp = new SkillPackageImporter(sm);
+            SkillManager.ImportResult shadowRes = skImp.importFromZipBytes(shadowBos.toByteArray(), "userscript_dev");
+            assertTrue(shadowRes.success, "Built-in name import succeeds by renaming instead of failing or shadowing");
+            assertTrue(shadowRes.skillFileName != null && shadowRes.skillFileName.startsWith("custom_userscript_dev/"),
+                "Built-in slug is prefixed with custom_ to prevent shadowing");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(skWork);
+        }
+
+        // 7. HttpControlServer StartCallback, POST /message 400/404, & strict chunked CRLF/trailer
+        ServerSocket probeSock = new ServerSocket(0, 5, InetAddress.getByName("127.0.0.1"));
+        int mcpPort = probeSock.getLocalPort();
+        probeSock.close();
+
+        HttpControlServer mcpSrv = new HttpControlServer(null, mcpPort);
+        final CountDownLatch startedLatch = new CountDownLatch(1);
+        final boolean[] startOkRef = new boolean[] { false };
+        mcpSrv.start(new HttpControlServer.StartCallback() {
+            @Override
+            public void onStartResult(boolean success, String errorMessage) {
+                startOkRef[0] = success;
+                startedLatch.countDown();
+            }
+        });
+        try {
+            assertTrue(startedLatch.await(5, TimeUnit.SECONDS), "HttpControlServer StartCallback fired promptly");
+            assertTrue(startOkRef[0], "HttpControlServer StartCallback reported successful bind");
+
+            java.net.HttpURLConnection c400 = (java.net.HttpURLConnection)
+                new URL("http://127.0.0.1:" + mcpPort + "/message").openConnection();
+            c400.setRequestMethod("POST");
+            c400.setDoOutput(true);
+            c400.getOutputStream().write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}".getBytes(StandardCharsets.UTF_8));
+            assertEquals(400, Integer.valueOf(c400.getResponseCode()),
+                "POST /message without sessionId returns HTTP 400 before RPC execution");
+            c400.disconnect();
+
+            java.net.HttpURLConnection c404 = (java.net.HttpURLConnection)
+                new URL("http://127.0.0.1:" + mcpPort + "/message?sessionId=unknown_sess").openConnection();
+            c404.setRequestMethod("POST");
+            c404.setDoOutput(true);
+            c404.getOutputStream().write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}".getBytes(StandardCharsets.UTF_8));
+            assertEquals(404, Integer.valueOf(c404.getResponseCode()),
+                "POST /message with unknown sessionId returns HTTP 404 before RPC execution");
+            c404.disconnect();
+        } finally {
+            mcpSrv.stop();
+        }
+
+        byte[] chunkWithTrailer = HttpControlServer.readChunkedBody(
+            new ByteArrayInputStream("5\r\nhello\r\n0\r\nX-Trailer: yes\r\n\r\n".getBytes(StandardCharsets.US_ASCII)),
+            4096);
+        assertEquals("hello", new String(chunkWithTrailer, StandardCharsets.US_ASCII),
+            "readChunkedBody decodes chunk payload followed by trailer headers and final CRLF");
+
+        boolean badCrNoLf = false;
+        try {
+            HttpControlServer.readChunkedBody(
+                new ByteArrayInputStream("1\r\na\rX0\r\n\r\n".getBytes(StandardCharsets.US_ASCII)),
+                4096);
+        } catch (IOException expected) {
+            badCrNoLf = true;
+        }
+        assertTrue(badCrNoLf, "readChunkedBody rejects CR not followed by LF after chunk data");
+
+        boolean unterminatedTrailer = false;
+        try {
+            HttpControlServer.readChunkedBody(
+                new ByteArrayInputStream("5\r\nhello\r\n0\r\nX-Trailer: yes\r\n".getBytes(StandardCharsets.US_ASCII)),
+                4096);
+        } catch (IOException expected) {
+            unterminatedTrailer = true;
+        }
+        assertTrue(unterminatedTrailer, "readChunkedBody rejects EOF before empty trailer terminator line");
+
+        // 8. AdBlockManager Google domain hardening, CSS ~domain exclusion & /regex/ path rules
+        AdBlockManager.RuleSet abRs = new AdBlockManager.RuleSet();
+        assertTrue(!AdBlockManager.isHostWhitelisted("accounts.google.evil.com", abRs),
+            "Rejects multi-label Google account suffix spoof accounts.google.evil.com");
+        assertTrue(!AdBlockManager.isHostWhitelisted("accounts.google.evil-co.xyz", abRs),
+            "Rejects malformed TLD spoof accounts.google.evil-co.xyz");
+        assertTrue(AdBlockManager.isHostWhitelisted("accounts.google.com", abRs),
+            "Allows authentic accounts.google.com");
+        assertTrue(AdBlockManager.isHostWhitelisted("accounts.google.co.uk", abRs),
+            "Allows authentic accounts.google.co.uk");
+
+        assertTrue(AdBlockManager.parseRuleLine("example.com,~sub.example.com##.excl-ad", abRs),
+            "Parses domain CSS rule with ~domain exclusion");
+        String cssMain = AdBlockManager.buildIsolatedElementHidingCss(abRs, "www.example.com");
+        String cssSub = AdBlockManager.buildIsolatedElementHidingCss(abRs, "sub.example.com");
+        assertTrue(cssMain.contains(".excl-ad"), "Non-excluded subdomain receives CSS hiding rule");
+        assertTrue(!cssSub.contains(".excl-ad"), "~sub.example.com excluded from CSS hiding rule");
+
+        assertTrue(AdBlockManager.parseRuleLine("/^https?:\\/\\/ad[0-9]+\\.tracker\\.test\\//", abRs),
+            "Parses regex URL rule containing regex metacharacters");
+        assertTrue(AdBlockManager.isUriBlocked(Uri.parse("https://ad42.tracker.test/p.js"), abRs),
+            "Regex AdBlock rule matches matching numeric subdomain");
+        assertTrue(!AdBlockManager.isUriBlocked(Uri.parse("https://cdn.tracker.test/p.js"), abRs),
+            "Regex AdBlock rule does not false-positive on non-matching host");
+
+        // 9. DownloadCoordinator response-content-disposition URL decoding & filename sanitization
+        String ossUrl = "https://oss.example.com/obj?response-content-disposition="
+            + "attachment%3B%20filename%3D%22..%2F..%2Freport%20v1.pdf%22";
+        String guessedOssName = DownloadCoordinator.smartGuessFileName(ossUrl, null, null);
+        assertEquals("report v1.pdf", guessedOssName,
+            "smartGuessFileName decodes percent-encoded response-content-disposition and strips path traversal");
+        String cleanSanitized = DownloadCoordinator.sanitizeDownloadFileName("../evil\\sub/payload.bin");
+        assertTrue(!cleanSanitized.contains("..") && !cleanSanitized.contains("/") && !cleanSanitized.contains("\\"),
+            "sanitizeDownloadFileName strips directory traversal and separators");
+
+        // 10. AcidFileProvider boundary check rejects parent escapes cleanly
+        File fpDir = File.createTempFile("acid_r2_fp_", "_dir");
+        fpDir.delete();
+        fpDir.mkdirs();
+        try {
+            assertTrue(AcidFileProvider.resolveAndVerifyBoundary(fpDir, "../escape.txt") == null,
+                "AcidFileProvider.resolveAndVerifyBoundary rejects parent directory escape");
+            assertTrue(AcidFileProvider.resolveAndVerifyBoundary(fpDir, "ok.pdf") != null,
+                "AcidFileProvider.resolveAndVerifyBoundary accepts child path inside directory");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(fpDir);
         }
     }
 }

@@ -121,7 +121,15 @@ try {
     if (!details || !details.url) return { abort: function(){} };
     var id = '_acid_xhr_' + _acidRand(10);
     var names = ['onload','onerror','ontimeout','onabort','onprogress','onloadstart','onreadystatechange'];
+    var cleaned = false;
+    var cleanTimer = null;
     var _clean = function() {
+      if (cleaned) return;
+      cleaned = true;
+      if (cleanTimer) {
+        try { clearTimeout(cleanTimer); } catch(e){}
+        cleanTimer = null;
+      }
       names.forEach(function(n) { try { delete window[id + '_' + n]; } catch(e){} });
     };
     var req = {
@@ -152,7 +160,22 @@ try {
       }
     });
     _callHost('xmlhttpRequest', req);
-    return { abort: function() { _clean(); _callHost('abortRequest', { id: id }); } };
+    return {
+      abort: function() {
+        if (typeof details.onabort !== 'function') {
+          _clean();
+        } else {
+          // Keep onabort registered so host-dispatched abort reaches details.onabort before cleanup.
+          names.forEach(function(n) {
+            if (n !== 'onabort') { try { delete window[id + '_' + n]; } catch(e){} }
+          });
+          if (!cleaned && !cleanTimer) {
+            cleanTimer = setTimeout(_clean, 1500);
+          }
+        }
+        _callHost('abortRequest', { id: id });
+      }
+    };
   };
   GM_xmlhttpRequest.UNSENT = 0; GM_xmlhttpRequest.OPENED = 1;
   GM_xmlhttpRequest.HEADERS_RECEIVED = 2; GM_xmlhttpRequest.LOADING = 3; GM_xmlhttpRequest.DONE = 4;

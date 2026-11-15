@@ -12,6 +12,7 @@
     const SOM_OVERLAY_ID = '__acid_som_overlay__';
     let refMap = {};
     let refMetaMap = {};
+    let lastObserveSignature = '';
     let documentRevision = 1;
     let lastMutationTime = Date.now();
     let somEnabled = false;
@@ -171,8 +172,10 @@
     }
 
     function isTopMostAtCenter(el, rect) {
-        const vw = window.innerWidth || document.documentElement.clientWidth;
-        const vh = window.innerHeight || document.documentElement.clientHeight;
+        const doc = el.ownerDocument || document;
+        const win = doc.defaultView || window;
+        const vw = win.innerWidth || (doc.documentElement ? doc.documentElement.clientWidth : 0) || 360;
+        const vh = win.innerHeight || (doc.documentElement ? doc.documentElement.clientHeight : 0) || 640;
         const cx = Math.min(Math.max(rect.left + rect.width / 2, 1), vw - 1);
         const cy = Math.min(Math.max(rect.top + rect.height / 2, 1), vh - 1);
 
@@ -180,9 +183,9 @@
             return true; // Off-screen elements skip occlusion point check
         }
 
-        let root = el.getRootNode ? el.getRootNode() : document;
+        let root = el.getRootNode ? el.getRootNode() : doc;
         if (!root || typeof root.elementFromPoint !== 'function') {
-            root = document;
+            root = doc;
         }
         const hit = root.elementFromPoint(cx, cy);
         if (!hit) return true;
@@ -411,11 +414,14 @@
             : false;
         const marginPx = typeof options.marginPx === 'number' ? options.marginPx : 240;
         const showSom = options.includeSom !== undefined ? !!options.includeSom : somEnabled;
+        const scopeSig = options.selector || options.scope || '';
+        const currentSig = JSON.stringify([viewportOnly, String(scopeSig)]);
 
-        if (offset === 0) {
+        if (offset === 0 || currentSig !== lastObserveSignature) {
             refMap = {};
             refMetaMap = {};
         }
+        lastObserveSignature = currentSig;
         const items = [];
         let totalCandidates = 0;
 
@@ -472,7 +478,7 @@
             return false;
         }
 
-        function walk(node, activeParent) {
+        function walk(node, activeParent, frameOffsetX, frameOffsetY) {
             if (!node) return;
             if (node.nodeType !== Node.ELEMENT_NODE) return;
             if (node.id === SOM_OVERLAY_ID) return;
@@ -481,8 +487,19 @@
             const tag = (el.tagName || '').toLowerCase();
             if (IGNORED_TAGS.has(tag)) return;
 
-            const style = window.getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
+            const fx = frameOffsetX || 0;
+            const fy = frameOffsetY || 0;
+            const ownerWin = (el.ownerDocument && el.ownerDocument.defaultView) ? el.ownerDocument.defaultView : window;
+            const style = (ownerWin && typeof ownerWin.getComputedStyle === 'function' ? ownerWin : window).getComputedStyle(el);
+            const localRect = el.getBoundingClientRect();
+            const rect = {
+                left: localRect.left + fx,
+                top: localRect.top + fy,
+                right: localRect.right + fx,
+                bottom: localRect.bottom + fy,
+                width: localRect.width,
+                height: localRect.height
+            };
             let nextParent = activeParent;
 
             if (isElementVisible(el, rect, style)) {
@@ -490,7 +507,7 @@
                 const inExtendedVp = isInViewport(rect, marginPx);
 
                 if ((!viewportOnly || inExtendedVp) && isElementInteractive(el, style)) {
-                    if (!inVp || isTopMostAtCenter(el, rect)) {
+                    if (!inVp || isTopMostAtCenter(el, localRect)) {
                         const role = (el.getAttribute('role') || '').toLowerCase().trim() || tag;
                         const label = extractElementLabel(el);
 
@@ -503,7 +520,7 @@
                             const currentCandidate = {
                                 tag: tag,
                                 role: role,
-                                label: cleanText(label, 80),
+                                label: label,
                                 box: {
                                     x: Math.round(rect.left),
                                     y: Math.round(rect.top),
@@ -522,7 +539,7 @@
                                 refMetaMap[ref] = {
                                     tag: tag,
                                     role: role,
-                                    label: cleanText(label, 80),
+                                    label: label,
                                     id: el.id || '',
                                     className: (el.className || '').toString().trim(),
                                     name: el.getAttribute('name') || '',
@@ -609,7 +626,7 @@
             const shadow = el.shadowRoot || el.__acidShadowRoot;
             if (shadow && shadow.children) {
                 for (let s = 0; s < shadow.children.length; s++) {
-                    walk(shadow.children[s], nextParent);
+                    walk(shadow.children[s], nextParent, fx, fy);
                 }
             }
 
@@ -618,7 +635,7 @@
                 try {
                     const doc = el.contentDocument;
                     if (doc && doc.body) {
-                        walk(doc.body, nextParent);
+                        walk(doc.body, nextParent, rect.left, rect.top);
                     }
                 } catch (e) {}
             }
@@ -626,7 +643,7 @@
             const children = el.children;
             if (children) {
                 for (let i = 0; i < children.length; i++) {
-                    walk(children[i], nextParent);
+                    walk(children[i], nextParent, fx, fy);
                 }
             }
         }
@@ -645,7 +662,7 @@
         }
 
         if (rootNode) {
-            walk(rootNode, null);
+            walk(rootNode, null, 0, 0);
         }
 
         // Expose self-healing window.__refs for direct access via eval
@@ -664,11 +681,11 @@
 
         // Clear overlay before extracting body text so SoM badge numbers are not included in page excerpt
         clearSomOverlay();
-        const fullBodyText = document.body ? (document.body.innerText || '') : '';
-        const totalTextChars = fullBodyText.length;
+        const normalizedBodyText = cleanText(document.body ? (document.body.innerText || '') : '');
+        const totalTextChars = normalizedBodyText.length;
         const textOffset = typeof options.textOffset === 'number' && options.textOffset >= 0 ? Math.floor(options.textOffset) : 0;
         const textLimit = typeof options.textLimit === 'number' && options.textLimit > 0 ? Math.floor(options.textLimit) : 1200;
-        const slicedText = cleanText(fullBodyText.slice(textOffset, textOffset + textLimit), textLimit);
+        const slicedText = normalizedBodyText.slice(textOffset, textOffset + textLimit);
 
         if (showSom) {
             renderSomOverlay(items);
@@ -805,25 +822,39 @@
                 if (byId && byId.isConnected) return byId;
             } catch (e) {}
         }
+        const validTag = meta.tag && /^[a-z0-9-]+$/i.test(meta.tag) ? meta.tag : '';
         if (meta.href) {
             try {
-                const byHref = document.querySelector('[href=' + JSON.stringify(meta.href) + ']');
-                if (byHref && byHref.isConnected) return byHref;
+                const sel = (validTag || '') + '[href=' + JSON.stringify(meta.href) + ']';
+                const candidates = document.querySelectorAll(sel);
+                for (let i = 0; i < candidates.length; i++) {
+                    const byHref = candidates[i];
+                    if (!byHref || !byHref.isConnected) continue;
+                    if (!meta.label || extractElementLabel(byHref) === meta.label) return byHref;
+                }
+                if (candidates.length === 1 && candidates[0].isConnected) return candidates[0];
             } catch (e) {}
         }
         if (meta.name) {
             try {
-                const byName = document.querySelector('[name=' + JSON.stringify(meta.name) + ']');
-                if (byName && byName.isConnected) return byName;
+                const sel = (validTag || '') + '[name=' + JSON.stringify(meta.name) + ']';
+                const candidates = document.querySelectorAll(sel);
+                for (let i = 0; i < candidates.length; i++) {
+                    const byName = candidates[i];
+                    if (!byName || !byName.isConnected) continue;
+                    if (!meta.label || extractElementLabel(byName) === meta.label) return byName;
+                }
+                if (candidates.length === 1 && candidates[0].isConnected) return candidates[0];
             } catch (e) {}
         }
         if (meta.label && meta.label.length >= 2) {
-            const candidates = document.querySelectorAll(meta.tag || 'button, a, div, span, input');
+            const candidates = document.querySelectorAll(validTag || 'button, a, div, span, input');
+            const want = cleanText(meta.label, 80);
             for (let i = 0; i < candidates.length; i++) {
                 const c = candidates[i];
                 if (!c.isConnected) continue;
                 const cLabel = extractElementLabel(c).trim();
-                if (cLabel === meta.label) {
+                if (cLabel === meta.label || (want && cleanText(cLabel, 80) === want)) {
                     return c;
                 }
             }
@@ -946,6 +977,34 @@
         };
     }
 
+    function getElementViewportRect(el) {
+        let rect = el.getBoundingClientRect();
+        let left = rect.left;
+        let top = rect.top;
+        let curWin = el.ownerDocument ? el.ownerDocument.defaultView : window;
+        while (curWin && curWin !== window) {
+            let frameEl = null;
+            try {
+                frameEl = curWin.frameElement;
+            } catch (e) {
+                break;
+            }
+            if (!frameEl) break;
+            const fRect = frameEl.getBoundingClientRect();
+            left += fRect.left;
+            top += fRect.top;
+            curWin = frameEl.ownerDocument ? frameEl.ownerDocument.defaultView : null;
+        }
+        return {
+            left: left,
+            top: top,
+            right: left + rect.width,
+            bottom: top + rect.height,
+            width: rect.width,
+            height: rect.height
+        };
+    }
+
     // 9. Prepare Element for Native Touch / Click
     function prepareClick(targetOpts) {
         const resolved = resolveTargetElement(targetOpts);
@@ -956,16 +1015,17 @@
         const ref = resolved.ref || 'target';
 
         const vh = window.innerHeight || document.documentElement.clientHeight || 640;
-        let rect = el.getBoundingClientRect();
+        let rect = getElementViewportRect(el);
         if (rect.top < vh * 0.1 || rect.bottom > vh * 0.9) {
             try {
                 el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
             } catch (e) {
                 el.scrollIntoView(true);
             }
-            rect = el.getBoundingClientRect();
+            rect = getElementViewportRect(el);
         }
 
+        const localRect = el.getBoundingClientRect();
         const cssX = rect.left + rect.width / 2;
         const cssY = rect.top + rect.height / 2;
         const vv = window.visualViewport;
@@ -974,7 +1034,8 @@
         const offsetTop = vv ? vv.offsetTop : 0;
         const label = extractElementLabel(el);
 
-        const hitEl = document.elementFromPoint(cssX, cssY);
+        const doc = el.ownerDocument || document;
+        const hitEl = doc.elementFromPoint(localRect.left + localRect.width / 2, localRect.top + localRect.height / 2);
         const occluded = !!(hitEl && hitEl !== el && !el.contains(hitEl) && !hitEl.contains(el));
         const activeTagBefore = document.activeElement ? (document.activeElement.tagName || '').toLowerCase() : '';
         const activeIdBefore = document.activeElement ? (document.activeElement.id || '') : '';

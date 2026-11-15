@@ -80,7 +80,7 @@ public final class HttpProbe {
             CONNECT_TIMEOUT_MS,
             READ_TIMEOUT_MS,
             MAX_REDIRECTS,
-            null,
+            AcidHttp.createDownloadValidator(initialUrl),
             AcidHttp.DOWNLOAD_CREDENTIALS,
             new AcidHttp.RedirectListener() {
                 @Override

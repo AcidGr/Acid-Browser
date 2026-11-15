@@ -58,14 +58,28 @@ public class AdBlockManager {
      * Immutable-after-publish snapshot of parsed ABP rules so WebView IO threads can read
      * concurrently with zero locking, zero empty-window flicker, and zero index-bounds races.
      */
+    static final class CssHidingRule {
+        final Set<String> includedDomains;
+        final Set<String> excludedDomains;
+        final String selector;
+
+        CssHidingRule(Set<String> includedDomains, Set<String> excludedDomains, String selector) {
+            this.includedDomains = includedDomains;
+            this.excludedDomains = excludedDomains;
+            this.selector = selector;
+        }
+    }
+
     static final class RuleSet {
         final Set<String> blockedDomains = new HashSet<String>();
         final Set<String> whiteListDomains = new HashSet<String>();
         final Map<String, List<String>> domainBlockedPaths = new HashMap<String, List<String>>();
         final Map<String, List<String>> domainWhiteListPaths = new HashMap<String, List<String>>();
         final List<String> pathPatterns = new ArrayList<String>();
+        final List<java.util.regex.Pattern> regexPatterns = new ArrayList<java.util.regex.Pattern>();
         final Map<String, List<String>> domainElementHiding = new HashMap<String, List<String>>();
         final List<String> globalElementHiding = new ArrayList<String>();
+        final List<CssHidingRule> negatedElementHiding = new ArrayList<CssHidingRule>();
     }
 
     private final Context mContext;
@@ -75,6 +89,7 @@ public class AdBlockManager {
 
     private final AtomicInteger mBlockedCount = new AtomicInteger(0);
     private final Object mBlockedPersistLock = new Object();
+    private final Object mFilesLock = new Object();
     private volatile int mPersistedBlockedCount = -1;
     private volatile boolean mEnabled = true;
 
@@ -82,7 +97,7 @@ public class AdBlockManager {
     private volatile int mSubCount = 0;
     private volatile int mCustomCount = 0;
 
-    private File mAdBlockDir;
+    private volatile File mAdBlockDir;
     public static synchronized AdBlockManager init(Context context, File workspaceDir, BrowserDataStore dataStore) {
         if (sInstance == null) {
             Context appCtx = context.getApplicationContext();
@@ -98,8 +113,8 @@ public class AdBlockManager {
         return sInstance;
     }
 
-    private File mCustomRulesFile;
-    private File mSubscriptionFile;
+    private volatile File mCustomRulesFile;
+    private volatile File mSubscriptionFile;
 
     private AdBlockManager(Context context) {
         this(context, null, null);
@@ -307,22 +322,32 @@ public class AdBlockManager {
 
         // 2. Load online subscription rules if present
         int sub = 0;
-        if (mSubscriptionFile != null && mSubscriptionFile.exists()) {
-            try {
-                sub = loadRulesFromStream(new FileInputStream(mSubscriptionFile), next);
-            } catch (Exception e) {
-                Log.w(TAG, "Could not load subscriptions.txt: " + e.getMessage());
+        File subFile = mSubscriptionFile;
+        if (subFile != null) {
+            synchronized (mFilesLock) {
+                if (subFile.exists()) {
+                    try {
+                        sub = loadRulesFromStream(new FileInputStream(subFile), next);
+                    } catch (Exception e) {
+                        Log.w(TAG, "Could not load subscriptions.txt: " + e.getMessage());
+                    }
+                }
             }
         }
         mSubCount = sub;
 
         // 3. Load custom rules
         int custom = 0;
-        if (mCustomRulesFile != null && mCustomRulesFile.exists()) {
-            try {
-                custom = loadRulesFromStream(new FileInputStream(mCustomRulesFile), next);
-            } catch (Exception e) {
-                Log.w(TAG, "Could not load custom_rules.txt: " + e.getMessage());
+        File customFile = mCustomRulesFile;
+        if (customFile != null) {
+            synchronized (mFilesLock) {
+                if (customFile.exists()) {
+                    try {
+                        custom = loadRulesFromStream(new FileInputStream(customFile), next);
+                    } catch (Exception e) {
+                        Log.w(TAG, "Could not load custom_rules.txt: " + e.getMessage());
+                    }
+                }
             }
         }
         mCustomCount = custom;
@@ -433,20 +458,31 @@ public class AdBlockManager {
                 return true;
             }
             String[] doms = domainPart.split(",");
-            boolean addedAny = false;
-            boolean hasNegationOnly = true;
+            Set<String> included = new HashSet<String>();
+            Set<String> excluded = new HashSet<String>();
             for (int i = 0; i < doms.length; i++) {
                 String d = doms[i].trim().toLowerCase(Locale.ROOT);
                 if (d.isEmpty()) continue;
-                if (d.startsWith("~")) continue; // Skip negated domain tokens instead of storing "~domain"
-                hasNegationOnly = false;
-                addScopedEntry(out.domainElementHiding, d, selector);
-                addedAny = true;
+                if (d.startsWith("~")) {
+                    String neg = d.substring(1).trim();
+                    if (!neg.isEmpty() && !isPublicSuffixOrTld(neg)) {
+                        excluded.add(neg);
+                    }
+                } else {
+                    included.add(d);
+                }
             }
-            if (hasNegationOnly) {
+            if (included.isEmpty() && excluded.isEmpty()) {
                 return false;
             }
-            return addedAny;
+            if (excluded.isEmpty()) {
+                for (String d : included) {
+                    addScopedEntry(out.domainElementHiding, d, selector);
+                }
+            } else {
+                out.negatedElementHiding.add(new CssHidingRule(included, excluded, selector));
+            }
+            return true;
         }
 
         // Reject network filter options ($...) such as $domain=, $third-party/$3p, $image, $script,
@@ -469,8 +505,20 @@ public class AdBlockManager {
             return parseDomainAnchorRule(line.substring(2), out.blockedDomains, out.domainBlockedPaths);
         }
 
-        // 4. Path pattern /pattern/
+        // 4. Path or regex pattern /pattern/
         if (line.startsWith("/") && line.endsWith("/") && line.length() > 2) {
+            String inner = line.substring(1, line.length() - 1);
+            if (looksLikeRegexPattern(inner)) {
+                if (inner.length() > 256) {
+                    return false;
+                }
+                try {
+                    out.regexPatterns.add(java.util.regex.Pattern.compile(inner, java.util.regex.Pattern.CASE_INSENSITIVE));
+                    return true;
+                } catch (Exception ignored) {
+                    return false;
+                }
+            }
             // Preserve slash boundaries (e.g. "/ads/") so substring matching never collaterally
             // blocks legitimate URLs containing words like "downloads" or "uploads".
             out.pathPatterns.add(line.toLowerCase(Locale.ROOT));
@@ -588,6 +636,54 @@ public class AdBlockManager {
         return isHostWhitelisted(host, mRules);
     }
 
+    private static boolean looksLikeRegexPattern(String inner) {
+        if (inner == null || inner.isEmpty()) return false;
+        for (int i = 0; i < inner.length(); i++) {
+            char ch = inner.charAt(i);
+            if (ch == '\\' || ch == '(' || ch == '[' || ch == '^' || ch == '$'
+                || ch == '+' || ch == '?' || ch == '|' || ch == '*' || ch == '{') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isAsciiLowerTwoLetters(String s) {
+        if (s == null || s.length() != 2) return false;
+        char c0 = s.charAt(0);
+        char c1 = s.charAt(1);
+        return c0 >= 'a' && c0 <= 'z' && c1 >= 'a' && c1 <= 'z';
+    }
+
+    private static boolean isValidGoogleTldSuffix(String suffix) {
+        if (suffix == null || suffix.isEmpty()) return false;
+        if ("com".equals(suffix) || isAsciiLowerTwoLetters(suffix)) {
+            return true;
+        }
+        if (suffix.startsWith("co.") || suffix.startsWith("com.")) {
+            int dot = suffix.indexOf('.');
+            return isAsciiLowerTwoLetters(suffix.substring(dot + 1));
+        }
+        return false;
+    }
+
+    private static boolean isGoogleAccountHost(String host, String servicePrefix) {
+        // Matches "<servicePrefix>.<validGoogleTld>" or "<sub...>.<servicePrefix>.<validGoogleTld>"
+        String fullPrefix = servicePrefix + ".";
+        int idx = -1;
+        if (host.startsWith(fullPrefix)) {
+            idx = 0;
+        } else {
+            int subIdx = host.indexOf("." + fullPrefix);
+            if (subIdx > 0) {
+                idx = subIdx + 1;
+            }
+        }
+        if (idx < 0) return false;
+        String suffix = host.substring(idx + fullPrefix.length());
+        return isValidGoogleTldSuffix(suffix);
+    }
+
     static boolean isHostWhitelisted(String host, RuleSet rules) {
         if (host == null) return false;
         String cur = host.toLowerCase(Locale.ROOT).trim();
@@ -597,10 +693,8 @@ public class AdBlockManager {
         if (equalsHostOrSubdomain(cur, "apis.google.com")
             || equalsHostOrSubdomain(cur, "gstatic.com")
             || equalsHostOrSubdomain(cur, "googleusercontent.com")
-            || cur.startsWith("accounts.google.")
-            || cur.contains(".accounts.google.")
-            || cur.startsWith("myaccount.google.")
-            || cur.contains(".myaccount.google.")) {
+            || isGoogleAccountHost(cur, "accounts.google")
+            || isGoogleAccountHost(cur, "myaccount.google")) {
             return true;
         }
         return rules != null && matchesDomainHierarchy(cur, rules.whiteListDomains);
@@ -624,8 +718,9 @@ public class AdBlockManager {
             return false;
         }
 
-        String uriStr = uri.toString().toLowerCase(Locale.ROOT);
-        String pathAndQuery = extractPathAndQueryLower(uriStr);
+        String uriStr = uri.toString();
+        String uriLower = uriStr.toLowerCase(Locale.ROOT);
+        String pathAndQuery = extractPathAndQueryLower(uriLower);
 
         // 1. Scoped path exception (e.g. @@||bing.com/fd/ls/GLinkPing.aspx?)
         if (matchesDomainScopedPath(host, pathAndQuery, rules.domainWhiteListPaths)) {
@@ -642,10 +737,16 @@ public class AdBlockManager {
             return true;
         }
 
-        // 4. Global URL path patterns
+        // 4. Global URL path patterns & ABP regex patterns
         List<String> patterns = rules.pathPatterns;
         for (int i = 0; i < patterns.size(); i++) {
-            if (uriStr.contains(patterns.get(i))) {
+            if (uriLower.contains(patterns.get(i))) {
+                return true;
+            }
+        }
+        List<java.util.regex.Pattern> regexes = rules.regexPatterns;
+        for (int i = 0; i < regexes.size(); i++) {
+            if (regexes.get(i).matcher(uriStr).find()) {
                 return true;
             }
         }
@@ -746,6 +847,20 @@ public class AdBlockManager {
                     cur = cur.substring(dot + 1);
                 }
             }
+            List<CssHidingRule> negated = rules.negatedElementHiding;
+            if (negated != null && !negated.isEmpty()) {
+                for (int i = 0; i < negated.size(); i++) {
+                    CssHidingRule rule = negated.get(i);
+                    if (rule == null || !isSafeCssSelector(rule.selector)) continue;
+                    boolean included = rule.includedDomains.isEmpty()
+                        || (host != null && matchesDomainHierarchy(host, rule.includedDomains));
+                    if (!included) continue;
+                    if (host != null && matchesDomainHierarchy(host, rule.excludedDomains)) {
+                        continue;
+                    }
+                    css.append(rule.selector).append(decl);
+                }
+            }
         }
         // General fallback mobile cleanup selectors
         css.append(".ads, .ad-banner, .advertisement, [id^='ad_'], [id^='ad-'], [class*='app-open']").append(decl);
@@ -780,13 +895,20 @@ public class AdBlockManager {
     }
 
     public String getCustomRulesText() {
-        return AcidIo.readFileUtf8OrEmpty(mCustomRulesFile, AcidHttp.DEFAULT_MAX_BYTES);
+        File customFile = mCustomRulesFile;
+        if (customFile == null) return "";
+        synchronized (mFilesLock) {
+            return AcidIo.readFileUtf8OrEmpty(customFile, AcidHttp.DEFAULT_MAX_BYTES);
+        }
     }
 
     public boolean saveCustomRulesText(String text) {
-        if (mCustomRulesFile == null) return false;
-        if (!AcidIo.writeFileUtf8Safe(mCustomRulesFile, text)) {
-            return false;
+        File customFile = mCustomRulesFile;
+        if (customFile == null) return false;
+        synchronized (mFilesLock) {
+            if (!AcidIo.writeFileUtf8Safe(customFile, text)) {
+                return false;
+            }
         }
         loadAllRulesSync();
         return true;
@@ -798,10 +920,29 @@ public class AdBlockManager {
 
     public void downloadSubscription(final String urlStr, final AdBlockCallback callback) {
         setSubscriptionUrl(urlStr);
+        final File targetSubFile = mSubscriptionFile;
         AcidAsync.run(new AcidAsync.Task<Integer>() {
             @Override
             public Integer execute() throws Exception {
-                AcidHttp.downloadToFile(urlStr, mSubscriptionFile, 15000, 20000, AcidHttp.DEFAULT_MAX_BYTES);
+                if (targetSubFile == null) {
+                    throw new java.io.IOException("Subscription file unavailable");
+                }
+                File parent = targetSubFile.getParentFile();
+                if (parent != null && !parent.exists()) {
+                    parent.mkdirs();
+                }
+                File tmp = new File(parent, targetSubFile.getName() + ".tmp");
+                try {
+                    AcidHttp.downloadToFile(urlStr, tmp, 15000, 20000, AcidHttp.DEFAULT_MAX_BYTES);
+                    File dest = mSubscriptionFile != null ? mSubscriptionFile : targetSubFile;
+                    synchronized (mFilesLock) {
+                        AcidIo.copyFile(tmp, dest);
+                    }
+                } finally {
+                    if (tmp.exists()) {
+                        try { tmp.delete(); } catch (Exception ignored) {}
+                    }
+                }
                 loadAllRulesSync();
                 return Integer.valueOf(mBuiltinCount + mSubCount + mCustomCount);
             }

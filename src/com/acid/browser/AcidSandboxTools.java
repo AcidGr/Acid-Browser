@@ -160,6 +160,9 @@ public class AcidSandboxTools {
                 browserProps.put("offset", prop("integer", "0-based element offset for pagination in 'observe' (default 0)."));
                 browserProps.put("limit", prop("integer", "Maximum number of interactive elements to return in 'observe' (default 180)."));
                 browserProps.put("text_offset", prop("integer", "0-based character offset for reading page body text excerpt in 'observe' (default 0)."));
+                browserProps.put("text_limit", prop("integer", "Maximum character count for body text excerpt in 'observe' (default 1200)."));
+                browserProps.put("viewport_only", prop("boolean", "When true in 'observe', return only interactive elements currently inside the viewport (default false)."));
+                browserProps.put("scope", prop("string", "Optional semantic scope hint for 'observe'."));
 
                 return makeTool(
                     "browser",
@@ -408,7 +411,7 @@ public class AcidSandboxTools {
         try {
             return tool.execute(this, args, source);
         } catch (Exception e) {
-            return new ToolExecResult("Tool execution exception (" + name + "): " + e.getMessage(), false, null);
+            return new ToolExecResult("Error: Tool execution exception (" + name + "): " + e.getMessage(), false, null);
         }
     }
 
@@ -480,6 +483,9 @@ public class AcidSandboxTools {
         }
 
         if ("click".equals(action)) {
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             JSONObject clickRes;
             if (args.has("x") && args.has("y")) {
                 clickRes = driver.clickCoordinateSync((float) args.optDouble("x", 0), (float) args.optDouble("y", 0));
@@ -500,6 +506,9 @@ public class AcidSandboxTools {
         }
 
         if ("fill".equals(action)) {
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             String text = args.optString("text", "");
             boolean clear = args.optBoolean("clear", true);
             boolean submit = args.optBoolean("submit", false);
@@ -517,6 +526,9 @@ public class AcidSandboxTools {
         }
 
         if ("select".equals(action)) {
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             String ref = args.optString("ref", "").trim();
             String text = args.optString("text", "");
             JSONObject selRes = driver.selectOptionSync(ref, text);
@@ -526,6 +538,9 @@ public class AcidSandboxTools {
         }
 
         if ("scroll".equals(action)) {
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             String dir = args.optString("direction", "down");
             double amount = args.optDouble("amount", 0.75);
             String ref = args.optString("ref", null);
@@ -537,6 +552,9 @@ public class AcidSandboxTools {
         }
 
         if ("wait".equals(action)) {
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             String cond = args.optString("condition", "stable");
             String target = args.has("selector") ? args.optString("selector") : (args.has("text") ? args.optString("text") : null);
             long quietMs = args.optLong("quiet_ms", 300);
@@ -557,6 +575,9 @@ public class AcidSandboxTools {
         }
 
         if ("eval".equals(action)) {
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             String code = args.optString("code", "");
             long timeout = args.optLong("timeout_ms", 10000);
             String raw = driver.evaluateJsAsync(code, timeout);
@@ -575,6 +596,9 @@ public class AcidSandboxTools {
             if (source != ToolSource.AGENT_UI && isUserscriptDownloadTarget(url, customFileName)) {
                 return new ToolExecResult("Error: downloading userscripts is not permitted through the MCP gateway.", false, null);
             }
+            if (mController == null) {
+                return new ToolExecResult("Error: Browser controller unavailable", false, null);
+            }
             String customUa = args.optString("user_agent", "").trim();
             if (customUa.isEmpty()) customUa = null;
             long contentLength = args.optLong("size", -1);
@@ -589,19 +613,25 @@ public class AcidSandboxTools {
         }
 
         if ("set_mode".equals(action)) {
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             final CountDownLatch latch = new CountDownLatch(1);
             runOnMain(new Runnable() {
                 @Override
                 public void run() {
-                    if (args.has("mode")) {
-                        String m = args.optString("mode", "mobile").toLowerCase();
-                        boolean desktop = "desktop".equals(m) || "pc".equals(m);
-                        mController.setDesktopMode(desktop, true);
+                    try {
+                        if (args.has("mode")) {
+                            String m = args.optString("mode", "mobile").toLowerCase();
+                            boolean desktop = "desktop".equals(m) || "pc".equals(m);
+                            mController.setDesktopMode(desktop, true);
+                        }
+                        if (args.has("som")) {
+                            mController.setSomEnabled(args.optBoolean("som", false));
+                        }
+                    } finally {
+                        latch.countDown();
                     }
-                    if (args.has("som")) {
-                        mController.setSomEnabled(args.optBoolean("som", false));
-                    }
-                    latch.countDown();
                 }
             });
             latch.await(2000, TimeUnit.MILLISECONDS);
@@ -629,37 +659,52 @@ public class AcidSandboxTools {
             } else {
                 validatedNewTabUrl = BrowserController.HOME_URL;
             }
+            final int explicitTabId = ("switch".equals(sub) || "close".equals(sub))
+                ? args.optInt("tab_id", -1)
+                : -1;
+            if (("switch".equals(sub) || "close".equals(sub)) && explicitTabId <= 0) {
+                return new ToolExecResult("Error: browser(action='tabs', tab_action='" + sub + "') requires an explicit positive 'tab_id'.", false, null);
+            }
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
+            final boolean isAgentUi = (source == ToolSource.AGENT_UI);
+            if (!isAgentUi
+                && ("new".equals(sub) || "switch".equals(sub) || "close".equals(sub))
+                && mController.getAgentBoundTabId() > 0) {
+                return new ToolExecResult("Error: modifying tabs via MCP is blocked while an in-app Agent session owns a bound tab.", false, null);
+            }
             final CountDownLatch latch = new CountDownLatch(1);
             runOnMain(new Runnable() {
                 @Override
                 public void run() {
-                    boolean isWatching = (mController != null
-                        && mController.getActiveTab() != null
-                        && mController.getActiveTab().id == mController.getAgentBoundTabId());
+                    try {
+                        boolean isWatching = isAgentUi
+                            && mController.getActiveTab() != null
+                            && mController.getActiveTab().id == mController.getAgentBoundTabId();
 
-                    if ("new".equals(sub)) {
-                        BrowserController.TabSession created = mController.createNewTab(
-                            validatedNewTabUrl,
-                            isWatching
-                        );
-                        if (created != null) {
-                            mController.setAgentBoundTabId(created.id);
-                        }
-                    } else if ("switch".equals(sub)) {
-                        int targetId = args.optInt("tab_id", 1);
-                        if (isWatching) {
-                            if (mController.switchToTab(targetId)) {
-                                mController.setAgentBoundTabId(targetId);
+                        if ("new".equals(sub)) {
+                            BrowserController.TabSession created = mController.createNewTab(
+                                validatedNewTabUrl,
+                                !isAgentUi || isWatching
+                            );
+                            if (isAgentUi && created != null) {
+                                mController.setAgentBoundTabId(created.id);
                             }
-                        } else {
-                            if (mController.getTabById(targetId) != null) {
-                                mController.setAgentBoundTabId(targetId);
+                        } else if ("switch".equals(sub)) {
+                            if (!isAgentUi || isWatching) {
+                                if (mController.switchToTab(explicitTabId) && isAgentUi) {
+                                    mController.setAgentBoundTabId(explicitTabId);
+                                }
+                            } else if (mController.getTabById(explicitTabId) != null) {
+                                mController.setAgentBoundTabId(explicitTabId);
                             }
+                        } else if ("close".equals(sub)) {
+                            mController.closeTab(explicitTabId);
                         }
-                    } else if ("close".equals(sub)) {
-                        mController.closeTab(args.optInt("tab_id", 1));
+                    } finally {
+                        latch.countDown();
                     }
-                    latch.countDown();
                 }
             });
             latch.await(2000, TimeUnit.MILLISECONDS);
@@ -679,20 +724,26 @@ public class AcidSandboxTools {
         }
 
         if ("back".equals(action) || "reload".equals(action)) {
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
             final boolean isBack = "back".equals(action);
             final CountDownLatch latch = new CountDownLatch(1);
             runOnMain(new Runnable() {
                 @Override
                 public void run() {
-                    BrowserController.TabSession tab = mController.getTargetTab();
-                    if (tab != null) {
-                        if (isBack && tab.webView.canGoBack()) {
-                            tab.webView.goBack();
-                        } else if (!isBack) {
-                            tab.webView.reload();
+                    try {
+                        BrowserController.TabSession tab = mController.getTargetTab();
+                        if (tab != null && tab.webView != null) {
+                            if (isBack && tab.webView.canGoBack()) {
+                                tab.webView.goBack();
+                            } else if (!isBack) {
+                                tab.webView.reload();
+                            }
                         }
+                    } finally {
+                        latch.countDown();
                     }
-                    latch.countDown();
                 }
             });
             latch.await(2000, TimeUnit.MILLISECONDS);
@@ -702,6 +753,12 @@ public class AcidSandboxTools {
         }
 
         if ("request_takeover".equals(action)) {
+            if (source != ToolSource.AGENT_UI) {
+                return new ToolExecResult("Error: request_takeover is only permitted from the in-app agent chat, not through the MCP gateway.", false, null);
+            }
+            if (mController == null) {
+                return new ToolExecResult("Error: Browser controller unavailable", false, null);
+            }
             final String reason = args.optString("reason", "需要人工协助完成当前页面操作（如登录或验证码）");
             runOnMain(new Runnable() {
                 @Override
@@ -716,7 +773,7 @@ public class AcidSandboxTools {
             );
         }
 
-        return new ToolExecResult("Unknown browser action: " + action, false, null);
+        return new ToolExecResult("Error: Unknown browser action: " + action, false, null);
     }
 
     private JSONObject cleanReceipt(JSONObject r) {
@@ -899,7 +956,7 @@ public class AcidSandboxTools {
             }
             return sb.toString();
         } catch (Exception e) {
-            return "Error reading file: " + e.getMessage();
+            return "Error: reading file: " + e.getMessage();
         }
     }
 
@@ -931,7 +988,7 @@ public class AcidSandboxTools {
             return "Successfully wrote " + content.length() + " characters to " + f.getAbsolutePath() +
                 " (Accessible in browser via: file://" + f.getAbsolutePath() + ")";
         } catch (Exception e) {
-            return "Error writing file: " + e.getMessage();
+            return "Error: writing file: " + e.getMessage();
         }
     }
 
@@ -1007,7 +1064,7 @@ public class AcidSandboxTools {
         if (store == null) return;
         String name = f.getName();
         if ("settings.json".equals(name)) {
-            final boolean reloaded = store.reloadFromJsonFile();
+            final boolean reloaded = store.reloadFromJsonFile(true);
             if (reloaded) {
                 runOnMain(new Runnable() {
                     @Override
@@ -1018,11 +1075,11 @@ public class AcidSandboxTools {
                 });
             }
         } else if ("bookmarks.json".equals(name)) {
-            if (store.reloadBookmarksFromJsonFile()) {
+            if (store.reloadBookmarksFromJsonFile(true)) {
                 log("[BOOKMARKS] Live hot-reloaded bookmarks from bookmarks.json");
             }
         } else if ("history.json".equals(name)) {
-            if (store.reloadHistoryFromJsonFile()) {
+            if (store.reloadHistoryFromJsonFile(true)) {
                 log("[HISTORY] Live hot-reloaded history from history.json");
             }
         }
@@ -1171,7 +1228,7 @@ public class AcidSandboxTools {
             notifyWorkspaceFileMutated(f);
             return "Successfully edited " + f.getAbsolutePath();
         } catch (Exception e) {
-            return "Error editing file: " + e.getMessage();
+            return "Error: editing file: " + e.getMessage();
         }
     }
 
@@ -1239,7 +1296,7 @@ public class AcidSandboxTools {
                 synchronized (baosLock) {
                     partialOut = new String(baos.toByteArray(), StandardCharsets.UTF_8);
                 }
-                return "[timeout after " + timeoutMs + "ms]\n" + partialOut;
+                return "Error: [timeout after " + timeoutMs + "ms]\n" + partialOut;
             }
             readerThread.join(1000);
             int code = proc.exitValue();
@@ -1253,9 +1310,9 @@ public class AcidSandboxTools {
             return out + "\n[exit code: " + code + "]";
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            return "Error executing bash command: interrupted\n[exit code: -1]";
+            return "Error: executing bash command: interrupted\n[exit code: -1]";
         } catch (Exception e) {
-            return "Error executing bash command: " + e.getMessage() + "\n[exit code: -1]";
+            return "Error: executing bash command: " + e.getMessage() + "\n[exit code: -1]";
         } finally {
             AcidIo.closeQuietly(stdoutStream);
             if (proc != null) {

@@ -624,17 +624,19 @@ public class SkillManager {
      * Deletes a third-party skill (flat file or entire directory package). Builtin skills cannot be deleted.
      */
     public synchronized boolean deleteSkill(String fileName) {
-        if (isBuiltin(fileName)) {
-            Log.w(TAG, "Cannot delete builtin skill: " + fileName);
-            return false;
-        }
         if (fileName == null || fileName.trim().isEmpty()) return false;
         String clean = fileName.trim().replace('\\', '/');
         while (clean.startsWith("/")) clean = clean.substring(1);
+        if (clean.startsWith("./")) clean = clean.substring(2);
         if (clean.startsWith("skills/")) clean = clean.substring(7);
+        while (clean.endsWith("/")) clean = clean.substring(0, clean.length() - 1);
 
         if (clean.isEmpty() || ".".equals(clean) || "..".equals(clean)
             || clean.startsWith("../") || clean.contains("/../") || clean.endsWith("/..")) {
+            return false;
+        }
+        if (isBuiltin(clean) || isBuiltin(clean + ".md")) {
+            Log.w(TAG, "Cannot delete builtin skill: " + fileName);
             return false;
         }
 
@@ -769,8 +771,9 @@ public class SkillManager {
         String mdTitle = "";
         String mdDesc = "";
 
+        BufferedReader br = null;
         try {
-            BufferedReader br = new BufferedReader(
+            br = new BufferedReader(
                 new InputStreamReader(new FileInputStream(entryFile), StandardCharsets.UTF_8)
             );
             List<String> lines = new ArrayList<String>();
@@ -778,7 +781,8 @@ public class SkillManager {
             while ((l = br.readLine()) != null && lines.size() < 80) {
                 lines.add(l);
             }
-            br.close();
+            AcidIo.closeQuietly(br);
+            br = null;
 
             int idx = 0;
             // Skip leading blank lines or BOM
@@ -800,7 +804,7 @@ public class SkillManager {
                     idx++;
 
                     if ("---".equals(trimmed) || "...".equals(trimmed)) {
-                        if ("description".equals(activeKey) && yamlDesc.isEmpty()) {
+                        if ("description".equals(activeKey) && multiVal.length() > 0) {
                             yamlDesc = multiVal.toString().trim();
                         }
                         break;
@@ -816,7 +820,7 @@ public class SkillManager {
                     }
 
                     // Flush previous multi-line key if any
-                    if ("description".equals(activeKey) && yamlDesc.isEmpty() && multiVal.length() > 0) {
+                    if ("description".equals(activeKey) && multiVal.length() > 0) {
                         yamlDesc = multiVal.toString().trim();
                     }
                     activeKey = "";
@@ -875,6 +879,8 @@ public class SkillManager {
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to parse skill meta: " + relativeEntryPath, e);
+        } finally {
+            AcidIo.closeQuietly(br);
         }
 
         String finalName = !yamlName.isEmpty() ? yamlName : baseName;
@@ -947,7 +953,7 @@ public class SkillManager {
         return new GitHubSkillCoordinates(c.owner, c.repo, c.branch, c.path, c.isTreeOrFolder);
     }
 
-    public ImportResult importSkillFromUrl(String rawUrl) {
+    public synchronized ImportResult importSkillFromUrl(String rawUrl) {
         return new SkillPackageImporter(this).importSkillFromUrl(rawUrl);
     }
 
