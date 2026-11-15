@@ -1,5 +1,8 @@
 package com.acid.browser.download;
 
+import com.acid.browser.AcidHttp;
+import com.acid.browser.AcidIo;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -72,96 +75,65 @@ public class DownloadWorker implements Runnable {
             // If pre-flight probe already redirected off-origin from mTask.url to mTask.finalUrl, enforce policy too
             if (mTask.url != null && !mTask.url.equals(currentUrl)) {
                 try {
-                    if (!HttpProbe.shouldRetainCredentialsOnRedirect(new URL(mTask.url), new URL(currentUrl))) {
-                        HttpProbe.stripSensitiveHeaders(activeHeaders);
+                    if (!AcidHttp.shouldRetainDownloadCredentials(new URL(mTask.url), new URL(currentUrl))) {
+                        AcidHttp.stripSensitiveHeaders(activeHeaders);
                     }
                 } catch (Exception ignored) {}
             }
-            int redirects = 0;
 
-            while (redirects < MAX_REDIRECTS) {
-                if (isAborted()) return;
+            final long finalSeekOffset = seekOffset;
+            final long finalEndByte = endByte;
+            conn = AcidHttp.openConnectionWithRedirects(
+                currentUrl,
+                "GET",
+                activeHeaders,
+                CONNECT_TIMEOUT_MS,
+                READ_TIMEOUT_MS,
+                MAX_REDIRECTS,
+                null,
+                AcidHttp.DOWNLOAD_CREDENTIALS,
+                new AcidHttp.RedirectListener() {
+                    @Override
+                    public void onConnectionOpened(HttpURLConnection c, URL url, Map<String, String> headers) throws IOException {
+                        if (isAborted()) {
+                            throw new IOException("Aborted");
+                        }
+                        mTask.registerConnection(c);
 
-                URL u = new URL(currentUrl);
-                String proto = u.getProtocol() != null ? u.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
-                if (!"http".equals(proto) && !"https".equals(proto)) {
-                    throw new IOException("Unsupported download protocol: " + proto);
-                }
-                conn = (HttpURLConnection) u.openConnection();
-                if (mTask != null) {
-                    mTask.registerConnection(conn);
-                }
-                conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-                conn.setReadTimeout(READ_TIMEOUT_MS);
-                conn.setInstanceFollowRedirects(false);
+                        // Apply Range header if Range is supported or specified
+                        if (mTask.supportsRange && finalEndByte >= 0) {
+                            c.setRequestProperty("Range", "bytes=" + finalSeekOffset + "-" + finalEndByte);
+                        } else if (finalSeekOffset > 0) {
+                            c.setRequestProperty("Range", "bytes=" + finalSeekOffset + "-");
+                        }
+                        // Only send If-Range when resuming an interrupted chunk AND validator is a strong ETag
+                        // (RFC 7232/7233 explicitly forbids weak validators W/ in If-Range)
+                        boolean isResumingChunk = mChunk.downloadedBytes > 0 && finalSeekOffset > mChunk.startByte;
+                        if (isResumingChunk && mTask.eTag != null && !mTask.eTag.trim().isEmpty()) {
+                            String tag = mTask.eTag.trim();
+                            if (!tag.startsWith("W/") && !tag.startsWith("w/")) {
+                                c.setRequestProperty("If-Range", tag);
+                            }
+                        }
+                    }
 
-                for (Map.Entry<String, String> entry : activeHeaders.entrySet()) {
-                    conn.setRequestProperty(entry.getKey(), entry.getValue());
-                }
-
-                // Apply Range header if Range is supported or specified
-                if (mTask.supportsRange && endByte >= 0) {
-                    conn.setRequestProperty("Range", "bytes=" + seekOffset + "-" + endByte);
-                } else if (seekOffset > 0) {
-                    conn.setRequestProperty("Range", "bytes=" + seekOffset + "-");
-                }
-                // Only send If-Range when resuming an interrupted chunk AND validator is a strong ETag
-                // (RFC 7232/7233 explicitly forbids weak validators W/ in If-Range)
-                boolean isResumingChunk = mChunk.downloadedBytes > 0 && seekOffset > mChunk.startByte;
-                if (isResumingChunk && mTask.eTag != null && !mTask.eTag.trim().isEmpty()) {
-                    String tag = mTask.eTag.trim();
-                    if (!tag.startsWith("W/") && !tag.startsWith("w/")) {
-                        conn.setRequestProperty("If-Range", tag);
+                    @Override
+                    public void onConnectionClosing(HttpURLConnection c) {
+                        mTask.unregisterConnection(c);
                     }
                 }
+            );
 
-                conn.connect();
-                int code = conn.getResponseCode();
-
-                // Handle HTTP Redirects
-                if (code == HttpURLConnection.HTTP_MOVED_PERM
-                    || code == HttpURLConnection.HTTP_MOVED_TEMP
-                    || code == HttpURLConnection.HTTP_SEE_OTHER
-                    || code == 307 || code == 308) {
-                    String loc = conn.getHeaderField("Location");
-                    if (mTask != null) {
-                        mTask.unregisterConnection(conn);
-                    }
-                    conn.disconnect();
-                    conn = null;
-                    if (loc == null || loc.trim().isEmpty()) {
-                        throw new IOException("Redirect without Location header (HTTP " + code + ")");
-                    }
-                    URL nextUrl = new URL(u, loc.trim());
-                    String nextProto = nextUrl.getProtocol() != null ? nextUrl.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
-                    if (!"http".equals(nextProto) && !"https".equals(nextProto)) {
-                        throw new IOException("Disallowed redirect protocol: " + nextProto);
-                    }
-                    if (!HttpProbe.shouldRetainCredentialsOnRedirect(u, nextUrl)) {
-                        HttpProbe.stripSensitiveHeaders(activeHeaders);
-                    }
-                    currentUrl = nextUrl.toString();
-                    redirects++;
-                    continue;
-                }
-
-                // Strict RFC 7233 Range guard: If we requested a sub-range (seekOffset > 0),
-                // but the server returned HTTP 200 OK (full file body starting from byte 0),
-                // writing it at seekOffset would cause silent data corruption!
-                if (code == HttpURLConnection.HTTP_OK && seekOffset > 0) {
-                    mTask.supportsRange = false;
-                    throw new IOException("Server does not support byte-range resume (HTTP 200 OK returned for Range offset " + seekOffset + ")");
-                }
-
-                if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
-                    throw new IOException("Server returned HTTP " + code);
-                }
-
-                break;
+            int code = conn.getResponseCode();
+            // Strict RFC 7233 Range guard: If we requested a sub-range (seekOffset > 0),
+            // but the server returned HTTP 200 OK (full file body starting from byte 0),
+            // writing it at seekOffset would cause silent data corruption!
+            if (code == HttpURLConnection.HTTP_OK && seekOffset > 0) {
+                mTask.supportsRange = false;
+                throw new IOException("Server does not support byte-range resume (HTTP 200 OK returned for Range offset " + seekOffset + ")");
             }
-
-            if (redirects >= MAX_REDIRECTS) {
-                throw new IOException("Too many redirects");
+            if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
+                throw new IOException("Server returned HTTP " + code);
             }
 
             if (isAborted()) return;
@@ -193,9 +165,9 @@ public class DownloadWorker implements Runnable {
                     }
                 }
 
-                raf.write(buffer, 0, n);
-                mChunk.downloadedBytes += n;
-                mTask.addDownloadedBytes(n);
+                if (!mTask.writeChunkBytes(raf, mChunk, buffer, n, mGeneration)) {
+                    return;
+                }
 
                 if (mListener != null && !isAborted()) {
                     mListener.onChunkProgress(mTask, mChunk, n);
@@ -226,12 +198,8 @@ public class DownloadWorker implements Runnable {
                 }
             }
         } finally {
-            if (is != null) {
-                try { is.close(); } catch (Exception ignored) {}
-            }
-            if (raf != null) {
-                try { raf.close(); } catch (Exception ignored) {}
-            }
+            AcidIo.closeQuietly(is);
+            AcidIo.closeQuietly(raf);
             if (conn != null) {
                 if (mTask != null) {
                     mTask.unregisterConnection(conn);

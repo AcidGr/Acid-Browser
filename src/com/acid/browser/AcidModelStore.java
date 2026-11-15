@@ -612,7 +612,7 @@ public class AcidModelStore {
     }
 
     public static void discoverModelsAsync(final String baseUrl, final String apiKey, final ModelDiscoveryCallback callback) {
-        new Thread(new Runnable() {
+        AcidAsync.run(new Runnable() {
             @Override
             public void run() {
                 try {
@@ -626,7 +626,7 @@ public class AcidModelStore {
                     }
                 }
             }
-        }, "AcidModelDiscoveryThread").start();
+        });
     }
 
     private static List<ModelEntry> fetchModelsSync(String rawBaseUrl, String apiKey) throws Exception {

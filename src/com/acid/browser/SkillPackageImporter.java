@@ -8,13 +8,14 @@ import org.json.JSONObject;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -55,6 +56,12 @@ public class SkillPackageImporter {
         mManager = manager;
         mSkillsDir = manager != null ? manager.getSkillsDir() : null;
         mVault = mSkillsDir != null ? new SkillStorageVault(mSkillsDir) : null;
+    }
+
+    SkillPackageImporter(File skillsDir) {
+        mManager = null;
+        mSkillsDir = skillsDir;
+        mVault = skillsDir != null ? new SkillStorageVault(skillsDir) : null;
     }
 
     /**
@@ -247,7 +254,7 @@ public class SkillPackageImporter {
                 if (!dlUrl.isEmpty()) {
                     byte[] content = downloadBytes(dlUrl, MAX_IMPORT_TOTAL_BYTES - byteCounter[0]);
                     byteCounter[0] += content.length;
-                    File outFile = new File(destDir, name);
+                    File outFile = SkillStorageVault.resolveSafeChild(destDir, name);
                     AcidIo.writeBytesSafe(outFile, content);
                     fileCounter[0]++;
                 }
@@ -270,13 +277,13 @@ public class SkillPackageImporter {
                     if (!dlUrl.isEmpty()) {
                         byte[] content = downloadBytes(dlUrl, MAX_IMPORT_TOTAL_BYTES - byteCounter[0]);
                         byteCounter[0] += content.length;
-                        File outFile = new File(destDir, name);
+                        File outFile = SkillStorageVault.resolveSafeChild(destDir, name);
                         AcidIo.writeBytesSafe(outFile, content);
                         fileCounter[0]++;
                     }
                 } else if ("dir".equals(type)) {
                     String subPath = item.optString("path", "");
-                    File subDest = new File(destDir, name);
+                    File subDest = SkillStorageVault.resolveSafeChild(destDir, name);
                     fetchGitHubDirectoryRecursive(owner, repo, branch, subPath, subDest, fileCounter, byteCounter);
                 }
             }
@@ -299,15 +306,20 @@ public class SkillPackageImporter {
 
         File tempExtractDir = mVault.createStagingDir();
 
+        ZipInputStream zis = null;
         try {
-            ZipInputStream zis = new ZipInputStream(new java.io.ByteArrayInputStream(zipBytes));
+            zis = new ZipInputStream(new java.io.ByteArrayInputStream(zipBytes));
             ZipEntry entry;
             int fileCount = 0;
             long totalBytes = 0;
             String tempCanon = tempExtractDir.getCanonicalPath();
 
             while ((entry = zis.getNextEntry()) != null) {
-                if (fileCount >= MAX_IMPORT_FILES || totalBytes >= MAX_IMPORT_TOTAL_BYTES) break;
+                if (fileCount >= MAX_IMPORT_FILES) {
+                    zis.closeEntry();
+                    SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
+                    return SkillManager.ImportResult.error("ZIP 包文件数量超过限制 (" + MAX_IMPORT_FILES + ")");
+                }
                 String entryName = entry.getName().replace('\\', '/');
                 while (entryName.startsWith("/")) entryName = entryName.substring(1);
                 if (entryName.isEmpty() || entryName.contains("..") || entryName.startsWith("__MACOSX")) {
@@ -329,7 +341,11 @@ public class SkillPackageImporter {
                     int n;
                     while ((n = zis.read(buf)) != -1) {
                         totalBytes += n;
-                        if (totalBytes > MAX_IMPORT_TOTAL_BYTES) break;
+                        if (totalBytes > MAX_IMPORT_TOTAL_BYTES) {
+                            zis.closeEntry();
+                            SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
+                            return SkillManager.ImportResult.error("ZIP 包解压总大小超过限制 (8MB)");
+                        }
                         bos.write(buf, 0, n);
                     }
                     AcidIo.writeBytesSafe(out, bos.toByteArray());
@@ -337,7 +353,6 @@ public class SkillPackageImporter {
                 }
                 zis.closeEntry();
             }
-            zis.close();
 
             if (fileCount == 0) {
                 SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
@@ -374,60 +389,48 @@ public class SkillPackageImporter {
         } catch (Exception e) {
             SkillStorageVault.deleteRecursiveSafe(tempExtractDir);
             return SkillManager.ImportResult.error("解压技能包失败: " + e.getMessage());
+        } finally {
+            AcidIo.closeQuietly(zis);
         }
     }
 
     private static byte[] downloadBytes(String urlStr, long maxBytes) throws Exception {
         HttpURLConnection conn = null;
-        String currentUrl = urlStr;
-        for (int redirects = 0; redirects < 5; redirects++) {
-            conn = (HttpURLConnection) new URL(currentUrl).openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(20000);
-            conn.setRequestProperty("User-Agent", "AcidBrowser/1.0 (Agent-Skill-Importer)");
-            conn.setRequestProperty("Accept", "application/vnd.github.v3+json, text/markdown, text/plain, */*");
+        InputStream is = null;
+        try {
+            Map<String, String> headers = new HashMap<String, String>();
+            headers.put("User-Agent", "AcidBrowser/1.0 (Agent-Skill-Importer)");
+            headers.put("Accept", "application/vnd.github.v3+json, text/markdown, text/plain, */*");
+            conn = AcidHttp.openConnectionWithRedirects(
+                urlStr, "GET", headers, 15000, 20000, AcidHttp.MAX_REDIRECTS,
+                null, AcidHttp.SAME_ORIGIN_CREDENTIALS, null
+            );
 
             int code = conn.getResponseCode();
-            if (code == HttpURLConnection.HTTP_MOVED_PERM ||
-                code == HttpURLConnection.HTTP_MOVED_TEMP ||
-                code == HttpURLConnection.HTTP_SEE_OTHER ||
-                code == 307 || code == 308) {
-                String loc = conn.getHeaderField("Location");
-                conn.disconnect();
-                if (loc == null || loc.isEmpty()) break;
-                currentUrl = new URL(new URL(currentUrl), loc).toString();
-                continue;
-            }
             if (code < 200 || code >= 300) {
                 String err = AcidIo.readStreamUtf8(conn.getErrorStream());
-                conn.disconnect();
                 throw new Exception("HTTP " + code + (err != null && !err.isEmpty() ? ": " + err.substring(0, Math.min(120, err.length())) : ""));
             }
 
-            InputStream is = null;
-            try {
-                is = new BufferedInputStream(conn.getInputStream());
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buf = new byte[8192];
-                int n;
-                long total = 0;
-                while ((n = is.read(buf)) != -1) {
-                    total += n;
-                    if (total > maxBytes) {
-                        throw new Exception("文件超过最大大小限制 (" + (maxBytes / 1024 / 1024) + "MB)");
-                    }
-                    bos.write(buf, 0, n);
+            is = new BufferedInputStream(conn.getInputStream());
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            long total = 0;
+            while ((n = is.read(buf)) != -1) {
+                total += n;
+                if (total > maxBytes) {
+                    throw new Exception("文件超过最大大小限制 (" + (maxBytes / 1024 / 1024) + "MB)");
                 }
-                return bos.toByteArray();
-            } finally {
-                if (is != null) {
-                    try { is.close(); } catch (Exception ignored) {}
-                }
-                conn.disconnect();
+                bos.write(buf, 0, n);
+            }
+            return bos.toByteArray();
+        } finally {
+            AcidIo.closeQuietly(is);
+            if (conn != null) {
+                try { conn.disconnect(); } catch (Exception ignored) {}
             }
         }
-        throw new Exception("重定向次数过多");
     }
 
     public static String inferSkillSlugFromUrl(String urlStr) {

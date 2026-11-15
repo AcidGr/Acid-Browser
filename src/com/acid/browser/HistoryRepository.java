@@ -2,7 +2,6 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.os.Looper;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -21,6 +20,7 @@ public class HistoryRepository {
 
     private static final String TAG = "AcidHistoryRepo";
     public static final String PREF_HISTORY = "history";
+    public static final String PREF_HISTORY_PENDING_SYNC = "history_pending_json_sync";
     public static final int MAX_HISTORY_RETENTION_ENTRIES = 2000;
     public static final String PREF_NAME = BrowserDataStore.PREF_NAME;
 
@@ -84,10 +84,11 @@ public class HistoryRepository {
 
     public void syncJsonFile() {
         if (mHistoryJsonFile == null) return;
-        if (mHistoryJsonFile.exists()) {
-            reloadHistoryFromJsonFile();
-        } else {
+        boolean pending = prefs().getBoolean(PREF_HISTORY_PENDING_SYNC, false);
+        if (pending || !mHistoryJsonFile.exists()) {
             saveHistoryToJsonFile();
+        } else {
+            reloadHistoryFromJsonFile();
         }
     }
 
@@ -113,10 +114,21 @@ public class HistoryRepository {
         prefs()
             .edit()
             .putString(PREF_HISTORY, "[]")
+            .putBoolean(PREF_HISTORY_PENDING_SYNC, true)
             .apply();
 
         if (mHistoryJsonFile != null) {
-            saveHistoryToJsonFile(new JSONArray(), rev);
+            final JSONArray empty = new JSONArray();
+            if (AcidAsync.isMainThread()) {
+                AcidAsync.runSerialized(new Runnable() {
+                    @Override
+                    public void run() {
+                        saveHistoryToJsonFile(empty, rev);
+                    }
+                });
+            } else {
+                saveHistoryToJsonFile(empty, rev);
+            }
         }
 
         dispatchCallback(new Runnable() {
@@ -166,6 +178,9 @@ public class HistoryRepository {
             }
             AcidIo.writeFileUtf8(mHistoryJsonFile, formatted);
             mLastSyncedJson = formatted.trim();
+            if (expectedRevision <= 0 || expectedRevision == mHistoryRevision) {
+                prefs().edit().putBoolean(PREF_HISTORY_PENDING_SYNC, false).apply();
+            }
             return true;
         } catch (Exception e) {
             Log.w(TAG, "Failed to save history to " + mHistoryJsonFile, e);
@@ -207,7 +222,11 @@ public class HistoryRepository {
                 next.put(o);
             }
             ++mHistoryRevision;
-            prefs().edit().putString(PREF_HISTORY, next.toString()).apply();
+            prefs()
+                .edit()
+                .putString(PREF_HISTORY, next.toString())
+                .putBoolean(PREF_HISTORY_PENDING_SYNC, false)
+                .apply();
 
             dispatchCallback(new Runnable() {
                 @Override
@@ -220,15 +239,6 @@ public class HistoryRepository {
             return true;
         } catch (Exception e) {
             Log.w(TAG, "Failed to reload history from " + mHistoryJsonFile + ": " + e.getMessage(), e);
-            return false;
-        }
-    }
-
-    private static boolean isMainThread() {
-        try {
-            Looper main = Looper.getMainLooper();
-            return main != null && Looper.myLooper() == main;
-        } catch (Throwable ignored) {
             return false;
         }
     }
@@ -272,18 +282,21 @@ public class HistoryRepository {
         }
 
         final long rev = ++mHistoryRevision;
-        prefs.edit().putString(PREF_HISTORY, next.toString()).apply();
+        prefs
+            .edit()
+            .putString(PREF_HISTORY, next.toString())
+            .putBoolean(PREF_HISTORY_PENDING_SYNC, true)
+            .apply();
 
         if (mHistoryJsonFile != null) {
-            if (isMainThread()) {
+            if (AcidAsync.isMainThread()) {
                 final JSONArray snapshot = next;
-                AcidAsync.run(new AcidAsync.Task<Void>() {
+                AcidAsync.runSerialized(new Runnable() {
                     @Override
-                    public Void execute() throws Exception {
+                    public void run() {
                         saveHistoryToJsonFile(snapshot, rev);
-                        return null;
                     }
-                }, null);
+                });
             } else {
                 saveHistoryToJsonFile(next, rev);
             }

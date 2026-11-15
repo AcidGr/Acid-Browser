@@ -1,22 +1,22 @@
 package com.acid.browser.download;
 
+import com.acid.browser.AcidIo;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStreamReader;
+import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -61,6 +61,9 @@ public class DownloadTask {
     // Guarantees obsolete or lingering worker threads immediately brake and cannot mutate state.
     private final AtomicInteger mGeneration = new AtomicInteger(0);
     private final List<HttpURLConnection> mActiveConnections = new ArrayList<HttpURLConnection>();
+    private final Object mIoLock = new Object();
+    private final Object mCheckpointIoLock = new Object();
+    private volatile Future<?> mPendingCheckpointFuture = null;
 
     public int getGeneration() {
         return mGeneration.get();
@@ -84,16 +87,41 @@ public class DownloadTask {
         }
     }
 
-    public void abortActiveConnections() {
-        List<HttpURLConnection> toAbort;
+    public List<HttpURLConnection> drainActiveConnections() {
         synchronized (mActiveConnections) {
-            toAbort = new ArrayList<HttpURLConnection>(mActiveConnections);
+            if (mActiveConnections.isEmpty()) {
+                return Collections.emptyList();
+            }
+            List<HttpURLConnection> drained = new ArrayList<HttpURLConnection>(mActiveConnections);
             mActiveConnections.clear();
+            return drained;
         }
-        for (HttpURLConnection c : toAbort) {
+    }
+
+    public static void disconnectConnections(List<HttpURLConnection> connections) {
+        if (connections == null || connections.isEmpty()) return;
+        for (HttpURLConnection c : connections) {
+            if (c == null) continue;
             try {
                 c.disconnect();
             } catch (Throwable ignored) {}
+        }
+    }
+
+    public void abortActiveConnections() {
+        disconnectConnections(drainActiveConnections());
+    }
+
+    void setPendingCheckpointFuture(Future<?> future) {
+        mPendingCheckpointFuture = future;
+    }
+
+    void awaitPendingCheckpointWrite() {
+        Future<?> f = mPendingCheckpointFuture;
+        if (f != null && !f.isDone()) {
+            try {
+                f.get(2000L, TimeUnit.MILLISECONDS);
+            } catch (Exception ignored) {}
         }
     }
 
@@ -164,28 +192,57 @@ public class DownloadTask {
      * before starting or restarting a download from byte 0.
      */
     public synchronized void resetForFreshStart() {
-        this.downloadedBytes = 0;
-        this.currentSpeedBytesPerSec = 0;
-        this.mLastSpeedSampleTime = 0;
-        this.mLastSpeedSampleBytes = 0;
-        this.mLastCheckpointSaveTime = 0;
-        this.chunks.clear();
-        cleanCheckpointFile();
-        if (this.destinationFile != null && this.destinationFile.exists()) {
-            RandomAccessFile raf = null;
-            try {
-                raf = new RandomAccessFile(this.destinationFile, "rw");
-                raf.setLength(0);
-            } catch (Exception e) {
+        synchronized (mIoLock) {
+            this.downloadedBytes = 0;
+            this.currentSpeedBytesPerSec = 0;
+            this.mLastSpeedSampleTime = 0;
+            this.mLastSpeedSampleBytes = 0;
+            this.mLastCheckpointSaveTime = 0;
+            this.chunks.clear();
+            cleanCheckpointFile();
+            if (this.destinationFile != null && this.destinationFile.exists()) {
+                RandomAccessFile raf = null;
                 try {
-                    this.destinationFile.delete();
-                } catch (Exception ignored) {}
-            } finally {
-                if (raf != null) {
-                    try { raf.close(); } catch (Exception ignored) {}
+                    raf = new RandomAccessFile(this.destinationFile, "rw");
+                    raf.setLength(0);
+                } catch (Exception e) {
+                    try {
+                        this.destinationFile.delete();
+                    } catch (Exception ignored) {}
+                } finally {
+                    AcidIo.closeQuietly(raf);
                 }
             }
         }
+    }
+
+    /**
+     * Atomically writes a chunk buffer slice under {@code mIoLock} and checks the generation token
+     * so stale or paused workers never mutate the destination file or chunk offsets concurrently.
+     */
+    public boolean writeChunkBytes(RandomAccessFile raf,
+                                   DownloadChunk chunk,
+                                   byte[] buf,
+                                   int len,
+                                   int expectedGen) throws IOException {
+        if (raf == null || chunk == null || buf == null || len <= 0) return false;
+        synchronized (mIoLock) {
+            if (isPaused || isCanceled || getGeneration() != expectedGen) {
+                return false;
+            }
+            raf.seek(chunk.getCurrentSeekOffset());
+            raf.write(buf, 0, len);
+            chunk.downloadedBytes += len;
+        }
+        addDownloadedBytesForGen(len, expectedGen);
+        return true;
+    }
+
+    public synchronized void addDownloadedBytesForGen(long bytes, int expectedGen) {
+        if (isPaused || isCanceled || getGeneration() != expectedGen) {
+            return;
+        }
+        addDownloadedBytes(bytes);
     }
 
     public synchronized List<DownloadChunk> getChunksSnapshot() {
@@ -284,9 +341,10 @@ public class DownloadTask {
     }
 
     /**
-     * Writes checkpoint state to .part.cfg file for instant resume across restarts.
+     * Builds a consistent JSON snapshot of the task and all chunks under synchronized locks
+     * without performing disk I/O inside the lock.
      */
-    public synchronized boolean saveCheckpoint() {
+    public synchronized String buildCheckpointJson() {
         try {
             JSONObject root = new JSONObject();
             root.put("id", id);
@@ -295,118 +353,99 @@ public class DownloadTask {
             root.put("fileName", fileName);
             root.put("mimeType", mimeType);
             root.put("contentLength", contentLength);
-            root.put("downloadedBytes", downloadedBytes);
             root.put("supportsRange", supportsRange);
             if (eTag != null && !eTag.isEmpty()) root.put("etag", eTag);
             if (lastModified != null && !lastModified.isEmpty()) root.put("lastModified", lastModified);
 
             JSONArray chunkArr = new JSONArray();
-            for (DownloadChunk chunk : chunks) {
-                chunkArr.put(chunk.toJsonObject());
+            long totalFromChunks = 0L;
+            synchronized (mIoLock) {
+                for (DownloadChunk chunk : chunks) {
+                    chunkArr.put(chunk.toJsonObject());
+                    totalFromChunks += chunk.downloadedBytes;
+                }
             }
+            root.put("downloadedBytes", Math.max(downloadedBytes, totalFromChunks));
             root.put("chunks", chunkArr);
-
-            File parent = checkpointFile.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
-
-            File tmpFile = new File(checkpointFile.getAbsolutePath() + ".tmp");
-            FileOutputStream fos = new FileOutputStream(tmpFile);
-            fos.write(root.toString(2).getBytes(StandardCharsets.UTF_8));
-            fos.flush();
-            try {
-                fos.getFD().sync();
-            } catch (Exception ignored) {}
-            fos.close();
-
-            if (tmpFile.renameTo(checkpointFile)) {
-                return true;
-            } else {
-                if (checkpointFile.exists()) {
-                    checkpointFile.delete();
-                }
-                if (tmpFile.renameTo(checkpointFile)) {
-                    return true;
-                }
-                try {
-                    FileOutputStream directFos = new FileOutputStream(checkpointFile);
-                    directFos.write(root.toString(2).getBytes(StandardCharsets.UTF_8));
-                    directFos.flush();
-                    directFos.close();
-                    tmpFile.delete();
-                    return true;
-                } catch (Exception ignored) {
-                    return false;
-                }
-            }
+            return root.toString(2);
         } catch (Exception e) {
-            return false;
+            return null;
         }
+    }
+
+    public boolean writeCheckpointJson(String json) {
+        if (json == null || checkpointFile == null || isCanceled) return false;
+        synchronized (mCheckpointIoLock) {
+            if (isCanceled) return false;
+            return AcidIo.writeFileUtf8Safe(checkpointFile, json);
+        }
+    }
+
+    /**
+     * Writes checkpoint state to .part.cfg file for instant resume across restarts.
+     */
+    public boolean saveCheckpoint() {
+        return writeCheckpointJson(buildCheckpointJson());
     }
 
     /**
      * Restores checkpoint state from .part.cfg file.
      */
     public synchronized boolean loadCheckpoint() {
-        if (!checkpointFile.exists() || checkpointFile.length() == 0) {
-            return false;
-        }
-        try {
-            FileInputStream fis = new FileInputStream(checkpointFile);
-            BufferedReader reader = new BufferedReader(new InputStreamReader(fis, StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append('\n');
-            }
-            reader.close();
-
-            JSONObject root = new JSONObject(sb.toString());
-
-            // Strict URL validation: Verify this checkpoint belongs to the exact same URL
-            String savedUrl = root.optString("url", "");
-            if (savedUrl.isEmpty() || !savedUrl.equals(this.url)) {
+        synchronized (mCheckpointIoLock) {
+            if (!checkpointFile.exists() || checkpointFile.length() == 0) {
                 return false;
             }
+            try {
+                String json = AcidIo.readFileUtf8(checkpointFile);
+                JSONObject root = new JSONObject(json);
 
-            this.finalUrl = root.optString("finalUrl", this.url);
-            this.contentLength = root.optLong("contentLength", -1);
-            this.supportsRange = root.optBoolean("supportsRange", false);
-            this.eTag = root.has("etag") ? root.optString("etag", null) : null;
-            this.lastModified = root.has("lastModified") ? root.optString("lastModified", null) : null;
-
-            JSONArray chunkArr = root.optJSONArray("chunks");
-            if (chunkArr != null && chunkArr.length() > 0) {
-                chunks.clear();
-                long totalDownloaded = 0;
-                for (int i = 0; i < chunkArr.length(); i++) {
-                    DownloadChunk chunk = DownloadChunk.fromJsonObject(chunkArr.optJSONObject(i));
-                    if (chunk != null) {
-                        chunks.add(chunk);
-                        totalDownloaded += chunk.downloadedBytes;
-                    }
+                // Strict URL validation: Verify this checkpoint belongs to the exact same URL
+                String savedUrl = root.optString("url", "");
+                if (savedUrl.isEmpty() || !savedUrl.equals(this.url)) {
+                    return false;
                 }
-                this.downloadedBytes = totalDownloaded;
-                return true;
+
+                this.finalUrl = root.optString("finalUrl", this.url);
+                this.contentLength = root.optLong("contentLength", -1);
+                this.supportsRange = root.optBoolean("supportsRange", false);
+                this.eTag = root.has("etag") ? root.optString("etag", null) : null;
+                this.lastModified = root.has("lastModified") ? root.optString("lastModified", null) : null;
+
+                JSONArray chunkArr = root.optJSONArray("chunks");
+                if (chunkArr != null && chunkArr.length() > 0) {
+                    chunks.clear();
+                    long totalDownloaded = 0;
+                    for (int i = 0; i < chunkArr.length(); i++) {
+                        DownloadChunk chunk = DownloadChunk.fromJsonObject(chunkArr.optJSONObject(i));
+                        if (chunk != null) {
+                            chunks.add(chunk);
+                            totalDownloaded += chunk.downloadedBytes;
+                        }
+                    }
+                    this.downloadedBytes = totalDownloaded;
+                    return true;
+                }
+            } catch (Exception e) {
+                // Ignore corrupted checkpoint
             }
-        } catch (Exception e) {
-            // Ignore corrupted checkpoint
+            return false;
         }
-        return false;
     }
 
     public void cleanCheckpointFile() {
-        try {
-            if (checkpointFile != null) {
-                if (checkpointFile.exists()) {
-                    checkpointFile.delete();
+        synchronized (mCheckpointIoLock) {
+            try {
+                if (checkpointFile != null) {
+                    if (checkpointFile.exists()) {
+                        checkpointFile.delete();
+                    }
+                    File tmp = new File(checkpointFile.getAbsolutePath() + ".tmp");
+                    if (tmp.exists()) {
+                        tmp.delete();
+                    }
                 }
-                File tmp = new File(checkpointFile.getAbsolutePath() + ".tmp");
-                if (tmp.exists()) {
-                    tmp.delete();
-                }
-            }
-        } catch (Exception ignored) {}
+            } catch (Exception ignored) {}
+        }
     }
 }

@@ -3,8 +3,12 @@ package com.acid.browser.download;
 import android.os.Handler;
 import android.os.Looper;
 
+import com.acid.browser.AcidAsync;
+import com.acid.browser.AcidIo;
+
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.net.HttpURLConnection;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -13,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -167,10 +172,12 @@ public class AcidDownloader {
     }
 
     public synchronized boolean pause(long taskId) {
-        DownloadTask task = mTasks.get(taskId);
+        final DownloadTask task = mTasks.get(taskId);
         if (task == null) {
             return false;
         }
+        final List<HttpURLConnection> connsToAbort;
+        final String cpJson;
         synchronized (task) {
             if (task.status != DownloadTask.STATUS_RUNNING && task.status != DownloadTask.STATUS_PENDING) {
                 return false;
@@ -178,9 +185,19 @@ public class AcidDownloader {
             task.isPaused = true;
             task.status = DownloadTask.STATUS_PAUSED;
             task.nextGeneration();
-            task.abortActiveConnections();
-            task.saveCheckpoint();
+            connsToAbort = task.drainActiveConnections();
+            cpJson = task.buildCheckpointJson();
         }
+        Future<?> f = AcidAsync.runSerialized(new Runnable() {
+            @Override
+            public void run() {
+                DownloadTask.disconnectConnections(connsToAbort);
+                if (!task.isCanceled) {
+                    task.writeCheckpointJson(cpJson);
+                }
+            }
+        });
+        task.setPendingCheckpointFuture(f);
         dispatchPaused(task);
         return true;
     }
@@ -199,24 +216,30 @@ public class AcidDownloader {
         return true;
     }
 
-    public synchronized boolean cancel(long taskId, boolean deleteFile) {
-        DownloadTask task = mTasks.get(taskId);
+    public synchronized boolean cancel(long taskId, final boolean deleteFile) {
+        final DownloadTask task = mTasks.get(taskId);
         if (task == null) return false;
 
+        final List<HttpURLConnection> connsToAbort;
         synchronized (task) {
             task.isCanceled = true;
             task.isPaused = true;
             task.nextGeneration();
-            task.abortActiveConnections();
-            task.cleanCheckpointFile();
+            connsToAbort = task.drainActiveConnections();
             mTasks.remove(taskId);
-
-            if (deleteFile && task.destinationFile.exists()) {
-                try {
-                    task.destinationFile.delete();
-                } catch (Exception ignored) {}
-            }
         }
+        AcidAsync.runSerialized(new Runnable() {
+            @Override
+            public void run() {
+                DownloadTask.disconnectConnections(connsToAbort);
+                task.cleanCheckpointFile();
+                if (deleteFile && task.destinationFile != null && task.destinationFile.exists()) {
+                    try {
+                        task.destinationFile.delete();
+                    } catch (Exception ignored) {}
+                }
+            }
+        });
         return true;
     }
 
@@ -230,6 +253,7 @@ public class AcidDownloader {
         dispatchStarted(task);
 
         try {
+            task.awaitPendingCheckpointWrite();
             boolean resumed = false;
             synchronized (task) {
                 if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
@@ -245,32 +269,42 @@ public class AcidDownloader {
             if (resumed) {
                 // Verify remote file consistency before resuming to ensure the server resource hasn't changed
                 try {
-                    HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders);
-                    if (probe.contentLength > 0 && task.contentLength > 0 && probe.contentLength != task.contentLength) {
-                        // Remote size changed! Checkpoint is obsolete
-                        resumed = false;
-                        task.cleanCheckpointFile();
-                    } else if (probe.eTag != null && task.eTag != null && !probe.eTag.equals(task.eTag)) {
-                        // Remote ETag changed! Resource was modified
-                        resumed = false;
-                        task.cleanCheckpointFile();
-                    } else if (probe.responseCode == 200 && !probe.supportsRange) {
-                        // Server no longer supports Range requests
-                        resumed = false;
-                        task.cleanCheckpointFile();
-                    } else if (probe.responseCode >= 200 && probe.responseCode < 300) {
-                        task.finalUrl = probe.finalUrl;
-                        if (probe.eTag != null) task.eTag = probe.eTag;
-                        if (probe.lastModified != null) task.lastModified = probe.lastModified;
+                    HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders, task);
+                    synchronized (task) {
+                        if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
+                            return;
+                        }
+                        if (probe.contentLength > 0 && task.contentLength > 0 && probe.contentLength != task.contentLength) {
+                            // Remote size changed! Checkpoint is obsolete
+                            resumed = false;
+                            task.cleanCheckpointFile();
+                        } else if (probe.eTag != null && task.eTag != null && !probe.eTag.equals(task.eTag)) {
+                            // Remote ETag changed! Resource was modified
+                            resumed = false;
+                            task.cleanCheckpointFile();
+                        } else if (probe.responseCode == 200 && !probe.supportsRange) {
+                            // Server no longer supports Range requests
+                            resumed = false;
+                            task.cleanCheckpointFile();
+                        } else if (probe.responseCode >= 200 && probe.responseCode < 300) {
+                            task.finalUrl = probe.finalUrl;
+                            if (probe.eTag != null) task.eTag = probe.eTag;
+                            if (probe.lastModified != null) task.lastModified = probe.lastModified;
+                        }
                     }
                 } catch (Exception ignored) {
+                    synchronized (task) {
+                        if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
+                            return;
+                        }
+                    }
                     // Probe network hiccup: allow workers to proceed with existing checkpoint
                 }
             }
 
             if (!resumed) {
                 // Pre-flight probe to discover range support & total size
-                HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders);
+                HttpProbe.ProbeResult probe = HttpProbe.probe(task.url, task.requestHeaders, task);
 
                 synchronized (task) {
                     if (task.getGeneration() != runGen || task.isPaused || task.isCanceled) {
@@ -305,9 +339,7 @@ public class AcidDownloader {
                             raf.setLength(task.contentLength);
                         } catch (Exception ignored) {
                         } finally {
-                            if (raf != null) {
-                                try { raf.close(); } catch (Exception ignored) {}
-                            }
+                            AcidIo.closeQuietly(raf);
                         }
                     }
 
@@ -370,16 +402,19 @@ public class AcidDownloader {
 
                 @Override
                 public void onChunkFailed(DownloadTask t, DownloadChunk c, Exception error) {
+                    final List<HttpURLConnection> connsToAbort;
+                    String cpJson = null;
+                    boolean saveCp = false;
                     synchronized (t) {
                         if (t.getGeneration() != runGen || t.isPaused || t.isCanceled || t.status == DownloadTask.STATUS_FAILED) return;
                         t.isCanceled = true; // Signal all active worker threads to halt immediately
                         t.status = DownloadTask.STATUS_FAILED;
                         t.errorMessage = (error != null) ? error.getMessage() : "Download error";
                         t.nextGeneration();
-                        t.abortActiveConnections();
+                        connsToAbort = t.drainActiveConnections();
                         if (t.supportsRange) {
-                            // Preserves checkpoint so subsequent retry can resume where it left off
-                            t.saveCheckpoint();
+                            cpJson = t.buildCheckpointJson();
+                            saveCp = true;
                         } else {
                             // Non-range downloads cannot resume; purge dirty partial file and checkpoint
                             t.cleanCheckpointFile();
@@ -389,6 +424,10 @@ public class AcidDownloader {
                                 } catch (Exception ignored) {}
                             }
                         }
+                    }
+                    DownloadTask.disconnectConnections(connsToAbort);
+                    if (saveCp && cpJson != null) {
+                        AcidIo.writeFileUtf8Safe(t.checkpointFile, cpJson);
                     }
                     dispatchFailed(t, t.errorMessage);
                 }
@@ -418,6 +457,9 @@ public class AcidDownloader {
             }
 
         } catch (Exception e) {
+            final List<HttpURLConnection> connsToAbort;
+            String cpJson = null;
+            boolean saveCp = false;
             synchronized (task) {
                 if (task.getGeneration() != runGen || task.isPaused || task.isCanceled || task.status == DownloadTask.STATUS_FAILED) {
                     return;
@@ -426,9 +468,10 @@ public class AcidDownloader {
                 task.status = DownloadTask.STATUS_FAILED;
                 task.errorMessage = e.getMessage() != null ? e.getMessage() : e.toString();
                 task.nextGeneration();
-                task.abortActiveConnections();
+                connsToAbort = task.drainActiveConnections();
                 if (task.supportsRange) {
-                    task.saveCheckpoint();
+                    cpJson = task.buildCheckpointJson();
+                    saveCp = true;
                 } else {
                     task.cleanCheckpointFile();
                     if (task.destinationFile != null && task.destinationFile.exists()) {
@@ -437,6 +480,10 @@ public class AcidDownloader {
                         } catch (Exception ignored) {}
                     }
                 }
+            }
+            DownloadTask.disconnectConnections(connsToAbort);
+            if (saveCp && cpJson != null) {
+                AcidIo.writeFileUtf8Safe(task.checkpointFile, cpJson);
             }
             dispatchFailed(task, task.errorMessage);
         }

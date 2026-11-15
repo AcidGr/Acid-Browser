@@ -17,7 +17,6 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -160,12 +159,25 @@ public final class FaviconManager {
                 trimmed = trimmed.substring(0, h);
             }
             trimmed = trimmed.toLowerCase(Locale.US);
-            // If port is specified, strip default standard ports (:80, :443), but PRESERVE non-standard ports (e.g. :8317, :9090)
-            int colon = trimmed.indexOf(':');
-            if (colon >= 0) {
-                String port = trimmed.substring(colon + 1);
+            // If port is specified, strip default standard ports (:80, :443), preserving non-standard ports and IPv6 brackets
+            if (trimmed.startsWith("[")) {
+                int closeBracket = trimmed.indexOf(']');
+                if (closeBracket > 0) {
+                    int colon = trimmed.indexOf(':', closeBracket + 1);
+                    if (colon >= 0) {
+                        String port = trimmed.substring(colon + 1);
+                        if ("80".equals(port) || "443".equals(port)) {
+                            trimmed = trimmed.substring(0, closeBracket + 1);
+                        }
+                    }
+                    return trimmed;
+                }
+            }
+            int firstColon = trimmed.indexOf(':');
+            if (firstColon >= 0 && firstColon == trimmed.lastIndexOf(':')) {
+                String port = trimmed.substring(firstColon + 1);
                 if ("80".equals(port) || "443".equals(port)) {
-                    trimmed = trimmed.substring(0, colon);
+                    trimmed = trimmed.substring(0, firstColon);
                 }
             }
             return trimmed;
@@ -362,8 +374,15 @@ public final class FaviconManager {
         final String host = extractHost(pageUrl);
         if (host.isEmpty()) return;
 
+        Bitmap copy = null;
+        try {
+            Bitmap.Config cfg = icon.getConfig() != null ? icon.getConfig() : Bitmap.Config.ARGB_8888;
+            copy = icon.copy(cfg, false);
+        } catch (Throwable ignored) {}
+        final Bitmap cachedIcon = (copy != null && !copy.isRecycled()) ? copy : icon;
+
         synchronized (mMemCache) {
-            mMemCache.put(host, icon);
+            mMemCache.put(host, cachedIcon);
         }
         mNegativeCache.remove(host);
 
@@ -371,8 +390,9 @@ public final class FaviconManager {
             @Override
             public void run() {
                 try {
+                    if (cachedIcon.isRecycled()) return;
                     ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                    icon.compress(Bitmap.CompressFormat.PNG, 95, bos);
+                    cachedIcon.compress(Bitmap.CompressFormat.PNG, 95, bos);
                     byte[] bytes = bos.toByteArray();
                     if (bytes.length > 32) {
                         saveToDisk(host, bytes);
@@ -388,16 +408,7 @@ public final class FaviconManager {
     public boolean saveToDisk(String host, byte[] bytes) {
         File file = getCacheFileForHost(host);
         if (file == null || bytes == null || bytes.length == 0) return false;
-        try {
-            FileOutputStream fos = new FileOutputStream(file);
-            fos.write(bytes);
-            fos.flush();
-            fos.close();
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to save favicon bytes for " + host, e);
-            return false;
-        }
+        return AcidIo.writeBytesSafe(file, bytes);
     }
 
     // =========================================================================
@@ -406,7 +417,21 @@ public final class FaviconManager {
 
     public static boolean isLocalOrIpHost(String host) {
         if (host == null || host.isEmpty()) return false;
-        String h = host.contains(":") ? host.substring(0, host.indexOf(':')) : host;
+        String h = host.trim();
+        if (h.startsWith("[")) {
+            int close = h.indexOf(']');
+            if (close > 0) {
+                h = h.substring(1, close);
+            }
+        } else {
+            int firstColon = h.indexOf(':');
+            if (firstColon >= 0 && firstColon == h.lastIndexOf(':')) {
+                h = h.substring(0, firstColon);
+            }
+        }
+        if (h.contains(":")) {
+            return true; // IPv6 literal (e.g. ::1, fe80::1, 2001:db8::1)
+        }
         if ("localhost".equalsIgnoreCase(h) || h.startsWith("127.") || h.startsWith("192.168.")
                 || h.startsWith("10.") || h.endsWith(".local") || h.endsWith(".lan")) {
             return true;
@@ -442,45 +467,39 @@ public final class FaviconManager {
 
     public static byte[] fetchUrlBytes(String urlStr) {
         HttpURLConnection conn = null;
+        InputStream is = null;
         try {
-            String cur = urlStr;
-            for (int r = 0; r < 3; r++) {
-                conn = (HttpURLConnection) new URL(cur).openConnection();
-                conn.setInstanceFollowRedirects(true);
-                conn.setConnectTimeout(2500);
-                conn.setReadTimeout(3000);
-                conn.setRequestProperty("User-Agent", BrowserController.UA_MOBILE);
-                conn.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
-                int code = conn.getResponseCode();
-                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
-                    String loc = conn.getHeaderField("Location");
-                    conn.disconnect();
-                    if (loc == null || loc.isEmpty()) return null;
-                    cur = new URL(new URL(cur), loc).toString();
-                    continue;
-                }
-                if (code != 200) {
-                    conn.disconnect();
+            Map<String, String> headers = new HashMap<String, String>();
+            headers.put("User-Agent", BrowserController.UA_MOBILE);
+            headers.put("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
+            conn = AcidHttp.openConnectionWithRedirects(
+                urlStr, "GET", headers, 2500, 3000, 3, null, AcidHttp.SAME_ORIGIN_CREDENTIALS, null
+            );
+            int code = conn.getResponseCode();
+            if (code != HttpURLConnection.HTTP_OK) {
+                return null;
+            }
+            is = new BufferedInputStream(conn.getInputStream());
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            int total = 0;
+            while ((n = is.read(buf)) != -1) {
+                total += n;
+                if (total > MAX_FAVICON_BYTES) {
                     return null;
                 }
-                InputStream is = new BufferedInputStream(conn.getInputStream());
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buf = new byte[4096];
-                int n;
-                int total = 0;
-                while ((n = is.read(buf)) != -1) {
-                    total += n;
-                    if (total > MAX_FAVICON_BYTES) break;
-                    bos.write(buf, 0, n);
-                }
-                is.close();
-                conn.disconnect();
-                return bos.toByteArray();
+                bos.write(buf, 0, n);
             }
+            return bos.toByteArray();
         } catch (Exception ignored) {
-            if (conn != null) try { conn.disconnect(); } catch (Exception ignored2) {}
+            return null;
+        } finally {
+            AcidIo.closeQuietly(is);
+            if (conn != null) {
+                try { conn.disconnect(); } catch (Exception ignored2) {}
+            }
         }
-        return null;
     }
 
     public static Bitmap decodeFaviconBitmap(byte[] b) {

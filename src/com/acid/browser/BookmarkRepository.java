@@ -20,6 +20,7 @@ public class BookmarkRepository {
 
     private static final String TAG = "AcidBookmarkRepo";
     public static final String PREF_BOOKMARKS = "bookmarks";
+    public static final String PREF_BOOKMARKS_PENDING_SYNC = "bookmarks_pending_json_sync";
     public static final String PREF_NAME = BrowserDataStore.PREF_NAME;
 
     private final Context mContext;
@@ -30,6 +31,7 @@ public class BookmarkRepository {
     private BrowserDataStore.CallbackDispatcher mDispatcher;
     private volatile long mLastSelfSaveTime = 0;
     private volatile String mLastSyncedJson = null;
+    private long mBookmarksRevision = 0;
 
     public BookmarkRepository(Context context) {
         this(context, null, null);
@@ -86,10 +88,11 @@ public class BookmarkRepository {
 
     public void syncJsonFile() {
         if (mBookmarksJsonFile == null) return;
-        if (mBookmarksJsonFile.exists()) {
-            reloadBookmarksFromJsonFile();
-        } else {
+        boolean pending = prefs().getBoolean(PREF_BOOKMARKS_PENDING_SYNC, false);
+        if (pending || !mBookmarksJsonFile.exists()) {
             saveBookmarksToJsonFile();
+        } else {
+            reloadBookmarksFromJsonFile();
         }
     }
 
@@ -146,13 +149,25 @@ public class BookmarkRepository {
                 arr.put(o);
             }
         }
+        final long rev = ++mBookmarksRevision;
         prefs()
             .edit()
             .putString(PREF_BOOKMARKS, arr.toString())
+            .putBoolean(PREF_BOOKMARKS_PENDING_SYNC, syncFile)
             .apply();
 
         if (syncFile && mBookmarksJsonFile != null) {
-            saveBookmarksToJsonFile(arr);
+            if (AcidAsync.isMainThread()) {
+                final JSONArray snapshot = arr;
+                AcidAsync.runSerialized(new Runnable() {
+                    @Override
+                    public void run() {
+                        saveBookmarksToJsonFile(snapshot, rev);
+                    }
+                });
+            } else {
+                saveBookmarksToJsonFile(arr, rev);
+            }
         }
         if (mBookmarksMutatedListener != null) {
             dispatchCallback(mBookmarksMutatedListener);
@@ -160,11 +175,18 @@ public class BookmarkRepository {
     }
 
     public synchronized boolean saveBookmarksToJsonFile() {
-        return saveBookmarksToJsonFile(null);
+        return saveBookmarksToJsonFile(null, 0);
     }
 
     public synchronized boolean saveBookmarksToJsonFile(JSONArray cachedArr) {
+        return saveBookmarksToJsonFile(cachedArr, 0);
+    }
+
+    public synchronized boolean saveBookmarksToJsonFile(JSONArray cachedArr, long expectedRevision) {
         if (mBookmarksJsonFile == null) return false;
+        if (expectedRevision > 0 && expectedRevision < mBookmarksRevision) {
+            return false;
+        }
         try {
             JSONArray arr = cachedArr;
             if (arr == null) {
@@ -187,6 +209,9 @@ public class BookmarkRepository {
             }
             AcidIo.writeFileUtf8(mBookmarksJsonFile, formatted);
             mLastSyncedJson = formatted.trim();
+            if (expectedRevision <= 0 || expectedRevision == mBookmarksRevision) {
+                prefs().edit().putBoolean(PREF_BOOKMARKS_PENDING_SYNC, false).apply();
+            }
             return true;
         } catch (Exception e) {
             Log.w(TAG, "Failed to save bookmarks to " + mBookmarksJsonFile + ": " + e.getMessage(), e);

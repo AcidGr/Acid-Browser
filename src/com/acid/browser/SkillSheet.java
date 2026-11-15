@@ -516,7 +516,7 @@ public class SkillSheet extends AcidBottomSheetView {
                 public boolean onSubmit(final String url) {
                     if (mManager == null) return true;
                     AcidFeedback.info(ctx, "正在从远程拉取技能及附属文件...");
-                    new Thread(new Runnable() {
+                    AcidAsync.run(new Runnable() {
                         @Override
                         public void run() {
                             final SkillManager.ImportResult res = mManager.importSkillFromUrl(url);
@@ -535,7 +535,7 @@ public class SkillSheet extends AcidBottomSheetView {
                                 }
                             });
                         }
-                    }, "AcidSkillUrlImporter").start();
+                    });
                     return true;
                 }
             }

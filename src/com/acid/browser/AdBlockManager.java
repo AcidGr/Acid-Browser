@@ -2,8 +2,6 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.net.Uri;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -14,11 +12,8 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -75,11 +70,12 @@ public class AdBlockManager {
 
     private final Context mContext;
     private volatile BrowserDataStore mDataStore;
-    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
 
     private volatile RuleSet mRules = new RuleSet();
 
     private final AtomicInteger mBlockedCount = new AtomicInteger(0);
+    private final Object mBlockedPersistLock = new Object();
+    private volatile int mPersistedBlockedCount = -1;
     private volatile boolean mEnabled = true;
 
     private volatile int mBuiltinCount = 0;
@@ -115,11 +111,15 @@ public class AdBlockManager {
             mDataStore = dataStore;
             mDataStore.observe(AcidSettings.ADBLOCK_ENABLED, mEnabledSettingObserver);
             mEnabled = mDataStore.isAdBlockEnabled();
-            mBlockedCount.set(mDataStore.getAdBlockBlockedCount());
+            int savedCount = mDataStore.getAdBlockBlockedCount();
+            mBlockedCount.set(savedCount);
+            mPersistedBlockedCount = savedCount;
         } else {
             BrowserDataStore initialStore = new BrowserDataStore(context);
             mEnabled = initialStore.isAdBlockEnabled();
-            mBlockedCount.set(initialStore.getAdBlockBlockedCount());
+            int savedCount = initialStore.getAdBlockBlockedCount();
+            mBlockedCount.set(savedCount);
+            mPersistedBlockedCount = savedCount;
         }
 
         if (workspaceDir != null && workspaceDir.exists()) {
@@ -129,6 +129,20 @@ public class AdBlockManager {
             initDirectories();
         }
         loadAllRulesAsync(null);
+    }
+
+    AdBlockManager(File customRulesFile, File subscriptionFile, BrowserDataStore dataStore) {
+        mContext = null;
+        mCustomRulesFile = customRulesFile;
+        mSubscriptionFile = subscriptionFile;
+        if (dataStore != null) {
+            mDataStore = dataStore;
+            mDataStore.observe(AcidSettings.ADBLOCK_ENABLED, mEnabledSettingObserver);
+            mEnabled = mDataStore.isAdBlockEnabled();
+            int savedCount = mDataStore.getAdBlockBlockedCount();
+            mBlockedCount.set(savedCount);
+            mPersistedBlockedCount = savedCount;
+        }
     }
 
     private void initDirectories() {
@@ -161,7 +175,9 @@ public class AdBlockManager {
             }
             File wsCustom = new File(wsAdblock, "custom_rules.txt");
             if (!wsCustom.exists() && mCustomRulesFile != null && mCustomRulesFile.exists()) {
-                copyFile(mCustomRulesFile, wsCustom);
+                try {
+                    AcidIo.copyFile(mCustomRulesFile, wsCustom);
+                } catch (Exception ignored) {}
             }
             boolean dirChanged = !wsAdblock.equals(mAdBlockDir);
             mAdBlockDir = wsAdblock;
@@ -170,20 +186,6 @@ public class AdBlockManager {
             return checkChanged && dirChanged;
         }
         return false;
-    }
-
-    private static void copyFile(File src, File dst) {
-        try {
-            FileInputStream in = new FileInputStream(src);
-            FileOutputStream out = new FileOutputStream(dst);
-            byte[] buf = new byte[4096];
-            int len;
-            while ((len = in.read(buf)) > 0) {
-                out.write(buf, 0, len);
-            }
-            in.close();
-            out.close();
-        } catch (Exception ignored) {}
     }
 
     private final AcidSettings.KeyObserver<Boolean> mEnabledSettingObserver =
@@ -281,19 +283,15 @@ public class AdBlockManager {
 
         // 1. Load built-in asset rules
         int builtin = 0;
-        try {
-            InputStream is = mContext.getAssets().open("adblock/builtin_rules.txt");
-            BufferedReader br = new BufferedReader(new InputStreamReader(is, "UTF-8"));
-            String line;
-            while ((line = br.readLine()) != null) {
-                if (parseRuleLine(line, next)) {
-                    builtin++;
-                }
+        if (mContext != null) {
+            try {
+                builtin = loadRulesFromStream(
+                    mContext.getAssets().open("adblock/builtin_rules.txt"),
+                    next
+                );
+            } catch (Exception e) {
+                Log.w(TAG, "Could not load assets/adblock/builtin_rules.txt: " + e.getMessage());
             }
-            br.close();
-            is.close();
-        } catch (Exception e) {
-            Log.w(TAG, "Could not load assets/adblock/builtin_rules.txt: " + e.getMessage());
         }
         mBuiltinCount = builtin;
 
@@ -301,16 +299,7 @@ public class AdBlockManager {
         int sub = 0;
         if (mSubscriptionFile != null && mSubscriptionFile.exists()) {
             try {
-                FileInputStream fis = new FileInputStream(mSubscriptionFile);
-                BufferedReader br = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
-                String line;
-                while ((line = br.readLine()) != null) {
-                    if (parseRuleLine(line, next)) {
-                        sub++;
-                    }
-                }
-                br.close();
-                fis.close();
+                sub = loadRulesFromStream(new FileInputStream(mSubscriptionFile), next);
             } catch (Exception e) {
                 Log.w(TAG, "Could not load subscriptions.txt: " + e.getMessage());
             }
@@ -321,16 +310,7 @@ public class AdBlockManager {
         int custom = 0;
         if (mCustomRulesFile != null && mCustomRulesFile.exists()) {
             try {
-                FileInputStream fis = new FileInputStream(mCustomRulesFile);
-                BufferedReader br = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
-                String line;
-                while ((line = br.readLine()) != null) {
-                    if (parseRuleLine(line, next)) {
-                        custom++;
-                    }
-                }
-                br.close();
-                fis.close();
+                custom = loadRulesFromStream(new FileInputStream(mCustomRulesFile), next);
             } catch (Exception e) {
                 Log.w(TAG, "Could not load custom_rules.txt: " + e.getMessage());
             }
@@ -343,6 +323,25 @@ public class AdBlockManager {
         Log.i(TAG, "AdBlock loaded: " + (mBuiltinCount + mSubCount + mCustomCount) +
               " rules (Built-in: " + mBuiltinCount + ", Sub: " + mSubCount + ", Custom: " + mCustomCount +
               ", Unique domains: " + next.blockedDomains.size() + ")");
+    }
+
+    private static int loadRulesFromStream(InputStream is, RuleSet target) throws java.io.IOException {
+        if (is == null) return 0;
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new InputStreamReader(is, "UTF-8"));
+            int count = 0;
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (parseRuleLine(line, target)) {
+                    count++;
+                }
+            }
+            return count;
+        } finally {
+            AcidIo.closeQuietly(br);
+            AcidIo.closeQuietly(is);
+        }
     }
 
     private static final Set<String> COMMON_PUBLIC_SUFFIXES = new HashSet<String>(Arrays.asList(
@@ -669,16 +668,52 @@ public class AdBlockManager {
     }
 
     public WebResourceResponse shouldIntercept(Uri uri) {
-        if (isBlocked(uri)) {
-            int count = mBlockedCount.incrementAndGet();
-            BrowserDataStore store = mDataStore;
-            if (store != null && (count % 5 == 0 || count == 1)) {
-                store.setAdBlockBlockedCount(count);
-            }
-            Log.d(TAG, "[AdBlock Intercepted #" + count + "] " + uri);
+        if (recordBlockedUri(uri)) {
             return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
         }
         return null;
+    }
+
+    boolean recordBlockedUri(Uri uri) {
+        if (!isBlocked(uri)) return false;
+        int count = mBlockedCount.incrementAndGet();
+        final BrowserDataStore store = mDataStore;
+        if (store != null && (count % 5 == 0 || count == 1)) {
+            schedulePersistBlockedCount(store, count);
+        }
+        Log.d(TAG, "[AdBlock Intercepted #" + count + "] " + uri);
+        return true;
+    }
+
+    /**
+     * Flushes any un-persisted blocked-request remainder (<5) to {@link BrowserDataStore}
+     * monotonically so counts are never lost on pause/exit or overwritten out of order.
+     */
+    public void flushBlockedCount() {
+        BrowserDataStore store = mDataStore;
+        if (store != null) {
+            persistBlockedCountMonotonic(store, mBlockedCount.get());
+        }
+    }
+
+    private void schedulePersistBlockedCount(final BrowserDataStore store, final int observedCount) {
+        AcidAsync.runSerialized(new Runnable() {
+            @Override
+            public void run() {
+                persistBlockedCountMonotonic(store, observedCount);
+            }
+        });
+    }
+
+    private void persistBlockedCountMonotonic(BrowserDataStore store, int observedCount) {
+        if (store == null) return;
+        synchronized (mBlockedPersistLock) {
+            int target = Math.max(mBlockedCount.get(), observedCount);
+            if (target > mPersistedBlockedCount) {
+                mPersistedBlockedCount = target;
+                store.setAdBlockBlockedCount(target);
+            }
+        }
     }
 
     static String buildIsolatedElementHidingCss(RuleSet rules, String host) {

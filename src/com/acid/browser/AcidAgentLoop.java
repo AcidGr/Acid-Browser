@@ -328,14 +328,7 @@ public class AcidAgentLoop {
             return;
         }
 
-        // Wait briefly for any previous worker thread to finish winding down
-        if (mWorkerThread != null && mWorkerThread.isAlive() && Thread.currentThread() != mWorkerThread) {
-            try {
-                mWorkerThread.join(350);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        final Thread prevWorker = mWorkerThread;
 
         AcidModelStore.ConfiguredProvider activeProvider = mModelStore.getActiveProvider();
         AcidModelStore.ModelEntry activeModel = mModelStore.getActiveModel();
@@ -380,6 +373,16 @@ public class AcidAgentLoop {
         mWorkerThread = new Thread(new Runnable() {
             @Override
             public void run() {
+                if (prevWorker != null && prevWorker.isAlive() && Thread.currentThread() != prevWorker) {
+                    try {
+                        prevWorker.join(350);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                if (mStopRequested || mRunGeneration.get() != runGen) {
+                    return;
+                }
                 runAgentLoopInternal(session, userPrompt, runGen);
             }
         }, "AcidAgentLoopThread");

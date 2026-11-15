@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Zero-dependency, deeply assertive JVM regression test suite for Acid Browser.
@@ -123,6 +124,11 @@ public final class TestRunner {
         // 15. Audit Batch-1 Fixes Regression
         run("15. Audit Batch-1: SemVer build meta, Userscript glob/header/@unwrap/traversal, Skill dedup, AdBlock $3p, DOM prune, Sandbox MCP/XSS & Host guard", new TestCase() {
             @Override public void execute() throws Exception { testAuditBatch1Fixes(); }
+        });
+
+        // 16. Batch-2 Stability & Infrastructure Convergence Regression
+        run("16. Batch-2 Stability: DownloadTask I/O generation lock, HttpProbe registration, Pending-sync overwrite guard, AdBlock flush, IPv6 favicons & Zip caps", new TestCase() {
+            @Override public void execute() throws Exception { testStabilityAndInfraConvergenceBatch2(); }
         });
 
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
@@ -1429,5 +1435,249 @@ public final class TestRunner {
         assertTrue(HttpControlServer.isLocalOrTrustedOrigin("http://localhost:3090"), "localhost Origin trusted");
         assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("null"), "Opaque 'null' Origin rejected");
         assertTrue(!HttpControlServer.isLocalOrTrustedOrigin("https://evil.com"), "Remote Origin rejected");
+    }
+
+    // =========================================================================
+    // 16. Batch-2 Stability & Infrastructure Convergence Regression
+    // =========================================================================
+
+    private static void testStabilityAndInfraConvergenceBatch2() throws Exception {
+        // 1. DownloadTask atomic writeChunkBytes generation lock + AcidIo checkpoint save/load + resetForFreshStart
+        File dlDir = File.createTempFile("acid_b2_dl_", "_dir");
+        dlDir.delete();
+        dlDir.mkdirs();
+        try {
+            DownloadTask task = new DownloadTask(
+                7701L, "https://example.com/archive.bin", "archive.bin", "application/octet-stream", dlDir, null
+            );
+            DownloadChunk c0 = new DownloadChunk(0, 0, 1023);
+            task.setChunks(Collections.singletonList(c0));
+            task.supportsRange = true;
+            task.contentLength = 1024;
+            int g0 = task.getGeneration();
+
+            byte[] payload = "HELLO_ACID_B2".getBytes(StandardCharsets.UTF_8);
+            RandomAccessFile raf = new RandomAccessFile(task.destinationFile, "rw");
+            try {
+                assertTrue(task.writeChunkBytes(raf, c0, payload, payload.length, g0),
+                    "Active generation writeChunkBytes succeeds");
+                assertEquals((long) payload.length, task.downloadedBytes, "downloadedBytes reflects written slice");
+
+                // Simulate pause bumping generation while lingering worker still holds raf
+                task.isPaused = true;
+                task.nextGeneration();
+                assertTrue(!task.writeChunkBytes(raf, c0, payload, payload.length, g0),
+                    "Stale generation worker rejected cleanly by writeChunkBytes");
+                assertEquals((long) payload.length, c0.downloadedBytes,
+                    "Chunk offset untouched by rejected stale worker");
+            } finally {
+                AcidIo.closeQuietly(raf);
+            }
+
+            assertTrue(task.saveCheckpoint(), "saveCheckpoint persists via AcidIo");
+            DownloadTask restored = new DownloadTask(
+                7701L, "https://example.com/archive.bin", "archive.bin", "application/octet-stream", dlDir, null
+            );
+            assertTrue(restored.loadCheckpoint(), "loadCheckpoint restores saved checkpoint");
+            assertEquals((long) payload.length, restored.downloadedBytes, "Restored byte count matches saved snapshot");
+
+            task.resetForFreshStart();
+            assertEquals(0L, task.downloadedBytes, "resetForFreshStart resets progress cleanly");
+            assertTrue(!task.checkpointFile.exists(), "resetForFreshStart cleans checkpoint file");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(dlDir);
+        }
+
+        // 2. HttpProbe.probe with DownloadTask registration & AcidHttp redirect credential stripping
+        final ServerSocket redirectServer = new ServerSocket(0);
+        final int port = redirectServer.getLocalPort();
+        Thread serverThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    for (int i = 0; i < 2; i++) {
+                        Socket s = redirectServer.accept();
+                        BufferedReader br = new BufferedReader(
+                            new InputStreamReader(s.getInputStream(), StandardCharsets.US_ASCII)
+                        );
+                        String reqLine = br.readLine();
+                        String line;
+                        while ((line = br.readLine()) != null && !line.isEmpty()) {}
+                        OutputStream os = s.getOutputStream();
+                        if (reqLine != null && reqLine.startsWith("GET /hop1 ")) {
+                            String resp = "HTTP/1.1 302 Found\r\n" +
+                                "Location: /hop2\r\n" +
+                                "Connection: close\r\n\r\n";
+                            os.write(resp.getBytes(StandardCharsets.US_ASCII));
+                        } else {
+                            String resp = "HTTP/1.1 206 Partial Content\r\n" +
+                                "Content-Range: bytes 0-0/2048\r\n" +
+                                "Content-Length: 1\r\n" +
+                                "Connection: close\r\n\r\nX";
+                            os.write(resp.getBytes(StandardCharsets.US_ASCII));
+                        }
+                        os.flush();
+                        s.close();
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    try { redirectServer.close(); } catch (Exception ignored) {}
+                }
+            }
+        });
+        serverThread.start();
+
+        File probeDir = File.createTempFile("acid_b2_probe_", "_dir");
+        probeDir.delete();
+        probeDir.mkdirs();
+        try {
+            DownloadTask probeTask = new DownloadTask(
+                7702L, "http://127.0.0.1:" + port + "/hop1", "hop.bin", "application/octet-stream", probeDir, null
+            );
+            HttpProbe.ProbeResult pr = HttpProbe.probe(probeTask.url, null, probeTask);
+            serverThread.join(2000);
+            assertEquals(206, Integer.valueOf(pr.responseCode), "Probe follows manual redirect to 206 endpoint");
+            assertEquals(2048L, pr.contentLength, "Content-Range total parsed after redirect");
+            assertTrue(pr.finalUrl.endsWith("/hop2"), "Probe records resolved finalUrl");
+            assertTrue(probeTask.drainActiveConnections().isEmpty(), "Completed probe unregisters active connections");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(probeDir);
+        }
+
+        // Credential retention policy check across HTTPS->HTTP & third-party domains
+        assertTrue(!AcidHttp.shouldRetainDownloadCredentials(
+            new URL("https://cdn.example.com/a"), new URL("http://cdn.example.com/a")),
+            "Downgrade HTTPS->HTTP strips credentials");
+        assertTrue(!AcidHttp.shouldRetainDownloadCredentials(
+            new URL("https://site-a.com/a"), new URL("https://site-b.com/a")),
+            "Cross-domain redirect strips credentials");
+        assertTrue(AcidHttp.shouldRetainDownloadCredentials(
+            new URL("https://d.pcs.baidu.com/file"), new URL("https://yqall02.baidupcs.com/file")),
+            "Cloud-drive ecosystem CDN retains credentials");
+
+        // 3. HistoryRepository & BookmarkRepository pending-sync guard prevents stale JSON overwrite on startup
+        File syncDir = File.createTempFile("acid_b2_sync_", "_dir");
+        syncDir.delete();
+        syncDir.mkdirs();
+        try {
+            File settingsFile = new File(syncDir, "settings.json");
+            File bookmarksFile = new File(syncDir, "bookmarks.json");
+            File historyFile = new File(syncDir, "history.json");
+
+            AcidIo.writeFileUtf8Safe(historyFile, "[{\"title\":\"Old\",\"url\":\"https://old.example\",\"time\":100}]");
+            AcidIo.writeFileUtf8Safe(bookmarksFile, "[{\"title\":\"OldBm\",\"url\":\"https://old-bm.example\"}]");
+
+            InMemoryPrefs prefs = new InMemoryPrefs();
+            prefs.edit()
+                .putString(HistoryRepository.PREF_HISTORY, "[{\"title\":\"New\",\"url\":\"https://new.example\",\"time\":200}]")
+                .putBoolean(HistoryRepository.PREF_HISTORY_PENDING_SYNC, true)
+                .putString(BookmarkRepository.PREF_BOOKMARKS, "[{\"title\":\"NewBm\",\"url\":\"https://new-bm.example\"}]")
+                .putBoolean(BookmarkRepository.PREF_BOOKMARKS_PENDING_SYNC, true)
+                .apply();
+
+            BrowserDataStore ds = new BrowserDataStore(prefs, new InMemoryPrefs(), settingsFile, bookmarksFile, historyFile);
+            ds.syncHistoryJsonFile();
+            ds.syncBookmarksJsonFile();
+
+            List<BrowserDataStore.EntryItem> hist = ds.loadHistory();
+            assertEquals(1, Integer.valueOf(hist.size()), "Pending-sync history count preserved");
+            assertEquals("https://new.example", hist.get(0).url, "Newer SharedPreferences history must not be clobbered by stale history.json");
+            assertTrue(AcidIo.readFileUtf8(historyFile).contains("https://new.example"), "history.json catches up from pending SharedPreferences");
+            assertTrue(!prefs.getBoolean(HistoryRepository.PREF_HISTORY_PENDING_SYNC, true), "Pending history sync flag cleared once flushed");
+
+            List<BrowserDataStore.EntryItem> bms = ds.loadBookmarks();
+            assertEquals(1, Integer.valueOf(bms.size()), "Pending-sync bookmark count preserved");
+            assertEquals("https://new-bm.example", bms.get(0).url, "Newer SharedPreferences bookmark must not be clobbered by stale bookmarks.json");
+            assertTrue(!prefs.getBoolean(BookmarkRepository.PREF_BOOKMARKS_PENDING_SYNC, true), "Pending bookmark sync flag cleared once flushed");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(syncDir);
+        }
+
+        // 4. AdBlockManager rule loading + remainder (<5) blocked count flush
+        File abDir = File.createTempFile("acid_b2_ab_", "_dir");
+        abDir.delete();
+        abDir.mkdirs();
+        try {
+            File customRules = new File(abDir, "custom_rules.txt");
+            AcidIo.writeFileUtf8Safe(customRules, "||ad-tracker.example^\n");
+            InMemoryPrefs abPrefs = new InMemoryPrefs();
+            BrowserDataStore abStore = new BrowserDataStore(
+                abPrefs, new InMemoryPrefs(),
+                new File(abDir, "settings.json"), new File(abDir, "bookmarks.json"), new File(abDir, "history.json")
+            );
+            AdBlockManager ab = new AdBlockManager(customRules, null, abStore);
+            ab.loadAllRulesSync();
+            assertTrue(ab.recordBlockedUri(android.net.Uri.parse("https://ad-tracker.example/p.js")), "AdBlock #1 blocked");
+            assertTrue(ab.recordBlockedUri(android.net.Uri.parse("https://ad-tracker.example/q.js")), "AdBlock #2 blocked");
+            assertTrue(ab.recordBlockedUri(android.net.Uri.parse("https://ad-tracker.example/r.js")), "AdBlock #3 blocked");
+            ab.flushBlockedCount();
+            assertEquals(3, Integer.valueOf(abStore.getAdBlockBlockedCount()), "flushBlockedCount persists remainder (<5) without loss");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(abDir);
+        }
+
+        // 5. FaviconManager IPv6 bracket handling & atomic saveToDisk
+        assertEquals("[::1]:8080", FaviconManager.extractHost("http://[::1]:8080/dashboard"), "IPv6 non-standard port preserved");
+        assertEquals("[::1]", FaviconManager.extractHost("http://[::1]:80/index.html"), "IPv6 default :80 stripped cleanly");
+        assertEquals("[2001:db8::1]", FaviconManager.extractHost("https://[2001:db8::1]:443/app"), "IPv6 default :443 stripped cleanly");
+        assertTrue(FaviconManager.isLocalOrIpHost("[::1]:8080"), "Bracketed IPv6 loopback with port detected as local/IP");
+        assertTrue(FaviconManager.isLocalOrIpHost("[2001:db8::1]"), "Bracketed IPv6 literal detected as local/IP");
+        assertTrue(!FaviconManager.isLocalOrIpHost("acid.browser:8443"), "Standard hostname with port is not local/IP");
+
+        // 6. SkillStorageVault.resolveSafeChild traversal guard & SkillPackageImporter oversized ZIP abort
+        File skillTmp = File.createTempFile("acid_b2_sk_", "_dir");
+        skillTmp.delete();
+        skillTmp.mkdirs();
+        try {
+            boolean escapeBlocked = false;
+            try {
+                SkillStorageVault.resolveSafeChild(skillTmp, "../outside.md");
+            } catch (SecurityException se) {
+                escapeBlocked = true;
+            }
+            assertTrue(escapeBlocked, "SkillStorageVault.resolveSafeChild rejects parent traversal");
+
+            ByteArrayOutputStream zipBos = new ByteArrayOutputStream();
+            ZipOutputStream zos = new ZipOutputStream(zipBos);
+            zos.putNextEntry(new ZipEntry("oversized/SKILL.md"));
+            byte[] block = new byte[65536];
+            Arrays.fill(block, (byte) 'A');
+            long written = 0;
+            while (written <= SkillPackageImporter.MAX_IMPORT_TOTAL_BYTES + 4096) {
+                zos.write(block);
+                written += block.length;
+            }
+            zos.closeEntry();
+            zos.close();
+
+            File skillsDir = new File(skillTmp, "skills");
+            skillsDir.mkdirs();
+            SkillPackageImporter importer = new SkillPackageImporter(skillsDir);
+            SkillManager.ImportResult oversizedRes = importer.importFromZipBytes(zipBos.toByteArray(), "oversized_pkg");
+            assertTrue(!oversizedRes.success, "Oversized ZIP exceeding MAX_IMPORT_TOTAL_BYTES fails cleanly instead of writing truncated file");
+            assertTrue(!new File(skillsDir, "oversized_pkg").exists(), "Failed oversized ZIP does not leave partial skill directory");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(skillTmp);
+        }
+
+        // 7. AcidAsync.runSerialized executes tasks in strict FIFO order
+        final List<Integer> order = Collections.synchronizedList(new ArrayList<Integer>());
+        java.util.concurrent.Future<?> last = null;
+        for (int i = 0; i < 8; i++) {
+            final int idx = i;
+            last = AcidAsync.runSerialized(new Runnable() {
+                @Override
+                public void run() {
+                    order.add(Integer.valueOf(idx));
+                }
+            });
+        }
+        if (last != null) {
+            last.get();
+        }
+        assertEquals(8, Integer.valueOf(order.size()), "All 8 serialized tasks executed");
+        for (int i = 0; i < 8; i++) {
+            assertEquals(Integer.valueOf(i), order.get(i), "AcidAsync.runSerialized preserves strict FIFO ordering at index " + i);
+        }
     }
 }

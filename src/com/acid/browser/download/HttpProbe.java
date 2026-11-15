@@ -1,5 +1,8 @@
 package com.acid.browser.download;
 
+import com.acid.browser.AcidHttp;
+import com.acid.browser.AcidIo;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -62,58 +65,49 @@ public final class HttpProbe {
      * Probes the given URL with a Range-test probe to discover length and Range support.
      */
     public static ProbeResult probe(String initialUrl, Map<String, String> headers) throws IOException {
-        String currentUrl = initialUrl;
-        int redirectCount = 0;
-        Map<String, String> activeHeaders = headers != null
-            ? new java.util.HashMap<String, String>(headers)
-            : null;
+        return probe(initialUrl, headers, null);
+    }
 
-        while (redirectCount < MAX_REDIRECTS) {
-            URL u = new URL(currentUrl);
-            String proto = u.getProtocol() != null ? u.getProtocol().toLowerCase(Locale.ROOT) : "";
-            if (!"http".equals(proto) && !"https".equals(proto)) {
-                throw new IOException("Unsupported download protocol: " + proto);
-            }
-            HttpURLConnection conn = (HttpURLConnection) u.openConnection();
-            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
-            conn.setInstanceFollowRedirects(false); // Manually handle to enforce credential & protocol policy
+    /**
+     * Probes the given URL with optional {@link DownloadTask} connection registration so
+     * pause/cancel immediately aborts in-flight probe sockets.
+     */
+    public static ProbeResult probe(String initialUrl, Map<String, String> headers, final DownloadTask task) throws IOException {
+        HttpURLConnection conn = AcidHttp.openConnectionWithRedirects(
+            initialUrl,
+            "GET",
+            headers,
+            CONNECT_TIMEOUT_MS,
+            READ_TIMEOUT_MS,
+            MAX_REDIRECTS,
+            null,
+            AcidHttp.DOWNLOAD_CREDENTIALS,
+            new AcidHttp.RedirectListener() {
+                @Override
+                public void onConnectionOpened(HttpURLConnection c, URL url, Map<String, String> activeHeaders) throws IOException {
+                    if (task != null) {
+                        if (task.isPaused || task.isCanceled) {
+                            throw new IOException("Aborted");
+                        }
+                        task.registerConnection(c);
+                    }
+                    // Probe with Range: bytes=0-0 to test both total length and HTTP 206 support in one shot
+                    c.setRequestProperty("Range", "bytes=0-0");
+                }
 
-            if (activeHeaders != null) {
-                for (Map.Entry<String, String> entry : activeHeaders.entrySet()) {
-                    conn.setRequestProperty(entry.getKey(), entry.getValue());
+                @Override
+                public void onConnectionClosing(HttpURLConnection c) {
+                    if (task != null) {
+                        task.unregisterConnection(c);
+                    }
                 }
             }
+        );
 
-            // Probe with Range: bytes=0-0 to test both total length and HTTP 206 support in one shot
-            conn.setRequestProperty("Range", "bytes=0-0");
-            conn.connect();
-
+        InputStream is = null;
+        try {
             int code = conn.getResponseCode();
-
-            // Redirect handling (301, 302, 303, 307, 308)
-            if (code == HttpURLConnection.HTTP_MOVED_PERM
-                || code == HttpURLConnection.HTTP_MOVED_TEMP
-                || code == HttpURLConnection.HTTP_SEE_OTHER
-                || code == 307 || code == 308) {
-                String loc = conn.getHeaderField("Location");
-                conn.disconnect();
-                if (loc == null || loc.trim().isEmpty()) {
-                    throw new IOException("Redirect without Location header (HTTP " + code + ")");
-                }
-                // Handle relative redirect URL
-                URL nextUrl = new URL(u, loc.trim());
-                String nextProto = nextUrl.getProtocol() != null ? nextUrl.getProtocol().toLowerCase(Locale.ROOT) : "";
-                if (!"http".equals(nextProto) && !"https".equals(nextProto)) {
-                    throw new IOException("Disallowed redirect protocol: " + nextProto);
-                }
-                if (activeHeaders != null && !shouldRetainCredentialsOnRedirect(u, nextUrl)) {
-                    stripSensitiveHeaders(activeHeaders);
-                }
-                currentUrl = nextUrl.toString();
-                redirectCount++;
-                continue;
-            }
+            String finalUrl = conn.getURL() != null ? conn.getURL().toString() : initialUrl;
 
             long totalLength = -1;
             boolean supportsRange = false;
@@ -144,17 +138,19 @@ public final class HttpProbe {
             String eTag = (code >= 200 && code < 300) ? conn.getHeaderField("ETag") : null;
             String lastModified = (code >= 200 && code < 300) ? conn.getHeaderField("Last-Modified") : null;
 
-            // Clean up stream safely
             try {
-                InputStream is = conn.getInputStream();
-                if (is != null) is.close();
+                is = conn.getInputStream();
             } catch (Exception ignored) {}
+            AcidIo.closeQuietly(is);
+
+            return new ProbeResult(finalUrl, totalLength, supportsRange, mimeType, fileName, code, eTag, lastModified);
+        } finally {
+            AcidIo.closeQuietly(is);
+            if (task != null) {
+                task.unregisterConnection(conn);
+            }
             conn.disconnect();
-
-            return new ProbeResult(currentUrl, totalLength, supportsRange, mimeType, fileName, code, eTag, lastModified);
         }
-
-        throw new IOException("Too many redirects (exceeded " + MAX_REDIRECTS + ")");
     }
 
     /**
@@ -319,76 +315,10 @@ public final class HttpProbe {
      * (e.g. {@code d.pcs.baidu.com -> *.baidupcs.com}, {@code *.115.com -> *.115cdn.com}).
      */
     public static boolean shouldRetainCredentialsOnRedirect(URL fromUrl, URL toUrl) {
-        if (fromUrl == null || toUrl == null) return false;
-        String fromProto = fromUrl.getProtocol() != null ? fromUrl.getProtocol().toLowerCase(Locale.ROOT) : "";
-        String toProto = toUrl.getProtocol() != null ? toUrl.getProtocol().toLowerCase(Locale.ROOT) : "";
-        if ("https".equals(fromProto) && !"https".equals(toProto)) {
-            return false; // Never leak HTTPS cookies/tokens onto cleartext HTTP
-        }
-        String fromHost = normalizeHost(fromUrl.getHost());
-        String toHost = normalizeHost(toUrl.getHost());
-        if (fromHost.isEmpty() || toHost.isEmpty()) return false;
-        if (fromHost.equals(toHost)) {
-            int fromPort = fromUrl.getPort() != -1 ? fromUrl.getPort() : fromUrl.getDefaultPort();
-            int toPort = toUrl.getPort() != -1 ? toUrl.getPort() : toUrl.getDefaultPort();
-            return fromPort == toPort;
-        }
-        // Same cloud-drive ecosystem CDN groups
-        if (isBaiduDriveHost(fromHost) && isBaiduDriveHost(toHost)) return true;
-        if (is115DriveHost(fromHost) && is115DriveHost(toHost)) return true;
-        if (isSubdomainOf(fromHost, "quark.cn") && isSubdomainOf(toHost, "quark.cn")) return true;
-        if (isSubdomainOf(fromHost, "uc.cn") && isSubdomainOf(toHost, "uc.cn")) return true;
-        // Same registrable parent domain (e.g. files.example.com -> cdn.example.com)
-        if (toHost.endsWith("." + fromHost) || fromHost.endsWith("." + toHost)) return true;
-        String parentFrom = parentDomainIfSafe(fromHost);
-        String parentTo = parentDomainIfSafe(toHost);
-        return parentFrom != null && parentFrom.equals(parentTo);
+        return AcidHttp.shouldRetainDownloadCredentials(fromUrl, toUrl);
     }
 
     public static void stripSensitiveHeaders(Map<String, String> headers) {
-        if (headers == null || headers.isEmpty()) return;
-        java.util.Iterator<String> it = headers.keySet().iterator();
-        while (it.hasNext()) {
-            String k = it.next();
-            if (k == null) continue;
-            String lower = k.trim().toLowerCase(Locale.ROOT);
-            if ("cookie".equals(lower) || "authorization".equals(lower) || "proxy-authorization".equals(lower)) {
-                it.remove();
-            }
-        }
-    }
-
-    private static String normalizeHost(String host) {
-        if (host == null) return "";
-        String h = host.trim().toLowerCase(Locale.ROOT);
-        while (h.endsWith(".")) {
-            h = h.substring(0, h.length() - 1).trim();
-        }
-        return h;
-    }
-
-    private static boolean isSubdomainOf(String host, String root) {
-        return host.equals(root) || host.endsWith("." + root);
-    }
-
-    private static boolean isBaiduDriveHost(String host) {
-        return isSubdomainOf(host, "baidu.com") || isSubdomainOf(host, "baidupcs.com");
-    }
-
-    private static boolean is115DriveHost(String host) {
-        return isSubdomainOf(host, "115.com") || isSubdomainOf(host, "115cdn.com") || isSubdomainOf(host, "115cdn.net");
-    }
-
-    private static String parentDomainIfSafe(String host) {
-        int dot = host.indexOf('.');
-        if (dot <= 0 || dot >= host.length() - 1) return null;
-        String parent = host.substring(dot + 1);
-        if (!parent.contains(".")) return null; // Never treat single-label TLD like "com" as shared parent
-        if ("com.cn".equals(parent) || "net.cn".equals(parent) || "org.cn".equals(parent)
-            || "co.uk".equals(parent) || "co.jp".equals(parent) || "com.hk".equals(parent)
-            || "github.io".equals(parent) || "gitlab.io".equals(parent)) {
-            return null;
-        }
-        return parent;
+        AcidHttp.stripSensitiveHeaders(headers);
     }
 }

@@ -62,7 +62,36 @@ public final class AcidAsync {
         }
     });
 
+    private static final ExecutorService SERIAL_IO = Executors.newSingleThreadExecutor(new ThreadFactory() {
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "AcidAsync-SerialIO");
+            t.setDaemon(true);
+            return t;
+        }
+    });
+
     private AcidAsync() {}
+
+    public static Future<?> run(Runnable action) {
+        if (action == null) return null;
+        return POOL.submit(action);
+    }
+
+    public static Future<?> runSerialized(Runnable action) {
+        if (action == null) return null;
+        return SERIAL_IO.submit(action);
+    }
+
+    public static boolean isMainThread() {
+        try {
+            Looper main = Looper.getMainLooper();
+            return main != null && Looper.myLooper() == main;
+        } catch (Throwable ignored) {
+            // JVM unit test environment where Looper is stubbed
+            return false;
+        }
+    }
 
     public static <T> Handle run(final Task<T> task, final Callback<T> callback) {
         final Handle handle = new Handle();

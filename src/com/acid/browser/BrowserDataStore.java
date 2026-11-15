@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Data repository for browser bookmarks, browsing history, and global user preferences.
@@ -33,6 +34,7 @@ public class BrowserDataStore {
     public static final String PREF_BOOKMARKS = BookmarkRepository.PREF_BOOKMARKS;
     public static final String PREF_HISTORY = HistoryRepository.PREF_HISTORY;
     public static final String PREF_DOWNLOADS = "downloads";
+    private static final String PREF_SETTINGS_PENDING_SYNC = "settings_pending_json_sync";
     private static final String LEGACY_PREF_ACTIVITY = "acid_browser_prefs";
 
     public static final int SEARCH_GOOGLE = 0;
@@ -111,6 +113,8 @@ public class BrowserDataStore {
     private FileObserver mFileObserver = null;
     private volatile long mLastSelfSaveTime = 0;
     private volatile String mLastSyncedSettingsJson = null;
+    private final AtomicLong mSettingsRevision = new AtomicLong(0);
+    private final Object mSettingsFileLock = new Object();
 
     public BrowserDataStore(Context context) {
         mContext = context.getApplicationContext();
@@ -289,7 +293,8 @@ public class BrowserDataStore {
 
     public void syncSettingsJsonFile() {
         if (mSettingsJsonFile == null) return;
-        if (mSettingsJsonFile.exists()) {
+        boolean pending = prefs().getBoolean(PREF_SETTINGS_PENDING_SYNC, false);
+        if (!pending && mSettingsJsonFile.exists()) {
             reloadFromJsonFile();
         } else {
             saveToJsonFile();
@@ -319,10 +324,23 @@ public class BrowserDataStore {
 
         SharedPreferences.Editor ed = prefs().edit();
         key.write(ed, sanitized);
+        if (key.exportToJson) {
+            ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, true);
+        }
         ed.apply();
 
         if (key.exportToJson) {
-            saveToJsonFile();
+            final long rev = mSettingsRevision.incrementAndGet();
+            if (AcidAsync.isMainThread()) {
+                AcidAsync.runSerialized(new Runnable() {
+                    @Override
+                    public void run() {
+                        saveToJsonFileForRevision(rev);
+                    }
+                });
+            } else {
+                saveToJsonFileForRevision(rev);
+            }
         }
         if (changed) {
             notifyKeyObservers(key, sanitized);
@@ -458,15 +476,27 @@ public class BrowserDataStore {
     }
 
     public void saveToJsonFile() {
-        if (mSettingsJsonFile == null) return;
-        try {
-            mLastSelfSaveTime = System.currentTimeMillis();
-            JSONObject o = exportToJson();
-            String jsonText = o.toString(2);
-            mLastSyncedSettingsJson = jsonText;
-            AcidIo.writeFileUtf8(mSettingsJsonFile, jsonText);
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to save settings.json", e);
+        saveToJsonFileForRevision(0);
+    }
+
+    private void saveToJsonFileForRevision(long expectedRevision) {
+        synchronized (mSettingsFileLock) {
+            if (mSettingsJsonFile == null) return;
+            if (expectedRevision > 0 && expectedRevision < mSettingsRevision.get()) {
+                return;
+            }
+            try {
+                mLastSelfSaveTime = System.currentTimeMillis();
+                JSONObject o = exportToJson();
+                String jsonText = o.toString(2);
+                mLastSyncedSettingsJson = jsonText;
+                AcidIo.writeFileUtf8(mSettingsJsonFile, jsonText);
+                if (expectedRevision <= 0 || expectedRevision == mSettingsRevision.get()) {
+                    prefs().edit().putBoolean(PREF_SETTINGS_PENDING_SYNC, false).apply();
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to save settings.json", e);
+            }
         }
     }
 
@@ -523,7 +553,9 @@ public class BrowserDataStore {
                     changedEntries.add(diff);
                 }
             }
+            ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, false);
             ed.apply();
+            mSettingsRevision.incrementAndGet();
 
             for (int i = 0; i < changedEntries.size(); i++) {
                 changedEntries.get(i).notifyOn(this);

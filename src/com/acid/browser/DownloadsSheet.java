@@ -206,6 +206,32 @@ public class DownloadsSheet extends AcidBottomSheetView {
         mMainHandler.postDelayed(mProgressPoller, PROGRESS_POLL_INTERVAL_MS);
     }
 
+    private void pauseDownloadWithFeedback(Context ctx, DownloadItem it) {
+        if (mDownloads == null || it == null) return;
+        if (mDownloads.pauseDownload(it.downloadId)) {
+            AcidFeedback.info(ctx, "已暂停: " + it.fileName);
+        } else {
+            AcidFeedback.info(ctx, "系统下载器任务暂不支持手动暂停");
+        }
+        updateDownloadListRows();
+    }
+
+    private void resumeDownloadWithFeedback(Context ctx, DownloadItem it, boolean isRetry) {
+        if (mDownloads == null || it == null) return;
+        if (mDownloads.resumeDownload(it.downloadId)) {
+            if (isRetry) {
+                AcidFeedback.info(ctx, "正在重试下载: " + it.fileName);
+            } else {
+                AcidFeedback.ok(ctx, "已恢复下载: " + it.fileName);
+            }
+            updateDownloadListRows();
+            startProgressPolling();
+        } else {
+            AcidFeedback.info(ctx, "该任务由系统下载器托管或已完成");
+            updateDownloadListRows();
+        }
+    }
+
     private void stopProgressPolling() {
         if (mProgressPoller != null) {
             mMainHandler.removeCallbacks(mProgressPoller);
@@ -300,15 +326,9 @@ public class DownloadsSheet extends AcidBottomSheetView {
                         updateDownloadListRows();
                         startProgressPolling();
                     } else if (it.status == DownloadManager.STATUS_PAUSED) {
-                        mDownloads.resumeDownload(it.downloadId);
-                        AcidFeedback.ok(ctx, "已恢复下载: " + it.fileName);
-                        updateDownloadListRows();
-                        startProgressPolling();
+                        resumeDownloadWithFeedback(ctx, it, false);
                     } else if (it.status == DownloadManager.STATUS_FAILED) {
-                        mDownloads.resumeDownload(it.downloadId);
-                        AcidFeedback.info(ctx, "正在重试下载: " + it.fileName);
-                        updateDownloadListRows();
-                        startProgressPolling();
+                        resumeDownloadWithFeedback(ctx, it, true);
                     } else {
                         mDownloads.openDownloadedFile(it);
                     }
@@ -354,35 +374,21 @@ public class DownloadsSheet extends AcidBottomSheetView {
             actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_CLOSE, "暂停下载", new Runnable() {
                 @Override
                 public void run() {
-                    if (mDownloads != null) {
-                        mDownloads.pauseDownload(it.downloadId);
-                        AcidFeedback.info(ctx, "已暂停: " + it.fileName);
-                        updateDownloadListRows();
-                    }
+                    pauseDownloadWithFeedback(ctx, it);
                 }
             }));
         } else if (it.status == DownloadManager.STATUS_PAUSED) {
             actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RELOAD, "继续下载", new Runnable() {
                 @Override
                 public void run() {
-                    if (mDownloads != null) {
-                        mDownloads.resumeDownload(it.downloadId);
-                        AcidFeedback.ok(ctx, "已恢复下载: " + it.fileName);
-                        updateDownloadListRows();
-                        startProgressPolling();
-                    }
+                    resumeDownloadWithFeedback(ctx, it, false);
                 }
             }));
         } else if (it.status == DownloadManager.STATUS_FAILED) {
             actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RELOAD, "继续/重试下载", new Runnable() {
                 @Override
                 public void run() {
-                    if (mDownloads != null) {
-                        mDownloads.resumeDownload(it.downloadId);
-                        AcidFeedback.info(ctx, "正在重试下载: " + it.fileName);
-                        updateDownloadListRows();
-                        startProgressPolling();
-                    }
+                    resumeDownloadWithFeedback(ctx, it, true);
                 }
             }));
         }

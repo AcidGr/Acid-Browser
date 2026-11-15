@@ -6,6 +6,7 @@ import android.content.Context;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -25,6 +26,13 @@ public final class AcidIo {
 
     private AcidIo() {}
 
+    public static void closeQuietly(Closeable c) {
+        if (c == null) return;
+        try {
+            c.close();
+        } catch (IOException ignored) {}
+    }
+
     public static String readStreamUtf8(InputStream is) throws IOException {
         if (is == null) return "";
         try {
@@ -36,9 +44,7 @@ public final class AcidIo {
             }
             return new String(baos.toByteArray(), StandardCharsets.UTF_8);
         } finally {
-            try {
-                is.close();
-            } catch (IOException ignored) {}
+            closeQuietly(is);
         }
     }
 
@@ -144,10 +150,10 @@ public final class AcidIo {
                 }
                 fos.flush();
             } finally {
-                try { fos.close(); } catch (IOException ignored) {}
+                closeQuietly(fos);
             }
         } finally {
-            try { fis.close(); } catch (IOException ignored) {}
+            closeQuietly(fis);
         }
     }
 

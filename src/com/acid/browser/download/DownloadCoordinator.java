@@ -14,6 +14,7 @@ import android.webkit.CookieManager;
 import android.webkit.MimeTypeMap;
 import android.webkit.URLUtil;
 
+import com.acid.browser.AcidAsync;
 import com.acid.browser.AcidFeedback;
 import com.acid.browser.AcidFileProvider;
 import com.acid.browser.AcidIo;
@@ -29,6 +30,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Coordinates browser downloads across the built-in multi-threaded {@link AcidDownloader}
@@ -51,7 +53,7 @@ public class DownloadCoordinator {
     private final Handler mMainHandler;
     private BrowserDataStore mDataStore;
     /** Guards against stacking overlapping DownloadManager passes. */
-    private volatile boolean mSyncInFlight = false;
+    private final AtomicBoolean mSyncInFlight = new AtomicBoolean(false);
     private static final long PERSIST_THROTTLE_MS = 1500L;
     private long mLastPersistTimeMs = 0L;
 
@@ -87,7 +89,7 @@ public class DownloadCoordinator {
             @Override
             public void onTaskCompleted(DownloadTask task) {
                 updateDownloadItemFromTask(task, true);
-                onDownloadCompleted(task.id);
+                Log.i(TAG, "[DOWNLOAD] Complete: " + task.fileName);
             }
 
             @Override
@@ -927,6 +929,41 @@ public class DownloadCoordinator {
         return mDownloader.pause(downloadId);
     }
 
+    private int querySystemDownloadStatus(long downloadId) {
+        if (mContext == null || downloadId <= 0) return -1;
+        DownloadManager dm = null;
+        try {
+            dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+        } catch (Exception ignored) {}
+        if (dm == null) return -1;
+        Cursor c = null;
+        try {
+            DownloadManager.Query q = new DownloadManager.Query();
+            q.setFilterById(downloadId);
+            c = dm.query(q);
+            if (c != null && c.moveToFirst()) {
+                int col = c.getColumnIndex(DownloadManager.COLUMN_STATUS);
+                if (col != -1) {
+                    return c.getInt(col);
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            AcidIo.closeQuietly(c);
+        }
+        return -1;
+    }
+
+    private void removeSystemDownloadQuietly(long downloadId) {
+        if (mContext == null || downloadId <= 0) return;
+        try {
+            DownloadManager dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm != null) {
+                dm.remove(downloadId);
+            }
+        } catch (Exception ignored) {}
+    }
+
     public boolean resumeDownload(long downloadId) {
         DownloadTask task = mDownloader.getTask(downloadId);
         if (task != null) {
@@ -946,6 +983,22 @@ public class DownloadCoordinator {
             }
             return mDownloader.resume(downloadId);
         }
+
+        int sysStatus = querySystemDownloadStatus(downloadId);
+        if (sysStatus == DownloadManager.STATUS_RUNNING
+            || sysStatus == DownloadManager.STATUS_PENDING
+            || sysStatus == DownloadManager.STATUS_PAUSED) {
+            // Still owned by system DownloadManager; do not spawn a duplicate builtin download
+            return false;
+        }
+        if (sysStatus == DownloadManager.STATUS_SUCCESSFUL) {
+            syncDownloadStatusAsync(null);
+            return false;
+        }
+        if (sysStatus == DownloadManager.STATUS_FAILED) {
+            removeSystemDownloadQuietly(downloadId);
+        }
+
         synchronized (mDownloads) {
             for (DownloadItem it : mDownloads) {
                 if (it.downloadId == downloadId) {
@@ -1072,7 +1125,9 @@ public class DownloadCoordinator {
     }
 
     public void onDownloadCompleted(long downloadId) {
-        syncDownloadStatusAsync(null);
+        if (mDownloader.getTask(downloadId) == null) {
+            syncDownloadStatusAsync(null);
+        }
         synchronized (mDownloads) {
             for (DownloadItem it : mDownloads) {
                 if (it.downloadId == downloadId) {
@@ -1084,10 +1139,9 @@ public class DownloadCoordinator {
     }
 
     public void syncDownloadStatusAsync(final DownloadSyncCallback callback) {
-        if (mSyncInFlight) return;
-        mSyncInFlight = true;
+        if (!mSyncInFlight.compareAndSet(false, true)) return;
 
-        new Thread(new Runnable() {
+        AcidAsync.run(new Runnable() {
             @Override
             public void run() {
                 boolean anyActive = false;
@@ -1096,7 +1150,7 @@ public class DownloadCoordinator {
                 } catch (Exception e) {
                     Log.w(TAG, "Background download status sync failed", e);
                 } finally {
-                    mSyncInFlight = false;
+                    mSyncInFlight.set(false);
                 }
 
                 final boolean result = anyActive;
@@ -1113,7 +1167,7 @@ public class DownloadCoordinator {
                     callback.onDownloadSyncDone(result);
                 }
             }
-        }, "AcidDownloadSync").start();
+        });
     }
 
     private boolean syncDownloadStatusOffMainThread() {
@@ -1396,11 +1450,38 @@ public class DownloadCoordinator {
     }
 
     public void clearDownloads() {
+        final List<DownloadItem> snapshot;
         synchronized (mDownloads) {
+            snapshot = new ArrayList<DownloadItem>(mDownloads);
             mDownloads.clear();
         }
         if (mDataStore != null) {
             mDataStore.clearDownloads();
+        }
+        if (!snapshot.isEmpty()) {
+            AcidAsync.run(new Runnable() {
+                @Override
+                public void run() {
+                    DownloadManager dm = null;
+                    try {
+                        if (mContext != null) {
+                            dm = (DownloadManager) mContext.getSystemService(Context.DOWNLOAD_SERVICE);
+                        }
+                    } catch (Exception ignored) {}
+                    for (DownloadItem it : snapshot) {
+                        if (it == null || it.downloadId <= 0) continue;
+                        DownloadTask t = mDownloader.getTask(it.downloadId);
+                        if (t != null) {
+                            boolean unfinished = t.status != DownloadTask.STATUS_SUCCESSFUL;
+                            mDownloader.cancel(it.downloadId, unfinished);
+                        } else if (dm != null && it.status != DownloadManager.STATUS_SUCCESSFUL) {
+                            try {
+                                dm.remove(it.downloadId);
+                            } catch (Exception ignored) {}
+                        }
+                    }
+                }
+            });
         }
     }
 }

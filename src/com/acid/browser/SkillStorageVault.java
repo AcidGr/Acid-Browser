@@ -104,6 +104,24 @@ public class SkillStorageVault {
         }
     }
 
+    public static File resolveSafeChild(File parentDir, String childName) throws IOException {
+        if (parentDir == null) {
+            throw new IllegalArgumentException("Parent directory is null");
+        }
+        String sanitized = childName != null ? childName.trim() : "";
+        if (sanitized.isEmpty() || ".".equals(sanitized) || "..".equals(sanitized)
+            || sanitized.contains("/") || sanitized.contains("\\") || sanitized.indexOf('\0') >= 0) {
+            throw new SecurityException("Unsafe child entry name: " + childName);
+        }
+        File candidate = new File(parentDir, sanitized);
+        String baseCanon = parentDir.getCanonicalPath();
+        String candCanon = candidate.getCanonicalPath();
+        if (candCanon.equals(baseCanon) || !candCanon.startsWith(baseCanon + File.separator)) {
+            throw new SecurityException("Path escapes parent directory: " + childName);
+        }
+        return candidate;
+    }
+
     public static boolean deleteRecursiveSafe(File file) {
         if (file == null || !file.exists()) return false;
         if (file.isDirectory()) {

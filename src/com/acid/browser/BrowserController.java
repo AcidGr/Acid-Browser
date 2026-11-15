@@ -2063,6 +2063,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 mActiveTab.webView.onPause();
             } catch (Exception ignored) {}
         }
+        if (mContext != null) {
+            try {
+                AdBlockManager.getInstance(mContext).flushBlockedCount();
+            } catch (Exception ignored) {}
+        }
     }
 
     /**

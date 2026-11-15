@@ -219,16 +219,13 @@ public class UserscriptHttpHandler {
             }
 
             // Handle cross-protocol/cross-origin redirects according to RFC 7235 & Fetch standard
-            if (statusCode == HttpURLConnection.HTTP_MOVED_PERM ||
-                statusCode == HttpURLConnection.HTTP_MOVED_TEMP ||
-                statusCode == HttpURLConnection.HTTP_SEE_OTHER ||
-                statusCode == 307 || statusCode == 308) {
+            if (AcidHttp.isRedirectStatus(statusCode)) {
                 String loc = conn.getHeaderField("Location");
                 if (loc != null && !loc.trim().isEmpty()) {
                     URL nextUrl = new URL(new URL(currentUrl), loc.trim());
                     validateAllowedHttpTarget(nextUrl);
-                    if (!isSameOrigin(new URL(currentUrl), nextUrl)) {
-                        stripSensitiveHeadersOnCrossDomain(customHeaders);
+                    if (!AcidHttp.isSameOrigin(new URL(currentUrl), nextUrl)) {
+                        AcidHttp.stripSensitiveHeaders(customHeaders);
                     }
                     currentUrl = nextUrl.toString();
                     conn.disconnect();
@@ -449,28 +446,6 @@ public class UserscriptHttpHandler {
             } catch (SecurityException se) {
                 throw se;
             } catch (Throwable ignored) {}
-        }
-    }
-
-    private static boolean isSameOrigin(URL a, URL b) {
-        if (a == null || b == null) return false;
-        String protoA = a.getProtocol() != null ? a.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
-        String protoB = b.getProtocol() != null ? b.getProtocol().toLowerCase(java.util.Locale.ROOT) : "";
-        String hostA = a.getHost() != null ? a.getHost().toLowerCase(java.util.Locale.ROOT) : "";
-        String hostB = b.getHost() != null ? b.getHost().toLowerCase(java.util.Locale.ROOT) : "";
-        int portA = a.getPort() != -1 ? a.getPort() : a.getDefaultPort();
-        int portB = b.getPort() != -1 ? b.getPort() : b.getDefaultPort();
-        return protoA.equals(protoB) && hostA.equals(hostB) && portA == portB;
-    }
-
-    private static void stripSensitiveHeadersOnCrossDomain(Map<String, String> headers) {
-        if (headers == null || headers.isEmpty()) return;
-        Iterator<String> it = headers.keySet().iterator();
-        while (it.hasNext()) {
-            String k = it.next().toLowerCase(java.util.Locale.ROOT);
-            if ("authorization".equals(k) || "cookie".equals(k) || "proxy-authorization".equals(k)) {
-                it.remove();
-            }
         }
     }
 }
