@@ -364,7 +364,7 @@ public class AboutSheet extends AcidBottomSheetView {
 
         p.setColor(Color.rgb(30, 41, 59));
         p.setTextSize(30f);
-        drawCenteredText(canvas, p, "酸小明(**勋)", cardW / 2f, qrY0 + qrPx + 54f);
+        drawCenteredText(canvas, p, "酸小明", cardW / 2f, qrY0 + qrPx + 54f);
 
         p.setColor(Color.WHITE);
         p.setTextSize(26f);

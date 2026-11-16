@@ -288,6 +288,9 @@ public final class TestRunner {
     // =========================================================================
 
     private static void testAgentLoopAndToolDispatching() throws Exception {
+        assertEquals(Integer.valueOf(200), Integer.valueOf(AcidAgentLoop.DEFAULT_MAX_LOOP_STEPS),
+            "Default max agent loop step limit is 200");
+
         // 1. Tool Calls Deduplication: Proxy repeating function name must NOT duplicate to browserbrowser
         Map<Integer, AcidAgentLoop.StreamingToolCall> toolCallsMap = new HashMap<Integer, AcidAgentLoop.StreamingToolCall>();
 

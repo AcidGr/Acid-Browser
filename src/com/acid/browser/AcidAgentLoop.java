@@ -47,7 +47,7 @@ public class AcidAgentLoop {
         void onContextUsageUpdated(int totalTokens, int promptTokens, int cachedTokens);
     }
 
-    public static final int DEFAULT_MAX_LOOP_STEPS = 50;
+    public static final int DEFAULT_MAX_LOOP_STEPS = 200;
 
     private final Context mContext;
     private final BrowserController mController;
