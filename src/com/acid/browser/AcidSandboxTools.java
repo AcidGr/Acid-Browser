@@ -118,8 +118,9 @@ public class AcidSandboxTools {
                     "string",
                     "Action to perform on the browser:\n" +
                     "- 'observe': Inspect current webpage semantic tree ([e1..eN] handles) and text excerpt. Supports optional 'selector' (container scope), 'offset'/'limit' (pagination), and 'text_offset' (body text paging).\n" +
+                    "- 'screenshot': Capture visual screenshot of the visible browser viewport (coordinates auto-aligned in both desktop and mobile modes). Set optional 'som'=true to draw [e1..eN] boxes strictly onto the screenshot image without altering webpage DOM, and optional 'save_path' ('.png'/'.jpg'/'.jpeg' inside acid_workspace/) to save the exact screenshot image file for bash cropping or later upload.\n" +
                     "- 'navigate': Load URL in current tab (supports http/https or file:/// inside workspace).\n" +
-                    "- 'click': Tap element by 'ref' (e.g. 'e3'), visible text ('text', e.g. '消息'/'发送'), CSS selector ('selector'), or pixel coordinates ('x', 'y'). Includes auto-healing if the DOM re-rendered.\n" +
+                    "- 'click': Tap element by 'ref' (e.g. 'e3'), visible text ('text', e.g. '消息'/'发送'), CSS selector ('selector'), or coordinates ('x', 'y' with optional 'coord_space'). Includes auto-healing if the DOM re-rendered.\n" +
                     "- 'fill': Fill text into input/textarea/contenteditable ('ref' or 'selector'). React/Vue safe. Optional 'submit'=true.\n" +
                     "- 'select': Choose option in <select> dropdown 'ref' by value or visible label.\n" +
                     "- 'scroll': Scroll viewport ('direction': 'down'|'up'|'top'|'bottom', 'amount': 0.8).\n" +
@@ -133,11 +134,12 @@ public class AcidSandboxTools {
                     "- 'reload': Reload current webpage.\n" +
                     "- 'request_takeover': Pause automation loop and ask human user to manually handle login/CAPTCHA ('reason').",
                     new String[]{
-                        "observe", "navigate", "click", "fill", "select",
+                        "observe", "screenshot", "navigate", "click", "fill", "select",
                         "scroll", "wait", "eval", "upload", "download", "set_mode", "tabs", "back", "reload", "request_takeover"
                     }
                 ));
                 browserProps.put("url", prop("string", "Target URL for 'navigate', 'download', or 'tabs' (new)."));
+                browserProps.put("save_path", prop("string", "Optional workspace-relative path for 'screenshot' (inside acid_workspace/, ending with .png, .jpg, or .jpeg) to save the captured image file at the exact returned resolution. Protected workspace files are rejected."));
                 browserProps.put("file_path", prop("string", "Workspace-relative file path for 'upload' (inside acid_workspace/, e.g. 'report.pdf'). Protected workspace files are rejected."));
                 browserProps.put("file_paths", propStringArray("List of workspace-relative file paths for multi-file 'upload' (inside acid_workspace/)."));
                 browserProps.put("file_name", prop("string", "Optional save filename override for 'download' (e.g. 'app.apk')."));
@@ -156,11 +158,16 @@ public class AcidSandboxTools {
                 browserProps.put("amount", prop("number", "Scroll viewport multiplier for 'scroll' (default 0.75)."));
                 browserProps.put("code", prop("string", "JavaScript code expression to evaluate for 'eval'. Async functions and Promises are automatically awaited and resolved."));
                 browserProps.put("mode", prop("string", "Browser identity mode for 'set_mode': 'desktop' (1280px PC) or 'mobile'."));
-                browserProps.put("som", prop("boolean", "Enable or disable Set-of-Marks visual boxes on webpage."));
+                browserProps.put("som", prop("boolean", "Optional for 'screenshot' (draw [e1..eN] element boxes strictly onto the screenshot image without altering the webpage DOM) or 'set_mode'."));
                 browserProps.put("tab_action", prop("string", "Sub-action for 'tabs': 'list', 'new', 'switch', 'close'."));
                 browserProps.put("tab_id", prop("integer", "Target tab ID for 'tabs' switch/close."));
-                browserProps.put("x", prop("number", "Raw X coordinate in view pixels for coordinate 'click'."));
-                browserProps.put("y", prop("number", "Raw Y coordinate in view pixels for coordinate 'click'."));
+                browserProps.put("x", prop("number", "X coordinate for 'click'/'upload' in the selected 'coord_space' (default: screenshot pixel coordinate after screenshot, else WebView pixel coordinate)."));
+                browserProps.put("y", prop("number", "Y coordinate for 'click'/'upload' in the selected 'coord_space' (default: screenshot pixel coordinate after screenshot, else WebView pixel coordinate)."));
+                browserProps.put("coord_space", propEnum(
+                    "string",
+                    "Coordinate space for (x, y) in 'click'/'upload': 'auto' (uses latest screenshot pixels on this tab if valid, else view pixels), 'screenshot' (pixel coords of last screenshot), 'normalized' (0..1000 range), or 'view' (raw Android WebView pixels).",
+                    new String[]{"auto", "screenshot", "normalized", "view"}
+                ));
                 browserProps.put("reason", prop("string", "Explanation shown to the human user when calling 'request_takeover'."));
                 browserProps.put("offset", prop("integer", "0-based element offset for pagination in 'observe' (default 0)."));
                 browserProps.put("limit", prop("integer", "Maximum number of interactive elements to return in 'observe' (default 180)."));
@@ -396,11 +403,41 @@ public class AcidSandboxTools {
         public final String outputText;
         public final boolean requestedTakeover;
         public final String takeoverReason;
+        public final String imageBase64;
+        public final String imageMimeType;
+        public final int imageWidth;
+        public final int imageHeight;
 
         public ToolExecResult(String outputText, boolean requestedTakeover, String takeoverReason) {
+            this(outputText, requestedTakeover, takeoverReason, null, null, 0, 0);
+        }
+
+        public ToolExecResult(
+            String outputText,
+            boolean requestedTakeover,
+            String takeoverReason,
+            String imageBase64,
+            String imageMimeType,
+            int imageWidth,
+            int imageHeight
+        ) {
             this.outputText = outputText;
             this.requestedTakeover = requestedTakeover;
             this.takeoverReason = takeoverReason;
+            this.imageBase64 = imageBase64;
+            this.imageMimeType = imageMimeType;
+            this.imageWidth = imageWidth;
+            this.imageHeight = imageHeight;
+        }
+
+        public static ToolExecResult withImage(
+            String outputText,
+            String imageBase64,
+            String imageMimeType,
+            int imageWidth,
+            int imageHeight
+        ) {
+            return new ToolExecResult(outputText, false, null, imageBase64, imageMimeType, imageWidth, imageHeight);
         }
     }
 
@@ -495,6 +532,91 @@ public class AcidSandboxTools {
             return new ToolExecResult(formatObservationWithActionHeader("OBSERVE", null, obs), false, null);
         }
 
+        if ("screenshot".equals(action)) {
+            boolean hasSavePath = args.has("save_path") && !args.optString("save_path", "").trim().isEmpty();
+            ScreenshotCaptureHelper.SaveTargetResolution saveTarget = null;
+            if (hasSavePath) {
+                saveTarget = ScreenshotCaptureHelper.resolveSaveTarget(mWorkspaceDir, args.optString("save_path"));
+                if (!saveTarget.ok) {
+                    return new ToolExecResult("Error: " + saveTarget.errorMessage, false, null);
+                }
+            }
+            if (driver == null || mController == null) {
+                return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+            }
+            boolean includeSom = args.optBoolean("som", false);
+            boolean saveAsPng = saveTarget != null && saveTarget.format == ScreenshotCaptureHelper.SaveFormat.PNG;
+            ScreenshotCaptureHelper.CaptureResult cap = driver.captureScreenshotSync(
+                includeSom,
+                ScreenshotCaptureHelper.DEFAULT_JPEG_QUALITY,
+                saveAsPng
+            );
+            if (cap == null || !cap.ok || cap.base64 == null) {
+                String errCode = cap != null && cap.errorCode != null ? cap.errorCode : "SCREENSHOT_FAILED";
+                String errMsg = cap != null && cap.errorMessage != null ? cap.errorMessage : "Screenshot capture failed.";
+                return new ToolExecResult("Error: browser(action='screenshot') failed (" + errCode + "): " + errMsg, false, null);
+            }
+
+            if (saveTarget != null) {
+                if (cap.savedBytes == null || cap.savedBytes.length == 0) {
+                    return new ToolExecResult("Error: browser(action='screenshot') produced empty image bytes for save_path.", false, null);
+                }
+                try {
+                    AcidIo.writeBytes(saveTarget.file, cap.savedBytes);
+                    log("[SCREENSHOT] Saved " + saveTarget.relativePath + " (" + cap.savedBytes.length + " bytes, " + saveTarget.format + ")");
+                } catch (Exception writeErr) {
+                    return new ToolExecResult(
+                        "Error: Failed to save screenshot to '" + saveTarget.relativePath + "': " + writeErr.getMessage(),
+                        false,
+                        null
+                    );
+                }
+            }
+
+            ScreenshotCaptureHelper.ScreenshotFrame f = cap.frame;
+            StringBuilder sb = new StringBuilder();
+            sb.append("=== [BROWSER ACTION: SCREENSHOT] ===\n");
+            if (cap.title != null && !cap.title.isEmpty()) {
+                sb.append("Page: ").append(cap.title).append("\n");
+            }
+            if (cap.url != null && !cap.url.isEmpty()) {
+                sb.append("URL: ").append(cap.url).append("\n");
+            }
+            sb.append("Mode: ").append(f.desktopMode ? "Desktop" : "Mobile")
+              .append(" | ImageSize: ").append(f.imageWidth).append("x").append(f.imageHeight)
+              .append(" px | ViewSize: ").append(f.viewWidth).append("x").append(f.viewHeight)
+              .append(" px");
+            if (f.cssViewportWidth > 0 && f.cssViewportHeight > 0) {
+                sb.append(" | CssViewport: ")
+                  .append(Math.round(f.cssViewportWidth)).append("x").append(Math.round(f.cssViewportHeight));
+            }
+            sb.append("\n");
+            if (saveTarget != null) {
+                sb.append("SavedFile: ").append(saveTarget.relativePath)
+                  .append(" (").append(cap.savedBytes.length).append(" bytes, ")
+                  .append(saveTarget.format).append(", ")
+                  .append(f.imageWidth).append("x").append(f.imageHeight).append(" px)\n");
+            }
+            sb.append("Coordinate Guide: When calling browser(action='click', x=..., y=...), pass pixel coordinates within this screenshot [0..")
+              .append(f.imageWidth).append(", 0..").append(f.imageHeight)
+              .append("] (coord_space='auto' or 'screenshot' maps directly to real device view pixels in both Mobile and Desktop modes).\n");
+
+            if (includeSom) {
+                sb.append("Overlay SoM Drawn on Image Only: ").append(cap.somMarks.size()).append(" interactive elements\n");
+                if (!cap.somMarks.isEmpty()) {
+                    sb.append("Marked Elements (prefer ref='eN' or click center @(x,y) on screenshot):\n");
+                    for (ScreenshotCaptureHelper.SomMarkRect m : cap.somMarks) {
+                        sb.append("  ").append(m.summaryLine).append("\n");
+                    }
+                } else {
+                    sb.append("Marked Elements: none visible in viewport.\n");
+                }
+            } else {
+                sb.append("Overlay SoM: off (pass som=true if you want [eN] boxes drawn on the screenshot).\n");
+            }
+            return ToolExecResult.withImage(sb.toString(), cap.base64, cap.mimeType, f.imageWidth, f.imageHeight);
+        }
+
         if ("navigate".equals(action)) {
             String rawUrl = args.optString("url", "");
             String url = resolveAndValidateNavigationUrl(rawUrl);
@@ -520,6 +642,20 @@ public class AcidSandboxTools {
                 return new ToolExecResult("Error: browser click requires 'ref' (e.g. 'e1'), semantic 'text', 'selector', or ('x', 'y') coordinates.", false, null);
             }
             JSONObject clickRes = dispatchClickTarget(driver, args);
+            if (clickRes != null && !clickRes.optBoolean("ok", false)) {
+                String errCode = clickRes.optString("error", "");
+                if ("MISSING_SCREENSHOT".equals(errCode) || "STALE_SCREENSHOT".equals(errCode)
+                    || "INVALID_COORDINATE".equals(errCode) || "INVALID_COORD_SPACE".equals(errCode)) {
+                    JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
+                    return new ToolExecResult(
+                        "Error: browser(action='click') coordinate error (" + errCode + "): "
+                            + clickRes.optString("message", "Invalid coordinates")
+                            + "\n\n" + formatObservationWithActionHeader("CLICK", clickRes, obs),
+                        false,
+                        null
+                    );
+                }
+            }
             Thread.sleep(380); // Let page animations/DOM settle after click
             String dlNotice = awaitAndFormatDownloadNotice(dlBefore, 500);
             JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
@@ -818,7 +954,24 @@ public class AcidSandboxTools {
 
     private JSONObject dispatchClickTarget(WebAutomationDriver driver, JSONObject args) throws Exception {
         if (args.has("x") && args.has("y")) {
-            return driver.clickCoordinateSync((float) args.optDouble("x", 0), (float) args.optDouble("y", 0));
+            double rawX = args.optDouble("x", Double.NaN);
+            double rawY = args.optDouble("y", Double.NaN);
+            String coordSpace = args.optString("coord_space", "auto");
+            ScreenshotCaptureHelper.ResolvedPoint resolved = driver.resolveClickCoordinates(rawX, rawY, coordSpace);
+            if (!resolved.ok) {
+                JSONObject err = new JSONObject();
+                err.put("ok", false);
+                err.put("error", resolved.errorCode);
+                err.put("message", resolved.errorMessage);
+                return err;
+            }
+            JSONObject res = driver.clickCoordinateSync(resolved.viewX, resolved.viewY);
+            if (res != null) {
+                res.put("coordSpace", resolved.coordSpaceUsed);
+                res.put("inputX", rawX);
+                res.put("inputY", rawY);
+            }
+            return res;
         }
         JSONObject targetOpts = new JSONObject();
         if (args.has("ref")) targetOpts.put("ref", args.optString("ref").trim());

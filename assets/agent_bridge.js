@@ -161,13 +161,16 @@
     }
 
     function isInViewport(rect, marginPx) {
-        const vw = window.innerWidth || document.documentElement.clientWidth || 360;
-        const vh = window.innerHeight || document.documentElement.clientHeight || 640;
+        const vv = (typeof window !== 'undefined' && window.visualViewport) ? window.visualViewport : null;
+        const vw = (vv && vv.width) ? vv.width : (window.innerWidth || document.documentElement.clientWidth || 360);
+        const vh = (vv && vv.height) ? vv.height : (window.innerHeight || document.documentElement.clientHeight || 640);
+        const offL = (vv && typeof vv.offsetLeft === 'number') ? vv.offsetLeft : 0;
+        const offT = (vv && typeof vv.offsetTop === 'number') ? vv.offsetTop : 0;
         return (
-            rect.bottom >= -marginPx &&
-            rect.top <= vh + marginPx &&
-            rect.right >= -marginPx &&
-            rect.left <= vw + marginPx
+            rect.bottom >= offT - marginPx &&
+            rect.top <= offT + vh + marginPx &&
+            rect.right >= offL - marginPx &&
+            rect.left <= offL + vw + marginPx
         );
     }
 
@@ -808,6 +811,13 @@
             }
         }
 
+        const vv = (typeof window !== 'undefined' && window.visualViewport) ? window.visualViewport : null;
+        const vvWidth = (vv && vv.width) ? vv.width : vw;
+        const vvHeight = (vv && vv.height) ? vv.height : vh;
+        const vvOffsetLeft = (vv && typeof vv.offsetLeft === 'number') ? vv.offsetLeft : 0;
+        const vvOffsetTop = (vv && typeof vv.offsetTop === 'number') ? vv.offsetTop : 0;
+        const vvScale = (vv && typeof vv.scale === 'number') ? vv.scale : 1;
+
         return {
             ok: true,
             url: location.href,
@@ -819,6 +829,11 @@
             viewport: {
                 width: vw,
                 height: vh,
+                vvWidth: vvWidth,
+                vvHeight: vvHeight,
+                vvOffsetLeft: vvOffsetLeft,
+                vvOffsetTop: vvOffsetTop,
+                vvScale: vvScale,
                 dpr: window.devicePixelRatio || 1,
                 scrollY: scrollY,
                 scrollHeight: scrollHeight,

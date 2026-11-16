@@ -462,6 +462,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             cancelPendingFileChooser("tab-closed");
         }
         mUploadManager.cancelForTab(tabId, "tab-closed");
+        mAutomationDriver.clearScreenshotFrame(tabId);
         if (mAgentBoundTabId == tabId) {
             // The agent's target is gone when actively driving. Mark it lost rather than merely unbinding:
             // without the flag, getTargetTab() would fall back to mActiveTab and the agent would silently
@@ -540,6 +541,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     continue; // Preserve and protect the active agent-driven tab
                 }
                 mUploadManager.cancelForTab(t.id, "tab-closed");
+                mAutomationDriver.clearScreenshotFrame(t.id);
                 if (t.snapshot != null && !t.snapshot.isRecycled()) {
                     try { t.snapshot.recycle(); } catch (Throwable ignored) {}
                     t.snapshot = null;
@@ -1986,6 +1988,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void setDesktopMode(boolean desktop, boolean reloadCurrent) {
         mIsDesktopMode = desktop;
+        mAutomationDriver.clearAllScreenshotFrames();
         for (TabSession t : mTabs) {
             applyIdentityToSettings(t.webView, desktop);
             if (t.webView != null && DesktopViewportManager.isEligibleUrl(t.url)) {
@@ -2294,6 +2297,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void destroy() {
         cancelPendingFileChooser("destroy");
         mUploadManager.cancelAll("destroy");
+        mAutomationDriver.clearAllScreenshotFrames();
         if (isCustomViewShowing()) {
             hideCustomView();
         }

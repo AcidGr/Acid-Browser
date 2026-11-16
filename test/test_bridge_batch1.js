@@ -566,4 +566,37 @@ console.log('✓ Case 14: runtime_shim.js locks __acid_dispatch_http_cb and filt
 }
 console.log('✓ Case 15: observe() annotates input(file) and label(file-trigger) with accept & multiple');
 
-console.log('\n[TestBridgeBatch1] All 15 Batch-1/Batch-2 JS regression checks PASSED!\n');
+// Case 16: observe().viewport includes visualViewport metrics & isInViewport honors visualViewport offset
+{
+    const btnInZoomed = makeEl('button', {
+        id: 'zoomed_btn',
+        text: 'Zoom Target',
+        rect: { left: 520, top: 320, width: 100, height: 40, right: 620, bottom: 360 }
+    });
+    bodyEl.children = [btnInZoomed];
+    const prevVv = global.window.visualViewport;
+    global.window.visualViewport = {
+        width: 640,
+        height: 960,
+        offsetLeft: 200,
+        offsetTop: 100,
+        scale: 2.0
+    };
+    try {
+        const obs = bridge.observe({ includeSom: false, viewportOnly: true });
+        assert.strictEqual(obs.ok, true, 'observe succeeds with visualViewport');
+        assert.strictEqual(obs.viewport.vvWidth, 640, 'vvWidth captured');
+        assert.strictEqual(obs.viewport.vvHeight, 960, 'vvHeight captured');
+        assert.strictEqual(obs.viewport.vvOffsetLeft, 200, 'vvOffsetLeft captured');
+        assert.strictEqual(obs.viewport.vvOffsetTop, 100, 'vvOffsetTop captured');
+        assert.strictEqual(obs.viewport.vvScale, 2.0, 'vvScale captured');
+        assert.strictEqual(obs.elements.length, 1, 'Element visible in panned visualViewport included');
+        assert.strictEqual(obs.elements[0].inViewport, true, 'Element inside visualViewport marked inViewport=true');
+    } finally {
+        global.window.visualViewport = prevVv;
+        bodyEl.children = [];
+    }
+}
+console.log('✓ Case 16: observe().viewport exports visualViewport metrics and honors pan offset');
+
+console.log('\n[TestBridgeBatch1] All 16 Batch-1/Batch-2 JS regression checks PASSED!\n');

@@ -157,6 +157,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testAgentWorkspaceUploadFeature(); }
         });
 
+        // 21. Screenshot Observation, Desktop/Mobile Coordinate Alignment, Off-DOM SoM & Multimodal Loop
+        run("21. Visual Screenshot: Desktop/Mobile/Zoom Alignment, Off-DOM SoM Projection, Multimodal Pruning & MCP Image Output", new TestCase() {
+            @Override public void execute() throws Exception { testScreenshotAlignmentAndMultimodalSupport(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -3293,6 +3298,196 @@ public final class TestRunner {
                     + allowedPassValidationMcp.outputText);
         } finally {
             SkillStorageVault.deleteRecursiveSafe(testRoot);
+        }
+    }
+
+    static void testScreenshotAlignmentAndMultimodalSupport() throws Exception {
+        // 1. Scaling bounds preserve exact aspect ratio
+        ScreenshotCaptureHelper.ImageDimensions dimsPhone =
+            ScreenshotCaptureHelper.computeOutputDimensions(1080, 2160, 1536);
+        assertEquals(Integer.valueOf(768), Integer.valueOf(dimsPhone.width), "1080x2160 scales width to 768");
+        assertEquals(Integer.valueOf(1536), Integer.valueOf(dimsPhone.height), "1080x2160 caps height at 1536");
+
+        ScreenshotCaptureHelper.ImageDimensions dimsSmall =
+            ScreenshotCaptureHelper.computeOutputDimensions(720, 1280, 1536);
+        assertEquals(Integer.valueOf(720), Integer.valueOf(dimsSmall.width), "720x1280 stays 1:1");
+        assertEquals(Integer.valueOf(1280), Integer.valueOf(dimsSmall.height), "720x1280 stays 1:1");
+
+        // 2. Mobile Mode alignment (view 1080x2160, css 360x720, image 768x1536)
+        JSONObject mobileObs = new JSONObject().put("elements", new JSONArray()
+            .put(new JSONObject()
+                .put("ref", "e1").put("tag", "button").put("label", "Submit")
+                .put("box", new JSONObject().put("x", 180).put("y", 360).put("width", 100).put("height", 40))));
+        ScreenshotCaptureHelper.ViewportMapping mobileMap = ScreenshotCaptureHelper.computeViewportMapping(
+            1080, 2160, 768, 1536, 360, 720, 0, 0, 3.0f);
+        List<ScreenshotCaptureHelper.SomMarkRect> mobileMarks =
+            ScreenshotCaptureHelper.extractSomMarks(mobileObs, mobileMap);
+        assertEquals(Integer.valueOf(1), Integer.valueOf(mobileMarks.size()), "Mobile element projected into screenshot");
+        double mobImgCenterX = (mobileMarks.get(0).left + mobileMarks.get(0).right) * 0.5;
+        double mobImgCenterY = (mobileMarks.get(0).top + mobileMarks.get(0).bottom) * 0.5;
+
+        ScreenshotCaptureHelper.ScreenshotFrame mobileFrame = new ScreenshotCaptureHelper.ScreenshotFrame(
+            1, 768, 1536, 1080, 2160, false, 360, 720, 1000L);
+        ScreenshotCaptureHelper.ResolvedPoint mobClick = ScreenshotCaptureHelper.resolveClickCoordinates(
+            mobileFrame, mobImgCenterX, mobImgCenterY, "auto", 1080, 2160, false);
+        assertTrue(mobClick.ok && "screenshot".equals(mobClick.coordSpaceUsed), "Auto mode maps screenshot pixel coords");
+        assertTrue(Math.abs(mobClick.viewX - 690f) < 1.5f && Math.abs(mobClick.viewY - 1140f) < 1.5f,
+            "Mobile screenshot center maps back to exact real view pixels (690, 1140), got ("
+                + mobClick.viewX + "," + mobClick.viewY + ")");
+
+        // 3. Desktop Mode alignment (1280x2560 CSS shrunk into 1080x2160 view -> 768x1536 image)
+        JSONObject desktopObs = new JSONObject().put("elements", new JSONArray()
+            .put(new JSONObject()
+                .put("ref", "e2").put("tag", "a").put("label", "Repo")
+                .put("box", new JSONObject().put("x", 640).put("y", 1280).put("width", 160).put("height", 80))));
+        ScreenshotCaptureHelper.ViewportMapping deskMap = ScreenshotCaptureHelper.computeViewportMapping(
+            1080, 2160, 768, 1536, 1280, 2560, 0, 0, 0.84375f);
+        List<ScreenshotCaptureHelper.SomMarkRect> deskMarks =
+            ScreenshotCaptureHelper.extractSomMarks(desktopObs, deskMap);
+        assertEquals(Integer.valueOf(1), Integer.valueOf(deskMarks.size()), "Desktop element projected cleanly");
+        double deskImgCenterX = (deskMarks.get(0).left + deskMarks.get(0).right) * 0.5;
+        double deskImgCenterY = (deskMarks.get(0).top + deskMarks.get(0).bottom) * 0.5;
+
+        ScreenshotCaptureHelper.ScreenshotFrame deskFrame = new ScreenshotCaptureHelper.ScreenshotFrame(
+            1, 768, 1536, 1080, 2160, true, 1280, 2560, 2000L);
+        ScreenshotCaptureHelper.ResolvedPoint deskClick = ScreenshotCaptureHelper.resolveClickCoordinates(
+            deskFrame, deskImgCenterX, deskImgCenterY, "screenshot", 1080, 2160, true);
+        assertTrue(deskClick.ok && "screenshot".equals(deskClick.coordSpaceUsed), "Desktop screenshot mode resolves");
+        // CSS center = (720, 1320) * (1080/1280) = (607.5, 1113.75)
+        assertTrue(Math.abs(deskClick.viewX - 607.5f) < 1.5f && Math.abs(deskClick.viewY - 1113.75f) < 1.5f,
+            "Desktop screenshot center maps back to exact real view pixels (607.5, 1113.75), got ("
+                + deskClick.viewX + "," + deskClick.viewY + ")");
+
+        // 4. Pinch-zoomed & panned filtering
+        JSONObject zoomedObs = new JSONObject().put("elements", new JSONArray()
+            .put(new JSONObject().put("ref", "e1").put("tag", "button").put("label", "OffLeft")
+                .put("box", new JSONObject().put("x", 50).put("y", 50).put("width", 40).put("height", 40)))
+            .put(new JSONObject().put("ref", "e2").put("tag", "button").put("label", "InZoom")
+                .put("box", new JSONObject().put("x", 200).put("y", 100).put("width", 160).put("height", 80))));
+        ScreenshotCaptureHelper.ViewportMapping zoomMap = ScreenshotCaptureHelper.computeViewportMapping(
+            1080, 2160, 768, 1536, 640, 1280, 200, 100, 1.6875f);
+        List<ScreenshotCaptureHelper.SomMarkRect> zoomMarks =
+            ScreenshotCaptureHelper.extractSomMarks(zoomedObs, zoomMap);
+        assertEquals(Integer.valueOf(1), Integer.valueOf(zoomMarks.size()), "Panned viewport filters offscreen boxes");
+        assertEquals("e2", zoomMarks.get(0).ref, "Keeps visible zoomed element");
+        assertTrue(Math.abs(zoomMarks.get(0).left - 0f) < 0.5f && Math.abs(zoomMarks.get(0).top - 0f) < 0.5f,
+            "Zoomed origin aligns at (0,0)");
+
+        // 5. Stale mode rejection & normalized coordinates
+        ScreenshotCaptureHelper.ResolvedPoint staleClick = ScreenshotCaptureHelper.resolveClickCoordinates(
+            mobileFrame, 100, 200, "screenshot", 1080, 2160, true);
+        assertTrue(!staleClick.ok && "STALE_SCREENSHOT".equals(staleClick.errorCode),
+            "Rejects explicit screenshot coords after switching mobile -> desktop");
+        ScreenshotCaptureHelper.ResolvedPoint normClick = ScreenshotCaptureHelper.resolveClickCoordinates(
+            null, 500, 500, "normalized", 1080, 2160, true);
+        assertTrue(normClick.ok && Math.abs(normClick.viewX - 540f) < 0.5f && Math.abs(normClick.viewY - 1080f) < 0.5f,
+            "Normalized coordinates resolve to exact view center");
+
+        // 6. Multimodal Agent loop alignment, pruning, and token estimate
+        AcidSessionStore.AgentSession mmSession = new AcidSessionStore.AgentSession();
+        mmSession.id = "s_mm";
+        mmSession.apiMessages.add(new JSONObject().put("role", "user").put("content", "Inspect page"));
+        JSONObject img1 = new JSONObject().put("base64", "AAAA").put("mimeType", "image/jpeg").put("width", 768).put("height", 1536);
+        AcidAgentLoop.appendTurnScreenshotMessages(mmSession, java.util.Collections.singletonList(img1), null);
+        assertTrue(AcidAgentLoop.isMultimodalImageMessage(mmSession.apiMessages.get(1)), "First screenshot appended as multimodal user message");
+
+        StringBuilder bigB64 = new StringBuilder();
+        for (int i = 0; i < 60000; i++) bigB64.append('B');
+        JSONObject img2 = new JSONObject().put("base64", bigB64.toString()).put("mimeType", "image/jpeg").put("width", 768).put("height", 1536);
+        AcidAgentLoop.appendTurnScreenshotMessages(mmSession, java.util.Collections.singletonList(img2), null);
+        assertTrue(!AcidAgentLoop.isMultimodalImageMessage(mmSession.apiMessages.get(1)),
+            "Older screenshot compacted inside session apiMessages on disk");
+        assertTrue(AcidAgentLoop.isMultimodalImageMessage(mmSession.apiMessages.get(2)),
+            "Latest screenshot retained in session apiMessages");
+        int estTokens = AcidAgentLoop.estimateTokens(mmSession);
+        assertTrue(estTokens > 500 && estTokens < 5000,
+            "Token estimator avoids raw Base64 char inflation (got " + estTokens + ")");
+
+        // Prune directly on two raw multimodal messages as well
+        List<JSONObject> rawHist = new ArrayList<JSONObject>();
+        rawHist.add(AcidAgentLoop.buildMultimodalImageMessage(java.util.Collections.singletonList(img1)));
+        rawHist.add(new JSONObject().put("role", "assistant").put("content", "step1"));
+        rawHist.add(AcidAgentLoop.buildMultimodalImageMessage(java.util.Collections.singletonList(img2)));
+        List<JSONObject> prunedHist = AcidAgentLoop.pruneHistoryForRequest(rawHist);
+        assertTrue(!AcidAgentLoop.isMultimodalImageMessage(prunedHist.get(0)), "pruneHistoryForRequest drops older image");
+        assertTrue(AcidAgentLoop.isMultimodalImageMessage(prunedHist.get(2)), "pruneHistoryForRequest keeps latest image");
+
+        // 7. MCP schema & MCP image content output
+        JSONArray mcpTools = AcidSandboxTools.buildMcpToolsList();
+        JSONObject browserProps = null;
+        for (int i = 0; i < mcpTools.length(); i++) {
+            JSONObject item = mcpTools.optJSONObject(i);
+            if (item != null && "browser".equals(item.optString("name"))) {
+                browserProps = item.optJSONObject("inputSchema").optJSONObject("properties");
+                break;
+            }
+        }
+        assertTrue(browserProps != null
+            && browserProps.optJSONObject("action").optJSONArray("enum").toString().contains("\"screenshot\"")
+            && browserProps.has("coord_space")
+            && browserProps.has("save_path"),
+            "MCP browser schema includes screenshot action, coord_space, and save_path");
+
+        AcidSandboxTools.ToolExecResult mcpImgRes =
+            AcidSandboxTools.ToolExecResult.withImage("Captured 768x1536", "QUI=", "image/jpeg", 768, 1536);
+        JSONObject mcpPayload = HttpControlServer.formatMcpToolExecResult(mcpImgRes);
+        JSONArray mcpContent = mcpPayload.optJSONArray("content");
+        assertEquals(Integer.valueOf(2), Integer.valueOf(mcpContent.length()), "MCP returns text + image blocks");
+        assertEquals("image", mcpContent.optJSONObject(1).optString("type"), "Second MCP block has type=image");
+        assertEquals("image/jpeg", mcpContent.optJSONObject(1).optString("mimeType"), "MCP image block sets mimeType");
+        assertEquals("QUI=", mcpContent.optJSONObject(1).optString("data"), "MCP image block carries Base64 data");
+
+        // 8. Screenshot save_path validation, format detection & workspace protection parity
+        File saveTestRoot = new File("build/test_screenshot_save_path");
+        SkillStorageVault.deleteRecursiveSafe(saveTestRoot);
+        File saveWs = new File(saveTestRoot, "acid_workspace");
+        new File(saveWs, "captures/existing_dir.png").mkdirs();
+        try {
+            ScreenshotCaptureHelper.SaveTargetResolution pngRes =
+                ScreenshotCaptureHelper.resolveSaveTarget(saveWs, "workspace://captures/page.PNG");
+            assertTrue(pngRes.ok && pngRes.format == ScreenshotCaptureHelper.SaveFormat.PNG
+                && "captures/page.PNG".equals(pngRes.relativePath),
+                "Resolves PNG save_path inside workspace");
+
+            ScreenshotCaptureHelper.SaveTargetResolution jpgRes =
+                ScreenshotCaptureHelper.resolveSaveTarget(saveWs, "shot.jpeg");
+            assertTrue(jpgRes.ok && jpgRes.format == ScreenshotCaptureHelper.SaveFormat.JPEG,
+                "Resolves JPEG save_path inside workspace");
+
+            assertTrue(!ScreenshotCaptureHelper.resolveSaveTarget(saveWs, "../escape.png").ok,
+                "Rejects save_path escaping workspace");
+            assertTrue(!ScreenshotCaptureHelper.resolveSaveTarget(saveWs, "homepage/bg.png").ok,
+                "Rejects save_path inside protected homepage/");
+            assertTrue(!ScreenshotCaptureHelper.resolveSaveTarget(saveWs, "userscripts/pic.png").ok,
+                "Rejects save_path inside protected userscripts/");
+            assertTrue(!ScreenshotCaptureHelper.resolveSaveTarget(saveWs, "settings.json").ok,
+                "Rejects protected settings.json");
+            assertTrue(!ScreenshotCaptureHelper.resolveSaveTarget(saveWs, "captures/shot.txt").ok,
+                "Rejects non-image extension");
+            assertTrue(!ScreenshotCaptureHelper.resolveSaveTarget(saveWs, "captures/existing_dir.png").ok,
+                "Rejects directory collision");
+
+            AcidSandboxTools saveTools = new AcidSandboxTools(null, saveWs);
+            AcidSandboxTools.ToolExecResult blockedProtected = saveTools.executeTool("browser",
+                new JSONObject().put("action", "screenshot").put("save_path", "homepage/screen.png"),
+                AcidSandboxTools.ToolSource.MCP);
+            assertTrue(blockedProtected.outputText.contains("protected workspace item"),
+                "MCP screenshot save_path rejects protected workspace paths");
+
+            AcidSandboxTools.ToolExecResult blockedExt = saveTools.executeTool("browser",
+                new JSONObject().put("action", "screenshot").put("save_path", "captures/no_ext"),
+                AcidSandboxTools.ToolSource.AGENT_UI);
+            assertTrue(blockedExt.outputText.startsWith("Error:") && blockedExt.outputText.contains(".png"),
+                "Agent UI screenshot save_path validates image extension before capture");
+
+            AcidSandboxTools.ToolExecResult validSavePathReady = saveTools.executeTool("browser",
+                new JSONObject().put("action", "screenshot").put("save_path", "captures/ready.png"),
+                AcidSandboxTools.ToolSource.MCP);
+            assertTrue(validSavePathReady.outputText.contains("Browser controller or automation driver unavailable"),
+                "Valid MCP screenshot save_path passes validation and proceeds to driver: "
+                    + validSavePathReady.outputText);
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(saveTestRoot);
         }
     }
 }

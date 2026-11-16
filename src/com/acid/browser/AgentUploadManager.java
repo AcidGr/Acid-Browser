@@ -74,6 +74,28 @@ public class AgentUploadManager {
         }
     }
 
+    public static final class WorkspaceFileResolution {
+        public final boolean ok;
+        public final File file;
+        public final String relativePath;
+        public final String errorMessage;
+
+        private WorkspaceFileResolution(boolean ok, File file, String relativePath, String errorMessage) {
+            this.ok = ok;
+            this.file = file;
+            this.relativePath = relativePath;
+            this.errorMessage = errorMessage;
+        }
+
+        public static WorkspaceFileResolution success(File file, String relativePath) {
+            return new WorkspaceFileResolution(true, file, relativePath, null);
+        }
+
+        public static WorkspaceFileResolution error(String message) {
+            return new WorkspaceFileResolution(false, null, null, message);
+        }
+    }
+
     public static final class ConsumeResult {
         public final boolean triggered;
         public final boolean accepted;
@@ -139,6 +161,70 @@ public class AgentUploadManager {
     private final Map<Integer, ArmedUpload> mArmedByTab = new HashMap<Integer, ArmedUpload>();
 
     /**
+     * Resolves a single candidate file inside {@code workspaceDir}, rejecting null bytes, path
+     * traversal/escapes outside {@code acid_workspace/}, the workspace root itself, and any entry
+     * protected from workspace cleanup. Does not require the target file to already exist.
+     */
+    public static WorkspaceFileResolution resolveSafeUnprotectedWorkspaceFile(
+        File workspaceDir,
+        String rawPath,
+        String actionVerb
+    ) {
+        if (workspaceDir == null) {
+            return WorkspaceFileResolution.error("Workspace directory unavailable.");
+        }
+        if (rawPath == null || rawPath.trim().isEmpty()) {
+            return WorkspaceFileResolution.error("Workspace path is empty.");
+        }
+        if (rawPath.indexOf('\0') >= 0) {
+            return WorkspaceFileResolution.error("Access denied: invalid null byte in path.");
+        }
+        String clean = rawPath.trim();
+        if (clean.toLowerCase(Locale.US).startsWith("workspace://")) {
+            clean = clean.substring("workspace://".length());
+            while (clean.startsWith("/")) clean = clean.substring(1);
+        }
+        if (clean.isEmpty()) {
+            return WorkspaceFileResolution.error("Workspace path is empty.");
+        }
+
+        final File wsCanon;
+        final String wsPath;
+        try {
+            wsCanon = workspaceDir.getCanonicalFile();
+            wsPath = wsCanon.getPath();
+        } catch (Exception e) {
+            return WorkspaceFileResolution.error("Failed to canonicalize workspace directory: " + e.getMessage());
+        }
+
+        File candidate = clean.startsWith("/") ? new File(clean) : new File(wsCanon, clean);
+        final File targetCanon;
+        try {
+            targetCanon = candidate.getCanonicalFile();
+        } catch (Exception e) {
+            return WorkspaceFileResolution.error("Invalid workspace path (" + rawPath + "): " + e.getMessage());
+        }
+
+        String targetPath = targetCanon.getPath();
+        String wsPrefix = wsPath.endsWith(File.separator) ? wsPath : (wsPath + File.separator);
+        if (!targetPath.startsWith(wsPrefix) || targetPath.equals(wsPath)) {
+            return WorkspaceFileResolution.error("Access denied: path escapes acid_workspace/ (" + rawPath + ")");
+        }
+
+        String rel = targetPath.substring(wsPrefix.length()).replace(File.separatorChar, '/');
+        int sep = rel.indexOf('/');
+        String topEntry = (sep >= 0) ? rel.substring(0, sep) : rel;
+        if (isProtectedWorkspaceName(topEntry)) {
+            String verb = (actionVerb != null && !actionVerb.isEmpty()) ? actionVerb : "accessed";
+            return WorkspaceFileResolution.error(
+                "Access denied: protected workspace item '" + topEntry + "' cannot be " + verb + " (" + rawPath + ")"
+            );
+        }
+
+        return WorkspaceFileResolution.success(targetCanon, rel);
+    }
+
+    /**
      * Resolves and validates one or more workspace-relative paths for upload. Rejects any path
      * escaping {@code workspaceDir}, missing/directory targets, or entries protected from
      * workspace cleanup.
@@ -154,56 +240,17 @@ public class AgentUploadManager {
             return UploadResolution.error("Too many upload files requested (max " + MAX_UPLOAD_FILES + ").");
         }
 
-        final File wsCanon;
-        final String wsPath;
-        try {
-            wsCanon = workspaceDir.getCanonicalFile();
-            wsPath = wsCanon.getPath();
-        } catch (Exception e) {
-            return UploadResolution.error("Failed to canonicalize workspace directory: " + e.getMessage());
-        }
-
         List<File> resolved = new ArrayList<File>(rawPaths.size());
         for (int i = 0; i < rawPaths.size(); i++) {
             String raw = rawPaths.get(i);
             if (raw == null || raw.trim().isEmpty()) {
                 return UploadResolution.error("Upload file path at index " + i + " is empty.");
             }
-            if (raw.indexOf('\0') >= 0) {
-                return UploadResolution.error("Access denied: invalid null byte in path.");
+            WorkspaceFileResolution check = resolveSafeUnprotectedWorkspaceFile(workspaceDir, raw, "uploaded");
+            if (!check.ok) {
+                return UploadResolution.error(check.errorMessage);
             }
-            String clean = raw.trim();
-            if (clean.toLowerCase(Locale.US).startsWith("workspace://")) {
-                clean = clean.substring("workspace://".length());
-                while (clean.startsWith("/")) clean = clean.substring(1);
-            }
-            if (clean.isEmpty()) {
-                return UploadResolution.error("Upload file path at index " + i + " is empty.");
-            }
-
-            File candidate = clean.startsWith("/") ? new File(clean) : new File(wsCanon, clean);
-            final File targetCanon;
-            try {
-                targetCanon = candidate.getCanonicalFile();
-            } catch (Exception e) {
-                return UploadResolution.error("Invalid upload path (" + raw + "): " + e.getMessage());
-            }
-
-            String targetPath = targetCanon.getPath();
-            String wsPrefix = wsPath.endsWith(File.separator) ? wsPath : (wsPath + File.separator);
-            if (!targetPath.startsWith(wsPrefix) || targetPath.equals(wsPath)) {
-                return UploadResolution.error("Access denied: path escapes acid_workspace/ (" + raw + ")");
-            }
-
-            String rel = targetPath.substring(wsPrefix.length());
-            int sep = rel.indexOf(File.separatorChar);
-            String topEntry = (sep >= 0) ? rel.substring(0, sep) : rel;
-            if (isProtectedWorkspaceName(topEntry)) {
-                return UploadResolution.error(
-                    "Access denied: protected workspace item '" + topEntry + "' cannot be uploaded (" + raw + ")"
-                );
-            }
-
+            File targetCanon = check.file;
             if (!targetCanon.exists()) {
                 return UploadResolution.error("Upload file not found in workspace: " + raw);
             }

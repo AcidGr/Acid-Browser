@@ -788,7 +788,7 @@ public class HttpControlServer {
         status.put("endpoints", endpoints);
 
         JSONArray toolsList = new JSONArray();
-        toolsList.put("browser (Web Automation: navigate, click, fill, select, scroll, wait, eval, upload, download, tabs)");
+        toolsList.put("browser (Web Automation: observe, screenshot, navigate, click, fill, select, scroll, wait, eval, upload, download, tabs)");
         toolsList.put("read (Read sandbox file)");
         toolsList.put("write (Write sandbox file)");
         toolsList.put("edit (Replace string in sandbox file)");
@@ -1019,16 +1019,7 @@ public class HttpControlServer {
                 AcidSandboxTools.ToolExecResult execRes =
                     mSandboxTools.executeTool(toolName, toolArgs, AcidSandboxTools.ToolSource.MCP);
 
-                JSONObject result = new JSONObject();
-                JSONArray content = new JSONArray();
-                JSONObject textItem = new JSONObject();
-                textItem.put("type", "text");
-                textItem.put("text", execRes.outputText != null ? execRes.outputText : "");
-                content.put(textItem);
-                result.put("content", content);
-                result.put("isError", execRes.outputText != null && execRes.outputText.startsWith("Error:"));
-
-                resp.put("result", result);
+                resp.put("result", formatMcpToolExecResult(execRes));
                 return resp;
             }
 
@@ -1050,6 +1041,28 @@ public class HttpControlServer {
             }
             return resp;
         }
+    }
+
+    static JSONObject formatMcpToolExecResult(AcidSandboxTools.ToolExecResult execRes) throws Exception {
+        JSONObject result = new JSONObject();
+        JSONArray content = new JSONArray();
+        String text = (execRes != null && execRes.outputText != null) ? execRes.outputText : "";
+        JSONObject textItem = new JSONObject();
+        textItem.put("type", "text");
+        textItem.put("text", text);
+        content.put(textItem);
+        if (execRes != null && execRes.imageBase64 != null && !execRes.imageBase64.isEmpty()) {
+            JSONObject imgItem = new JSONObject();
+            imgItem.put("type", "image");
+            imgItem.put("data", execRes.imageBase64);
+            imgItem.put("mimeType", execRes.imageMimeType != null && !execRes.imageMimeType.isEmpty()
+                ? execRes.imageMimeType
+                : ScreenshotCaptureHelper.DEFAULT_MIME_TYPE);
+            content.put(imgItem);
+        }
+        result.put("content", content);
+        result.put("isError", text.startsWith("Error:"));
+        return result;
     }
 
     public static byte[] readChunkedBody(InputStream is, int maxBytes) throws Exception {
