@@ -52,6 +52,8 @@ public class AcidSessionStore {
         public boolean isRunning;    // True while tool is executing or while streaming
         public boolean isError;      // True if tool returned an error
         public long timestamp;
+        public final List<AgentAttachmentHelper.AttachmentItem> attachments =
+            new ArrayList<AgentAttachmentHelper.AttachmentItem>();
 
         public JSONObject toJson() {
             JSONObject o = new JSONObject();
@@ -67,6 +69,15 @@ public class AcidSessionStore {
                 o.put("isRunning", isRunning);
                 o.put("isError", isError);
                 o.put("timestamp", timestamp);
+                if (!attachments.isEmpty()) {
+                    JSONArray attArr = new JSONArray();
+                    for (AgentAttachmentHelper.AttachmentItem att : attachments) {
+                        if (att != null) {
+                            attArr.put(att.toUiJson());
+                        }
+                    }
+                    o.put("attachments", attArr);
+                }
             } catch (Exception e) {
                 // org.json declares a checked exception on put(); not thrown in practice,
                 // but log rather than silently producing a truncated bubble.
@@ -88,6 +99,16 @@ public class AcidSessionStore {
             it.isRunning = false; // Persisted items are no longer actively running
             it.isError = o.optBoolean("isError", false);
             it.timestamp = o.optLong("timestamp", System.currentTimeMillis());
+            JSONArray attArr = o.optJSONArray("attachments");
+            if (attArr != null) {
+                for (int i = 0; i < attArr.length(); i++) {
+                    AgentAttachmentHelper.AttachmentItem att =
+                        AgentAttachmentHelper.AttachmentItem.fromUiJson(attArr.optJSONObject(i));
+                    if (att != null) {
+                        it.attachments.add(att);
+                    }
+                }
+            }
             return it;
         }
     }
@@ -341,17 +362,42 @@ public class AcidSessionStore {
             }
             root.put("uiItems", uiArr);
 
-            // Save apiMessages to disk preserving full content
+            // Save apiMessages to disk preserving valid message structures cleanly
             JSONArray apiArr = new JSONArray();
             int n = s.apiMessages.size();
             for (int i = 0; i < n; i++) {
                 JSONObject msg = s.apiMessages.get(i);
-                // Safety bound: only guard against runaway massive single payloads (>64KB)
-                String c = msg.optString("content", "");
-                if (c.length() > 65536) {
-                    JSONObject copy = new JSONObject(msg.toString());
-                    copy.put("content", c.substring(0, 32768) + "\n...[Content truncated at 32KB on disk]...\n" + c.substring(c.length() - 8192));
-                    apiArr.put(copy);
+                Object rawContent = msg.opt("content");
+                if (rawContent instanceof String) {
+                    String c = (String) rawContent;
+                    if (c.length() > 65536) {
+                        JSONObject copy = new JSONObject(msg.toString());
+                        copy.put("content", c.substring(0, 32768) + "\n...[Content truncated at 32KB on disk]...\n" + c.substring(c.length() - 8192));
+                        apiArr.put(copy);
+                    } else {
+                        apiArr.put(msg);
+                    }
+                } else if (rawContent instanceof JSONArray) {
+                    JSONArray parts = (JSONArray) rawContent;
+                    if (parts.toString().length() > 98304) {
+                        JSONObject copy = new JSONObject(msg.toString());
+                        JSONArray compactParts = new JSONArray();
+                        for (int p = 0; p < parts.length(); p++) {
+                            JSONObject part = parts.optJSONObject(p);
+                            if (part != null && "image_url".equals(part.optString("type"))) {
+                                JSONObject note = new JSONObject();
+                                note.put("type", "text");
+                                note.put("text", "[Attached image omitted on disk]");
+                                compactParts.put(note);
+                            } else if (part != null) {
+                                compactParts.put(part);
+                            }
+                        }
+                        copy.put("content", compactParts);
+                        apiArr.put(copy);
+                    } else {
+                        apiArr.put(msg);
+                    }
                 } else {
                     apiArr.put(msg);
                 }

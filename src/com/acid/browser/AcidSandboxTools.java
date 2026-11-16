@@ -1241,6 +1241,11 @@ public class AcidSandboxTools {
         if (!f.exists() || !f.isFile()) {
             return "Error: File not found: " + f.getAbsolutePath();
         }
+        if (AgentAttachmentHelper.isBinaryFile(f)) {
+            return "Error: Binary file cannot be read as UTF-8 text (" + f.getName() + ", "
+                + AgentAttachmentHelper.formatFileSize(f.length())
+                + "). Inspect it with `bash` or upload it onto a webpage via `browser(action='upload')`.";
+        }
         try {
             String content = AcidIo.readFileUtf8(f);
             String[] lines = content.split("\n", -1);
@@ -1591,6 +1596,11 @@ public class AcidSandboxTools {
         }
         if (!f.exists() || !f.isFile()) {
             return "Error: File not found: " + f.getAbsolutePath();
+        }
+        if (AgentAttachmentHelper.isBinaryFile(f)) {
+            return "Error: Binary file cannot be read as UTF-8 text (" + f.getName() + ", "
+                + AgentAttachmentHelper.formatFileSize(f.length())
+                + "). Inspect it with `bash` or upload it onto a webpage via `browser(action='upload')`.";
         }
         if (oldStr.isEmpty()) {
             return "Error: old_string cannot be empty.";

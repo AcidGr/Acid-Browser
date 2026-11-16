@@ -10,11 +10,41 @@ import android.webkit.WebView;
 public final class DesktopViewportManager {
 
     public static final int DESKTOP_WIDTH = 1280;
+    public static final double OVERVIEW_ZOOM_THRESHOLD = 0.94;
     public static final String VIEWPORT_TAG_ATTR = "data-acid-viewport";
     public static final String TARGET_CONTENT =
         "width=" + DESKTOP_WIDTH + ", initial-scale=0.32, minimum-scale=0.1, maximum-scale=5.0, user-scalable=yes";
 
     private DesktopViewportManager() {}
+
+    /**
+     * Computes the relative {@code WebView.zoomBy(factor)} multiplier needed to restore a
+     * focus-zoomed desktop page back to full overview width ({@code targetWidth >= 1280px}).
+     * Returns {@code 1.0} when already at overview width or when inputs are invalid.
+     */
+    public static double computeOverviewRestoreFactor(double layoutWidth, double visualViewportWidth) {
+        double targetWidth = Math.max((double) DESKTOP_WIDTH, layoutWidth);
+        if (visualViewportWidth <= 1.0 || targetWidth <= 1.0) {
+            return 1.0;
+        }
+        double ratio = visualViewportWidth / targetWidth;
+        if (ratio >= OVERVIEW_ZOOM_THRESHOLD) {
+            return 1.0;
+        }
+        return Math.max(0.05, Math.min(0.98, ratio));
+    }
+
+    /** Lightweight JS probe returning current layout width, visualViewport width/offset, and scroll position. */
+    public static String buildViewportMetricsScript() {
+        return "(function(){try{" +
+            "var vv=window.visualViewport;" +
+            "var lw=Math.max(document.documentElement?document.documentElement.clientWidth:0,window.innerWidth||0);" +
+            "var vvw=(vv&&vv.width)?vv.width:lw;" +
+            "var vvol=(vv&&typeof vv.offsetLeft==='number')?vv.offsetLeft:0;" +
+            "var sy=window.scrollY||(document.documentElement?document.documentElement.scrollTop:0)||0;" +
+            "return JSON.stringify({ok:true,lw:lw,vvw:vvw,vvol:vvol,sy:sy});" +
+            "}catch(e){return '{\"ok\":false}';}})()";
+    }
 
     /**
      * Returns true if the URL is an external web page eligible for desktop viewport overrides.

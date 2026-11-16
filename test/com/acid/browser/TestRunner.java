@@ -162,6 +162,16 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testScreenshotAlignmentAndMultimodalSupport(); }
         });
 
+        // 22. Desktop Mode Focus Auto-Zoom Overview Recovery
+        run("22. Desktop Overview Recovery: Restore Factor Thresholds, Viewport Metrics Script & Safe Driver Guards", new TestCase() {
+            @Override public void execute() throws Exception { testDesktopOverviewAutoZoomRecovery(); }
+        });
+
+        // 23. Agent Chat File Attachments (+ button, max 5 limit, workspace staging, binary guard, multimodal retention)
+        run("23. Agent Chat Attachments: Max-5 Cap, Safe Staging, Classification, Binary Read Guard & Multimodal Pruning", new TestCase() {
+            @Override public void execute() throws Exception { testAgentChatAttachmentsFeature(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -3491,6 +3501,228 @@ public final class TestRunner {
                     + validSavePathReady.outputText);
         } finally {
             SkillStorageVault.deleteRecursiveSafe(saveTestRoot);
+        }
+    }
+
+    static void testDesktopOverviewAutoZoomRecovery() throws Exception {
+        assertEquals(1280, DesktopViewportManager.DESKTOP_WIDTH, "Desktop layout target width stays 1280px");
+        assertTrue(Math.abs(DesktopViewportManager.OVERVIEW_ZOOM_THRESHOLD - 0.94) < 1e-9,
+            "Overview zoom threshold stays 0.94");
+
+        // Unzoomed or within threshold -> 1.0 (no-op)
+        assertTrue(Math.abs(DesktopViewportManager.computeOverviewRestoreFactor(1280, 1280) - 1.0) < 1e-9,
+            "Full 1280px overview requires no zoom adjustment");
+        assertTrue(Math.abs(DesktopViewportManager.computeOverviewRestoreFactor(1280, 1210) - 1.0) < 1e-9,
+            "Slightly narrow viewport above 0.94 threshold remains a no-op");
+
+        // Focus-zoomed desktop page -> proportional zoomBy restore factor
+        double justBelow = DesktopViewportManager.computeOverviewRestoreFactor(1280, 1180);
+        assertTrue(Math.abs(justBelow - (1180.0 / 1280.0)) < 1e-9,
+            "Viewport below 0.94 threshold computes exact restore factor: " + justBelow);
+
+        double phoneFocusZoom = DesktopViewportManager.computeOverviewRestoreFactor(1280, 426);
+        assertTrue(Math.abs(phoneFocusZoom - (426.0 / 1280.0)) < 1e-9,
+            "3x focus auto-zoom on 1280px desktop page yields ~0.3328 zoomBy factor: " + phoneFocusZoom);
+
+        double wideLayout = DesktopViewportManager.computeOverviewRestoreFactor(1600, 800);
+        assertTrue(Math.abs(wideLayout - 0.5) < 1e-9,
+            "Layout wider than 1280px scales relative to full layoutWidth");
+
+        double narrowLayout = DesktopViewportManager.computeOverviewRestoreFactor(360, 360);
+        assertTrue(Math.abs(narrowLayout - (360.0 / 1280.0)) < 1e-9,
+            "Target width floors at DESKTOP_WIDTH (1280)");
+
+        // Invalid or extreme inputs stay safe for WebView.zoomBy
+        assertTrue(Math.abs(DesktopViewportManager.computeOverviewRestoreFactor(1280, 0) - 1.0) < 1e-9,
+            "Zero visualViewportWidth safely returns 1.0");
+        assertTrue(Math.abs(DesktopViewportManager.computeOverviewRestoreFactor(1280, -25) - 1.0) < 1e-9,
+            "Negative visualViewportWidth safely returns 1.0");
+        assertTrue(Math.abs(DesktopViewportManager.computeOverviewRestoreFactor(1280, 20) - 0.05) < 1e-9,
+            "Extreme zoom ratio clamps at safe WebView.zoomBy lower bound 0.05");
+
+        // Metrics probe script contains visualViewport and scroll telemetry keys
+        String metricsJs = DesktopViewportManager.buildViewportMetricsScript();
+        assertTrue(metricsJs.contains("window.visualViewport")
+                && metricsJs.contains("clientWidth")
+                && metricsJs.contains("offsetLeft")
+                && metricsJs.contains("scrollY")
+                && metricsJs.contains("lw:lw,vvw:vvw,vvol:vvol,sy:sy"),
+            "Viewport metrics script probes layoutWidth, visualViewport width/offsetLeft, and scrollY");
+
+        // Eligibility checks
+        assertTrue(DesktopViewportManager.isEligibleUrl("https://example.com/form"), "https URL eligible");
+        assertTrue(DesktopViewportManager.isEligibleUrl("http://192.168.1.2/login"), "http URL eligible");
+        assertTrue(!DesktopViewportManager.isEligibleUrl("acid://home"), "acid:// excluded from desktop viewport lock");
+        assertTrue(!DesktopViewportManager.isEligibleUrl("file:///sdcard/index.html"), "file:// excluded");
+        assertTrue(!DesktopViewportManager.isEligibleUrl(null), "null URL excluded");
+
+        // Driver guard safety with null host and desktop-mode host without looper/tab
+        WebAutomationDriver nullHostDriver = new WebAutomationDriver(null, null);
+        nullHostDriver.ensureDesktopOverviewIfZoomedSync();
+
+        WebAutomationDriver.AutomationHost desktopNullTabHost = new WebAutomationDriver.AutomationHost() {
+            @Override public BrowserController.TabSession getActiveTab() { return null; }
+            @Override public BrowserController.TabSession getTargetTab() { return null; }
+            @Override public boolean isTargetTabActive() { return false; }
+            @Override public AgentOverlayView getOverlayView() { return null; }
+            @Override public UserscriptManager getUserscriptManager() { return null; }
+            @Override public void loadUrl(String url) {}
+            @Override public void emitLog(String log) {}
+            @Override public boolean isSomEnabled() { return false; }
+            @Override public boolean isDesktopMode() { return true; }
+            @Override public int getBlockedDeepLinksCount() { return 0; }
+            @Override public String getLastBlockedDeepLink() { return ""; }
+            @Override public int getTriggeredDownloadsCount() { return 0; }
+            @Override public String getLastTriggeredDownloadInfo() { return ""; }
+        };
+        WebAutomationDriver desktopNoLooperDriver = new WebAutomationDriver(null, desktopNullTabHost);
+        desktopNoLooperDriver.ensureDesktopOverviewIfZoomedSync();
+    }
+
+    static void testAgentChatAttachmentsFeature() throws Exception {
+        assertEquals(Integer.valueOf(5), Integer.valueOf(AgentAttachmentHelper.MAX_ATTACHMENTS),
+            "Single-send attachment ceiling stays 5");
+
+        // 1. Max-5 selection clamping across initial and incremental batches
+        List<String> seven = Arrays.asList("a", "b", "c", "d", "e", "f", "g");
+        AgentAttachmentHelper.LimitedSelection<String> firstBatch = AgentAttachmentHelper.clampToMaxAttachments(seven, 0);
+        assertEquals(Integer.valueOf(5), Integer.valueOf(firstBatch.accepted.size()), "Initial batch accepts max 5");
+        assertEquals(Integer.valueOf(2), Integer.valueOf(firstBatch.trimmedCount), "Initial batch reports 2 trimmed");
+        assertEquals("e", firstBatch.accepted.get(4), "Initial batch preserves selection order");
+
+        AgentAttachmentHelper.LimitedSelection<String> partialBatch =
+            AgentAttachmentHelper.clampToMaxAttachments(Arrays.asList("x", "y", "z"), 3);
+        assertEquals(Integer.valueOf(2), Integer.valueOf(partialBatch.accepted.size()), "Remaining 2 slots accepted when 3 pending");
+        assertEquals(Integer.valueOf(1), Integer.valueOf(partialBatch.trimmedCount), "Reports 1 excess item");
+
+        AgentAttachmentHelper.LimitedSelection<String> fullBatch =
+            AgentAttachmentHelper.clampToMaxAttachments(Arrays.asList("one"), 5);
+        assertEquals(Integer.valueOf(0), Integer.valueOf(fullBatch.accepted.size()), "Full queue accepts 0 more items");
+        assertEquals(Integer.valueOf(1), Integer.valueOf(fullBatch.trimmedCount), "Full queue reports excess");
+
+        // 2. Classification & extension inference
+        assertTrue(AgentAttachmentHelper.isRasterImageFile("image/jpeg", "photo.bin"), "JPEG MIME classified as raster image");
+        assertTrue(AgentAttachmentHelper.isRasterImageFile("", "screen.png"), ".png classified as raster image");
+        assertTrue(!AgentAttachmentHelper.isRasterImageFile("image/svg+xml", "diagram.svg"), "SVG excluded from raster vision parts");
+        assertEquals("100001.jpg", AgentAttachmentHelper.ensureExtensionFromMime("100001", "image/jpeg"),
+            "Extensionless image URI receives .jpg suffix");
+        assertEquals("report.pdf", AgentAttachmentHelper.ensureExtensionFromMime("report", "application/pdf"),
+            "Extensionless PDF URI receives .pdf suffix");
+        assertEquals("notes.md", AgentAttachmentHelper.ensureExtensionFromMime("notes.md", "text/plain"),
+            "Existing extension is preserved");
+        assertEquals("0 B", AgentAttachmentHelper.formatFileSize(0L), "Zero byte attachment displays 0 B");
+
+        // 3. Workspace staging, collision avoidance, prompt context & binary read/edit guard
+        File wsRoot = new File("build/test_chat_attachments");
+        SkillStorageVault.deleteRecursiveSafe(wsRoot);
+        try {
+            File uploadsDir = new File(wsRoot, AgentAttachmentHelper.UPLOADS_DIR_NAME);
+            File safeTrav = AgentAttachmentHelper.resolveUniqueUploadFile(uploadsDir, "../../etc/passwd");
+            assertTrue(safeTrav.getCanonicalPath().startsWith(uploadsDir.getCanonicalPath() + File.separator),
+                "Path traversal filename confined inside uploads/");
+
+            File f1 = AgentAttachmentHelper.resolveUniqueUploadFile(uploadsDir, "notes.txt");
+            AcidIo.writeFileUtf8(f1, "line1: hello\nline2: world");
+            File f2 = AgentAttachmentHelper.resolveUniqueUploadFile(uploadsDir, "notes.txt");
+            assertTrue(!f1.getAbsolutePath().equals(f2.getAbsolutePath()) && f2.getName().startsWith("notes_1"),
+                "Colliding filename increments cleanly: " + f2.getName());
+
+            // Big text file (>12KB) & binary PDF file
+            File bigTxt = AgentAttachmentHelper.resolveUniqueUploadFile(uploadsDir, "big.log");
+            StringBuilder bigSb = new StringBuilder();
+            for (int i = 0; i < 600; i++) bigSb.append("2026-11-16 log entry line ").append(i).append("\n");
+            AcidIo.writeFileUtf8(bigTxt, bigSb.toString());
+
+            File binPdf = AgentAttachmentHelper.resolveUniqueUploadFile(uploadsDir, "spec.pdf");
+            byte[] pdfBytes = new byte[] { '%', 'P', 'D', 'F', '-', '1', '.', '4', '\n', 0, 1, 2, 3 };
+            AcidIo.writeBytes(binPdf, pdfBytes);
+
+            assertTrue(!AgentAttachmentHelper.isBinaryFile(f1), "UTF-8 notes.txt recognized as text");
+            assertTrue(AgentAttachmentHelper.isBinaryFile(binPdf), "PDF with NUL byte recognized as binary");
+            assertTrue(AgentAttachmentHelper.isTextReadableFile("image/svg+xml", "icon.svg", null), "SVG recognized as text");
+
+            // Sandbox tools read/edit protection against binary attachments
+            AcidSandboxTools tools = new AcidSandboxTools(null, wsRoot);
+            AcidSandboxTools.ToolExecResult binRead = tools.executeTool(
+                "read",
+                new JSONObject().put("file_path", "uploads/spec.pdf")
+            );
+            assertTrue(binRead.outputText.contains("Binary file cannot be read as UTF-8 text"),
+                "read tool blocks binary PDF mojibake cleanly: " + binRead.outputText);
+
+            AcidSandboxTools.ToolExecResult txtRead = tools.executeTool(
+                "read",
+                new JSONObject().put("file_path", "uploads/notes.txt")
+            );
+            assertTrue(txtRead.outputText.contains("line1: hello"),
+                "read tool reads uploaded text file normally");
+
+            // Prompt context inlines small text, directs read on large text, and tags binary uploadable path
+            List<AgentAttachmentHelper.AttachmentItem> mix = Arrays.asList(
+                new AgentAttachmentHelper.AttachmentItem("att1", "notes.txt", "uploads/notes.txt", "text/plain", f1.length(), false, 0, 0, ""),
+                new AgentAttachmentHelper.AttachmentItem("att2", "big.log", "uploads/big.log", "text/plain", bigTxt.length(), false, 0, 0, ""),
+                new AgentAttachmentHelper.AttachmentItem("att3", "spec.pdf", "uploads/spec.pdf", "application/pdf", binPdf.length(), false, 0, 0, ""),
+                new AgentAttachmentHelper.AttachmentItem("att4", "pic.jpg", "uploads/pic.jpg", "image/jpeg", 2048, true, 1200, 900, "AAAA")
+            );
+            String attCtx = AgentAttachmentHelper.buildAttachmentPromptContext(wsRoot, mix);
+            assertTrue(attCtx.contains("line1: hello") && attCtx.contains("line2: world"),
+                "Small text attachment inlined in user prompt");
+            assertTrue(attCtx.contains("read(file_path='uploads/big.log'"),
+                "Large text attachment points agent to read tool");
+            assertTrue(attCtx.contains("browser(action='upload', file_path='uploads/spec.pdf'"),
+                "Binary attachment points agent to bash/browser upload");
+            assertTrue(attCtx.contains("preview=1200x900px attached visually"),
+                "Image attachment includes visual dimensions");
+
+            // 4. Text-only message vs multimodal user message & screenshot pruning isolation
+            List<AgentAttachmentHelper.AttachmentItem> textOnlyAtt = Collections.singletonList(mix.get(0));
+            JSONObject textApiMsg = AcidAgentLoop.buildUserApiMessage("Check notes", "", wsRoot, textOnlyAtt);
+            assertTrue(textApiMsg.opt("content") instanceof String,
+                "Text-only attachment sends plain string content compatible with non-vision models");
+
+            JSONObject userImgApiMsg = AcidAgentLoop.buildUserApiMessage("What is in this pic?", "", wsRoot, Collections.singletonList(mix.get(3)));
+            assertTrue(userImgApiMsg.opt("content") instanceof JSONArray && !AcidAgentLoop.isBrowserScreenshotMessage(userImgApiMsg),
+                "User image message uses multimodal array and is distinct from browser screenshots");
+
+            AcidSessionStore.AgentSession s = new AcidSessionStore.AgentSession();
+            s.id = "s_attach";
+            s.apiMessages.add(userImgApiMsg);
+            JSONObject shot = new JSONObject().put("base64", "BBBB").put("mimeType", "image/jpeg").put("width", 768).put("height", 1536);
+            AcidAgentLoop.appendTurnScreenshotMessages(s, Collections.singletonList(shot), null);
+            assertTrue(AcidAgentLoop.isMultimodalImageMessage(s.apiMessages.get(0)),
+                "Browser screenshot compaction must NOT wipe user-uploaded image attachment");
+            assertTrue(AcidAgentLoop.isMultimodalImageMessage(s.apiMessages.get(1)),
+                "Latest browser screenshot also retained");
+
+            // Pruning older user image turns (>2) preserves text while compacting old images
+            List<JSONObject> hist = new ArrayList<JSONObject>();
+            hist.add(AcidAgentLoop.buildUserApiMessage("First pic", "", wsRoot, Collections.singletonList(mix.get(3))));
+            hist.add(new JSONObject().put("role", "assistant").put("content", "ok1"));
+            hist.add(AcidAgentLoop.buildUserApiMessage("Second pic", "", wsRoot, Collections.singletonList(mix.get(3))));
+            hist.add(new JSONObject().put("role", "assistant").put("content", "ok2"));
+            hist.add(AcidAgentLoop.buildUserApiMessage("Third pic", "", wsRoot, Collections.singletonList(mix.get(3))));
+            List<JSONObject> pruned = AcidAgentLoop.pruneHistoryForRequest(hist);
+            assertTrue(pruned.get(0).opt("content") instanceof String
+                    && pruned.get(0).optString("content").contains("First pic"),
+                "Compacted oldest user image keeps original prompt text intact");
+            assertTrue(AcidAgentLoop.isMultimodalImageMessage(pruned.get(2))
+                    && AcidAgentLoop.isMultimodalImageMessage(pruned.get(4)),
+                "Keeps latest 2 user image messages intact");
+
+            // 5. UiMessageItem JSON round-trip preserves attachment metadata without leaking base64
+            AcidSessionStore.UiMessageItem uiItem = new AcidSessionStore.UiMessageItem();
+            uiItem.type = AcidSessionStore.TYPE_USER;
+            uiItem.text = "看看这个";
+            uiItem.attachments.addAll(mix);
+            String serialized = uiItem.toJson().toString();
+            assertTrue(!serialized.contains("AAAA"), "UiMessageItem JSON does not embed raw Base64 blobs");
+            AcidSessionStore.UiMessageItem restored = AcidSessionStore.UiMessageItem.fromJson(new JSONObject(serialized));
+            assertEquals(Integer.valueOf(4), Integer.valueOf(restored.attachments.size()),
+                "UiMessageItem restores all attachment metadata entries");
+            assertEquals("uploads/pic.jpg", restored.attachments.get(3).relativePath,
+                "Restored attachment retains workspace relativePath");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(wsRoot);
         }
     }
 }

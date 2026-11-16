@@ -569,6 +569,7 @@ public class WebAutomationDriver {
     }
 
     public JSONObject observeSync(boolean includeSom, boolean viewportOnly, boolean includeScreenshot, JSONObject extraOpts) {
+        ensureDesktopOverviewIfZoomedSync();
         ensureBridgeInjectedSync();
         try {
             JSONObject jsOpts = new JSONObject();
@@ -890,6 +891,7 @@ public class WebAutomationDriver {
     }
 
     public JSONObject clickTargetSync(final JSONObject targetOpts, final boolean useNativeMotionEvent) {
+        ensureDesktopOverviewIfZoomedSync();
         ensureBridgeInjectedSync();
         try {
             String prepExpr = "(function(){ return JSON.stringify(window.__acidBridge.prepareClick(" +
@@ -978,6 +980,7 @@ public class WebAutomationDriver {
                 if (!dispatchedRef[0]) {
                     return new JSONObject("{\"ok\":false,\"error\":\"NO_TARGET_TAB\"}");
                 }
+                ensureDesktopOverviewIfZoomedSync();
 
                 String stateRaw = evaluateJsSync("(function(){ return JSON.stringify(window.__acidBridge.getState()); })()", 2000);
                 JSONObject stateAfter = new JSONObject(stateRaw);
@@ -1031,6 +1034,7 @@ public class WebAutomationDriver {
                     (targetOpts != null ? targetOpts.toString() : "{}") + ")); })()",
                     3000
                 );
+                ensureDesktopOverviewIfZoomedSync();
                 mHost.emitLog("[CLICK] JS-Synthetic [" + targetRef + "] \"" + label + "\"" +
                     (reResolved ? " (re-resolved via " + matchedBy + ")" : ""));
                 return new JSONObject(jsRaw);
@@ -1132,6 +1136,7 @@ public class WebAutomationDriver {
             );
         }
         mHost.emitLog("[CLICK] Coordinate (" + Math.round(viewX) + ", " + Math.round(viewY) + ")" + (!isForeground ? " [bg-elementFromPoint]" : ""));
+        ensureDesktopOverviewIfZoomedSync();
         JSONObject res = new JSONObject();
         try {
             res.put("ok", true);
@@ -1171,6 +1176,7 @@ public class WebAutomationDriver {
                 submit + ")); })()";
             String raw = evaluateJsSync(expr, 4000);
             JSONObject res = new JSONObject(raw);
+            ensureDesktopOverviewIfZoomedSync();
             String ref = targetOpts != null ? targetOpts.optString("ref", targetOpts.optString("selector", targetOpts.optString("text", "field"))) : "field";
             String displayText = shouldMaskFillLog(targetOpts, res) ? "***" : text;
             mHost.emitLog("[FILL] [" + ref + "] -> \"" + displayText + "\"" + (submit ? " (submitted)" : ""));
@@ -1240,6 +1246,7 @@ public class WebAutomationDriver {
             String expr = "(function(){ return JSON.stringify(window.__acidBridge.selectOption(" +
                 JSONObject.quote(ref) + "," + JSONObject.quote(valueOrLabel) + ")); })()";
             String raw = evaluateJsSync(expr, 4000);
+            ensureDesktopOverviewIfZoomedSync();
             mHost.emitLog("[SELECT] [" + ref + "] -> \"" + valueOrLabel + "\"");
             return new JSONObject(raw);
         } catch (Exception e) {
@@ -1277,6 +1284,83 @@ public class WebAutomationDriver {
 
     public void clearAllScreenshotFrames() {
         mScreenshotHelper.clearAll();
+    }
+
+    /**
+     * When Agent/MCP drives a desktop-mode external page on a phone and Chromium auto-zooms in on
+     * input focus, smoothly restores the WebView back to the full 1280px desktop overview without
+     * reloading the page or clearing form state.
+     */
+    public void ensureDesktopOverviewIfZoomedSync() {
+        if (mHost == null || !mHost.isDesktopMode() || isMainLooper() || mMainHandler == null) {
+            return;
+        }
+        BrowserController.TabSession tab = mHost.getTargetTab();
+        if (tab == null || tab.webView == null || !DesktopViewportManager.isEligibleUrl(tab.url)) {
+            return;
+        }
+
+        boolean restored = false;
+        final int tabId = tab.id;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            String raw = evaluateJsSync(DesktopViewportManager.buildViewportMetricsScript(), 1500);
+            if (raw == null || raw.isEmpty()) {
+                break;
+            }
+            try {
+                JSONObject metrics = new JSONObject(raw);
+                if (!metrics.optBoolean("ok", false)) {
+                    break;
+                }
+                double lw = metrics.optDouble("lw", 0);
+                double vvw = metrics.optDouble("vvw", 0);
+                double vvol = metrics.optDouble("vvol", 0);
+                final double sy = metrics.optDouble("sy", 0);
+                final double factor = DesktopViewportManager.computeOverviewRestoreFactor(lw, vvw);
+                final boolean needZoomOut = factor < 0.999;
+                final boolean needResetPan = vvol > 2.0;
+                if (!needZoomOut && !needResetPan) {
+                    break;
+                }
+                final CountDownLatch zoomLatch = new CountDownLatch(1);
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            BrowserController.TabSession cur = mHost.getTargetTab();
+                            if (cur != null && cur.webView != null) {
+                                if (needZoomOut) {
+                                    cur.webView.zoomBy((float) factor);
+                                }
+                                if (needZoomOut || needResetPan) {
+                                    cur.webView.evaluateJavascript(
+                                        "try{window.scrollTo(0," + Math.round(sy) + ");}catch(e){}",
+                                        null
+                                    );
+                                }
+                            }
+                        } catch (Throwable t) {
+                            Log.w(TAG, "Desktop overview zoom restore failed: " + t.getMessage());
+                        } finally {
+                            zoomLatch.countDown();
+                        }
+                    }
+                });
+                zoomLatch.await(1500, TimeUnit.MILLISECONDS);
+                restored = true;
+                Thread.sleep(160); // Let Chromium settle page scale before observation or screenshot
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception ignored) {
+                break;
+            }
+        }
+
+        if (restored) {
+            mScreenshotHelper.clearTab(tabId);
+            mHost.emitLog("[VIEWPORT] Detected desktop focus auto-zoom; restored full 1280px overview");
+        }
     }
 
     /**

@@ -1,9 +1,12 @@
 package com.acid.browser;
 
 import android.content.Context;
+import android.content.Intent;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.text.TextUtils;
 import android.util.Log;
@@ -17,10 +20,13 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -39,6 +45,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         void onOpenModelSelector();
         void onOpenSessionsSheet();
         void onFloatingShown();
+        void onPickAgentAttachments(int currentPendingCount);
     }
 
     public interface HeightProvider {
@@ -58,9 +65,19 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     private ScrollView mChatScrollView;
     private LinearLayout mChatStreamContainer;
     private View mEmptyWelcomeCard;
+    private HorizontalScrollView mPendingAttachmentsScroll;
+    private LinearLayout mPendingAttachmentsRow;
     private LinearLayout mAgentInputBar;
+    private LinearLayout mBtnAttachFiles;
+    private AcidIcons.SvgIconView mIconAttachFiles;
     private EditText mEtAgentTaskInput;
     private AcidIcons.BadgeButton mBtnAgentSendStop;
+    private final List<AgentAttachmentHelper.AttachmentItem> mPendingAttachments =
+        new ArrayList<AgentAttachmentHelper.AttachmentItem>();
+    private final Map<String, Bitmap> mAttachmentThumbCache = new HashMap<String, Bitmap>();
+    private AcidAsync.Handle mActiveImportHandle = null;
+    private boolean mIsImportingAttachments = false;
+    private int mPendingGeneration = 0;
     private AcidIcons.BadgeButton mBtnSessions;
     private AcidIcons.BadgeButton mBtnNewSession;
     private View mBtnModelConfig;
@@ -337,6 +354,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             ctx, AcidIcons.ICON_PLUS, "新对话", AcidTheme.LIGHT_ACCENT, new OnClickListener() {
                 @Override
                 public void onClick(View v) {
+                    clearPendingAttachments(true);
                     if (mAgentLoop != null) {
                         mAgentLoop.startNewSession();
                     }
@@ -425,11 +443,44 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mInputDivider.setBackgroundColor(AcidTheme.LIGHT_BORDER);
         panel.addView(mInputDivider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, AcidTheme.dp(ctx, 1)));
 
+        // 2.5 Pending Attachments Preview Bar (max 5 files, hidden when empty)
+        mPendingAttachmentsScroll = new HorizontalScrollView(ctx);
+        mPendingAttachmentsScroll.setHorizontalScrollBarEnabled(false);
+        mPendingAttachmentsScroll.setBackgroundColor(AcidTheme.LIGHT_SHEET_BG);
+        mPendingAttachmentsScroll.setVisibility(View.GONE);
+        mPendingAttachmentsRow = new LinearLayout(ctx);
+        mPendingAttachmentsRow.setOrientation(LinearLayout.HORIZONTAL);
+        mPendingAttachmentsRow.setGravity(Gravity.CENTER_VERTICAL);
+        mPendingAttachmentsRow.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 2));
+        mPendingAttachmentsScroll.addView(mPendingAttachmentsRow, new HorizontalScrollView.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        panel.addView(mPendingAttachmentsScroll, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
         // 3. Input Bar
         mAgentInputBar = new LinearLayout(ctx);
         mAgentInputBar.setOrientation(LinearLayout.HORIZONTAL);
         mAgentInputBar.setGravity(Gravity.CENTER_VERTICAL);
         mAgentInputBar.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 6));
+
+        mBtnAttachFiles = new LinearLayout(ctx);
+        mBtnAttachFiles.setOrientation(LinearLayout.HORIZONTAL);
+        mBtnAttachFiles.setGravity(Gravity.CENTER);
+        int attachSize = AcidTheme.dp(ctx, 34);
+        mBtnAttachFiles.setBackground(AcidTheme.pillBg(ctx, AcidTheme.LIGHT_SEARCH_BG, AcidTheme.LIGHT_SEARCH_BORDER, AcidTheme.RADIUS_PILL));
+        mIconAttachFiles = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_PLUS, AcidTheme.LIGHT_MUTED, 18);
+        mBtnAttachFiles.addView(mIconAttachFiles);
+        mBtnAttachFiles.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                triggerAttachPicker();
+            }
+        });
+        LinearLayout.LayoutParams attachLp = new LinearLayout.LayoutParams(attachSize, attachSize);
+        attachLp.rightMargin = AcidTheme.dp(ctx, 6);
+        mAgentInputBar.addView(mBtnAttachFiles, attachLp);
 
         mEtAgentTaskInput = new EditText(ctx);
         mEtAgentTaskInput.setHint(AcidLocale.tr("向 Acid Agent 发送网页或沙盒任务..."));
@@ -759,19 +810,100 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         rowLp.bottomMargin = AcidTheme.dp(ctx, 6);
         row.setLayoutParams(rowLp);
 
-        TextView bubble = new TextView(ctx);
-        bubble.setText(item.text);
-        bubble.setTextColor(Color.WHITE);
-        bubble.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
+        LinearLayout bubbleCard = new LinearLayout(ctx);
+        bubbleCard.setOrientation(LinearLayout.VERTICAL);
         int padH = AcidTheme.dp(ctx, 12);
         int padV = AcidTheme.dp(ctx, 8);
-        bubble.setPadding(padH, padV, padH, padV);
-        bubble.setBackground(AcidTheme.pillBg(ctx, AcidTheme.COLOR_BLUE, 0, AcidTheme.RADIUS_CARD));
-        bubble.setMaxWidth(AcidTheme.dp(ctx, 280));
-        bubble.setTextIsSelectable(true);
-        AcidMarkdownView.attachSelectableTouchDisallow(bubble);
+        bubbleCard.setPadding(padH, padV, padH, padV);
+        bubbleCard.setBackground(AcidTheme.pillBg(ctx, AcidTheme.COLOR_BLUE, 0, AcidTheme.RADIUS_CARD));
 
-        row.addView(bubble, new LinearLayout.LayoutParams(
+        if (item.attachments != null && !item.attachments.isEmpty()) {
+            File wsDir = mAgentLoop != null ? mAgentLoop.getWorkspaceDir() : null;
+            for (int i = 0; i < item.attachments.size(); i++) {
+                final AgentAttachmentHelper.AttachmentItem att = item.attachments.get(i);
+                if (att == null) continue;
+                LinearLayout attRow = new LinearLayout(ctx);
+                attRow.setOrientation(LinearLayout.HORIZONTAL);
+                attRow.setGravity(Gravity.CENTER_VERTICAL);
+                attRow.setPadding(AcidTheme.dp(ctx, 7), AcidTheme.dp(ctx, 5), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 5));
+                attRow.setBackground(AcidTheme.pillBg(
+                    ctx, Color.argb(46, 255, 255, 255), Color.argb(72, 255, 255, 255), AcidTheme.RADIUS_CONTROL
+                ));
+
+                if (att.isImage && wsDir != null && !att.relativePath.isEmpty()) {
+                    Bitmap thumb = loadCachedThumb(new File(wsDir, att.relativePath), AcidTheme.dp(ctx, 36));
+                    if (thumb != null) {
+                        ImageView iv = new ImageView(ctx);
+                        iv.setImageBitmap(thumb);
+                        iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(AcidTheme.dp(ctx, 34), AcidTheme.dp(ctx, 34));
+                        ivLp.rightMargin = AcidTheme.dp(ctx, 7);
+                        attRow.addView(iv, ivLp);
+                    } else {
+                        AcidIcons.SvgIconView ic = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_FILE_IMAGE, Color.WHITE, 18);
+                        LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                        icLp.rightMargin = AcidTheme.dp(ctx, 6);
+                        attRow.addView(ic, icLp);
+                    }
+                } else {
+                    int iconId = AgentAttachmentHelper.resolveIconForAttachment(att);
+                    AcidIcons.SvgIconView ic = new AcidIcons.SvgIconView(ctx, iconId, Color.WHITE, 18);
+                    LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                    icLp.rightMargin = AcidTheme.dp(ctx, 6);
+                    attRow.addView(ic, icLp);
+                }
+
+                LinearLayout metaCol = new LinearLayout(ctx);
+                metaCol.setOrientation(LinearLayout.VERTICAL);
+                TextView tvName = new TextView(ctx);
+                tvName.setText(att.displayName);
+                tvName.setTextColor(Color.WHITE);
+                tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+                tvName.setTypeface(Typeface.DEFAULT_BOLD);
+                tvName.setSingleLine(true);
+                tvName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                tvName.setMaxWidth(AcidTheme.dp(ctx, 185));
+                metaCol.addView(tvName);
+
+                TextView tvSize = new TextView(ctx);
+                tvSize.setText(AgentAttachmentHelper.formatFileSize(att.sizeBytes));
+                tvSize.setTextColor(Color.argb(210, 255, 255, 255));
+                tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
+                metaCol.addView(tvSize);
+                attRow.addView(metaCol);
+
+                attRow.setOnClickListener(new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (!att.relativePath.isEmpty()) {
+                            AcidFeedback.info(getContext(), AcidLocale.tr("工作区路径: ") + att.relativePath);
+                        }
+                    }
+                });
+
+                LinearLayout.LayoutParams attLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                attLp.bottomMargin = (i < item.attachments.size() - 1 || (item.text != null && !item.text.isEmpty()))
+                    ? AcidTheme.dp(ctx, 5) : 0;
+                bubbleCard.addView(attRow, attLp);
+            }
+        }
+
+        if (item.text != null && !item.text.isEmpty()) {
+            TextView bubbleText = new TextView(ctx);
+            bubbleText.setText(item.text);
+            bubbleText.setTextColor(Color.WHITE);
+            bubbleText.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BODY);
+            bubbleText.setMaxWidth(AcidTheme.dp(ctx, 260));
+            bubbleText.setTextIsSelectable(true);
+            AcidMarkdownView.attachSelectableTouchDisallow(bubbleText);
+            bubbleCard.addView(bubbleText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ));
+        }
+
+        row.addView(bubbleCard, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ));
         return row;
@@ -1270,6 +1402,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         }
 
         boolean isWorking = running || pausedForTakeover;
+        updateAttachButtonAppearance();
         if (mBtnSessions != null) mBtnSessions.setVisibility(isWorking ? View.GONE : View.VISIBLE);
         if (mBtnNewSession != null) mBtnNewSession.setVisibility(isWorking ? View.GONE : View.VISIBLE);
         if (mBtnModelConfig != null) mBtnModelConfig.setVisibility(isWorking ? View.GONE : View.VISIBLE);
@@ -1321,6 +1454,252 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         onLoopStateChanged(running, paused, mLastLoopStep);
     }
 
+    private void triggerAttachPicker() {
+        if (mAgentLoop != null && (mAgentLoop.isRunning() || mAgentLoop.isPausedForTakeover())) {
+            AcidFeedback.warn(getContext(), "任务执行或接管中，暂不支持添加新附件");
+            return;
+        }
+        if (mPendingAttachments.size() >= AgentAttachmentHelper.MAX_ATTACHMENTS) {
+            AcidFeedback.warn(getContext(), "单次最多上传 " + AgentAttachmentHelper.MAX_ATTACHMENTS + " 个附件");
+            return;
+        }
+        if (mHostCallback != null) {
+            mHostCallback.onPickAgentAttachments(mPendingAttachments.size());
+        }
+    }
+
+    public void clearPendingAttachments(boolean deleteFiles) {
+        mPendingGeneration++;
+        if (mActiveImportHandle != null) {
+            mActiveImportHandle.cancel();
+            mActiveImportHandle = null;
+        }
+        mIsImportingAttachments = false;
+        if (deleteFiles && mAgentLoop != null) {
+            File wsDir = mAgentLoop.getWorkspaceDir();
+            for (AgentAttachmentHelper.AttachmentItem att : mPendingAttachments) {
+                AgentAttachmentHelper.deletePendingUploadIfSafe(wsDir, att);
+            }
+        }
+        mPendingAttachments.clear();
+        renderPendingAttachmentsBar();
+    }
+
+    public void handleAttachmentPickerResult(int resultCode, Intent data) {
+        if (resultCode != android.app.Activity.RESULT_OK || data == null || mAgentLoop == null) {
+            return;
+        }
+        final AgentAttachmentHelper.LimitedSelection<Uri> selection = AgentAttachmentHelper.extractPickerUris(
+            getContext(),
+            data,
+            mPendingAttachments.size()
+        );
+        if (selection.trimmedCount > 0) {
+            AcidFeedback.warn(
+                getContext(),
+                "单次最多上传 " + AgentAttachmentHelper.MAX_ATTACHMENTS + " 个附件"
+                    + (selection.accepted.isEmpty() ? "" : "，已保留前 " + selection.accepted.size() + " 个")
+            );
+        }
+        if (selection.accepted.isEmpty()) {
+            return;
+        }
+        final File wsDir = mAgentLoop.getWorkspaceDir();
+        if (wsDir == null) {
+            return;
+        }
+        final int targetGen = mPendingGeneration;
+        if (mActiveImportHandle != null) {
+            mActiveImportHandle.cancel();
+        }
+        mIsImportingAttachments = true;
+        renderPendingAttachmentsBar();
+
+        final Context appCtx = getContext().getApplicationContext();
+        mActiveImportHandle = AcidAsync.run(
+            new AcidAsync.Task<AgentAttachmentHelper.ImportBatchResult>() {
+                @Override
+                public AgentAttachmentHelper.ImportBatchResult execute() {
+                    return AgentAttachmentHelper.importUrisToWorkspace(appCtx, wsDir, selection.accepted);
+                }
+            },
+            new AcidAsync.Callback<AgentAttachmentHelper.ImportBatchResult>() {
+                @Override
+                public void onSuccess(AgentAttachmentHelper.ImportBatchResult result) {
+                    mIsImportingAttachments = false;
+                    if (targetGen != mPendingGeneration) {
+                        if (result != null) {
+                            for (AgentAttachmentHelper.AttachmentItem stale : result.imported) {
+                                AgentAttachmentHelper.deletePendingUploadIfSafe(wsDir, stale);
+                            }
+                        }
+                        renderPendingAttachmentsBar();
+                        return;
+                    }
+                    if (result != null && !result.imported.isEmpty()) {
+                        AgentAttachmentHelper.LimitedSelection<AgentAttachmentHelper.AttachmentItem> capped =
+                            AgentAttachmentHelper.clampToMaxAttachments(result.imported, mPendingAttachments.size());
+                        mPendingAttachments.addAll(capped.accepted);
+                        if (capped.trimmedCount > 0) {
+                            for (int i = capped.accepted.size(); i < result.imported.size(); i++) {
+                                AgentAttachmentHelper.deletePendingUploadIfSafe(wsDir, result.imported.get(i));
+                            }
+                            AcidFeedback.warn(getContext(), "单次最多上传 " + AgentAttachmentHelper.MAX_ATTACHMENTS + " 个附件");
+                        }
+                    }
+                    if (result != null && !result.errors.isEmpty()) {
+                        AcidFeedback.warn(getContext(), result.errors.get(0));
+                    }
+                    renderPendingAttachmentsBar();
+                }
+
+                @Override
+                public void onError(Exception error) {
+                    mIsImportingAttachments = false;
+                    AcidFeedback.warn(getContext(), "读取所选文件失败: " + (error != null ? error.getMessage() : ""));
+                    renderPendingAttachmentsBar();
+                }
+            }
+        );
+    }
+
+    private Bitmap loadCachedThumb(File file, int targetPx) {
+        if (file == null || !file.exists()) return null;
+        String key = file.getAbsolutePath() + ":" + targetPx;
+        Bitmap cached = mAttachmentThumbCache.get(key);
+        if (cached != null && !cached.isRecycled()) {
+            return cached;
+        }
+        Bitmap decoded = AgentAttachmentHelper.decodeThumbnailBitmap(file, targetPx);
+        if (decoded != null) {
+            if (mAttachmentThumbCache.size() > 32) {
+                mAttachmentThumbCache.clear();
+            }
+            mAttachmentThumbCache.put(key, decoded);
+        }
+        return decoded;
+    }
+
+    private void updateAttachButtonAppearance() {
+        if (mBtnAttachFiles == null || mIconAttachFiles == null) return;
+        Context ctx = getContext();
+        boolean isWorking = mAgentLoop != null && (mAgentLoop.isRunning() || mAgentLoop.isPausedForTakeover());
+        int accent = AcidTheme.accent(mIsDarkMode);
+        int bg = AcidTheme.searchBg(mIsDarkMode);
+        int border = !mPendingAttachments.isEmpty() ? accent : AcidTheme.searchBorder(mIsDarkMode);
+        int iconCol = isWorking
+            ? AcidTheme.iconDisabled(mIsDarkMode)
+            : (!mPendingAttachments.isEmpty() ? accent : AcidTheme.muted(mIsDarkMode));
+        mBtnAttachFiles.setBackground(AcidTheme.pillBg(ctx, bg, border, AcidTheme.RADIUS_PILL));
+        mIconAttachFiles.setColor(iconCol);
+        mBtnAttachFiles.setAlpha(isWorking ? 0.5f : 1.0f);
+    }
+
+    private void renderPendingAttachmentsBar() {
+        updateAttachButtonAppearance();
+        if (mPendingAttachmentsScroll == null || mPendingAttachmentsRow == null) return;
+        mPendingAttachmentsRow.removeAllViews();
+        if (mPendingAttachments.isEmpty() && !mIsImportingAttachments) {
+            mPendingAttachmentsScroll.setVisibility(View.GONE);
+            return;
+        }
+        Context ctx = getContext();
+        mPendingAttachmentsScroll.setBackgroundColor(AcidTheme.sheetBg(mIsDarkMode));
+        mPendingAttachmentsScroll.setVisibility(View.VISIBLE);
+
+        final File wsDir = mAgentLoop != null ? mAgentLoop.getWorkspaceDir() : null;
+        int cardBg = AcidTheme.subtle(mIsDarkMode);
+        int cardBorder = AcidTheme.subtleBorder(mIsDarkMode);
+        int textCol = AcidTheme.text(mIsDarkMode);
+        int mutedCol = AcidTheme.muted(mIsDarkMode);
+        int accentCol = AcidTheme.accent(mIsDarkMode);
+
+        for (int i = 0; i < mPendingAttachments.size(); i++) {
+            final AgentAttachmentHelper.AttachmentItem att = mPendingAttachments.get(i);
+            final int index = i;
+
+            LinearLayout chip = new LinearLayout(ctx);
+            chip.setOrientation(LinearLayout.HORIZONTAL);
+            chip.setGravity(Gravity.CENTER_VERTICAL);
+            chip.setBackground(AcidTheme.cardBorderBg(ctx, cardBg, cardBorder, 1, AcidTheme.RADIUS_CONTROL));
+            chip.setPadding(AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 4));
+
+            if (att.isImage && wsDir != null && !att.relativePath.isEmpty()) {
+                Bitmap thumb = loadCachedThumb(new File(wsDir, att.relativePath), AcidTheme.dp(ctx, 30));
+                if (thumb != null) {
+                    ImageView iv = new ImageView(ctx);
+                    iv.setImageBitmap(thumb);
+                    iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                    LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(AcidTheme.dp(ctx, 28), AcidTheme.dp(ctx, 28));
+                    ivLp.rightMargin = AcidTheme.dp(ctx, 6);
+                    chip.addView(iv, ivLp);
+                } else {
+                    AcidIcons.SvgIconView ic = new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_FILE_IMAGE, accentCol, 18);
+                    LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                    icLp.rightMargin = AcidTheme.dp(ctx, 5);
+                    chip.addView(ic, icLp);
+                }
+            } else {
+                int iconId = AgentAttachmentHelper.resolveIconForAttachment(att);
+                AcidIcons.SvgIconView ic = new AcidIcons.SvgIconView(ctx, iconId, accentCol, 18);
+                LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                icLp.rightMargin = AcidTheme.dp(ctx, 5);
+                chip.addView(ic, icLp);
+            }
+
+            LinearLayout infoCol = new LinearLayout(ctx);
+            infoCol.setOrientation(LinearLayout.VERTICAL);
+            TextView tvName = new TextView(ctx);
+            tvName.setText(att.displayName);
+            tvName.setTextColor(textCol);
+            tvName.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
+            tvName.setTypeface(Typeface.DEFAULT_BOLD);
+            tvName.setSingleLine(true);
+            tvName.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            tvName.setMaxWidth(AcidTheme.dp(ctx, 118));
+            infoCol.addView(tvName);
+
+            TextView tvSize = new TextView(ctx);
+            tvSize.setText(AgentAttachmentHelper.formatFileSize(att.sizeBytes));
+            tvSize.setTextColor(mutedCol);
+            tvSize.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
+            infoCol.addView(tvSize);
+            chip.addView(infoCol);
+
+            LinearLayout btnRemove = new LinearLayout(ctx);
+            btnRemove.setGravity(Gravity.CENTER);
+            int rmPad = AcidTheme.dp(ctx, 5);
+            btnRemove.setPadding(rmPad, rmPad, rmPad, rmPad);
+            btnRemove.addView(new AcidIcons.SvgIconView(ctx, AcidIcons.ICON_CLOSE, mutedCol, 13));
+            btnRemove.setOnClickListener(new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (index >= 0 && index < mPendingAttachments.size()) {
+                        AgentAttachmentHelper.AttachmentItem removed = mPendingAttachments.remove(index);
+                        AgentAttachmentHelper.deletePendingUploadIfSafe(wsDir, removed);
+                        renderPendingAttachmentsBar();
+                    }
+                }
+            });
+            chip.addView(btnRemove);
+
+            LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            chipLp.rightMargin = AcidTheme.dp(ctx, 6);
+            mPendingAttachmentsRow.addView(chip, chipLp);
+        }
+
+        if (mIsImportingAttachments) {
+            TextView tvImporting = new TextView(ctx);
+            tvImporting.setText(AcidLocale.tr("正在读取附件..."));
+            tvImporting.setTextColor(mutedCol);
+            tvImporting.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
+            tvImporting.setPadding(AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 4));
+            mPendingAttachmentsRow.addView(tvImporting);
+        }
+    }
+
     public void triggerAgentSubmitOrStop() {
         if (mAgentLoop == null) return;
         if (mAgentLoop.isRunning()) {
@@ -1334,15 +1713,22 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mAgentLoop.resumeFromTakeover();
             return;
         }
-        String task = mEtAgentTaskInput.getText().toString().trim();
-        if (task.isEmpty()) {
-            AcidFeedback.warn(getContext(), "请输入要让 Agent 执行的任务指令");
+        if (mIsImportingAttachments) {
+            AcidFeedback.info(getContext(), "正在导入所选附件，请稍候...");
             return;
         }
+        String task = mEtAgentTaskInput.getText().toString().trim();
+        if (task.isEmpty() && mPendingAttachments.isEmpty()) {
+            AcidFeedback.warn(getContext(), "请输入要让 Agent 执行的任务指令，或点击左侧 + 上传附件");
+            return;
+        }
+        List<AgentAttachmentHelper.AttachmentItem> toSend = new ArrayList<AgentAttachmentHelper.AttachmentItem>(mPendingAttachments);
+        mPendingAttachments.clear();
+        renderPendingAttachmentsBar();
         mEtAgentTaskInput.setText("");
         setHasUnread(false);
         hideKeyboard();
-        mAgentLoop.submitUserTask(task);
+        mAgentLoop.submitUserTask(task, toSend);
     }
 
     public void refreshAgentStatusLabel() {
@@ -1390,6 +1776,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mEtAgentTaskInput.setTextColor(text);
             mEtAgentTaskInput.setHintTextColor(muted);
         }
+        renderPendingAttachmentsBar();
         if (mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
             renderSessionChatStream(mAgentLoop.getActiveSession());
         }

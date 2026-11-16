@@ -88,6 +88,10 @@ public class AcidAgentLoop {
         return mSessionStore.getActiveSession();
     }
 
+    public java.io.File getWorkspaceDir() {
+        return mSandboxTools.getWorkspaceDir();
+    }
+
     // =========================================================================
     // Model Configuration & Selection Queries
     // =========================================================================
@@ -385,10 +389,32 @@ public class AcidAgentLoop {
      * Starts a new user task turn or resumes after human takeover.
      */
     public void submitUserTask(final String userPrompt) {
+        submitUserTask(userPrompt, null);
+    }
+
+    public void submitUserTask(
+        final String rawUserPrompt,
+        final List<AgentAttachmentHelper.AttachmentItem> rawAttachments
+    ) {
         if (mRunning) {
             addErrorItem("Agent 正在运行中，请先点击停止按钮中断当前任务。");
             return;
         }
+
+        final List<AgentAttachmentHelper.AttachmentItem> attachments =
+            (rawAttachments != null && !rawAttachments.isEmpty())
+                ? new ArrayList<AgentAttachmentHelper.AttachmentItem>(rawAttachments)
+                : java.util.Collections.<AgentAttachmentHelper.AttachmentItem>emptyList();
+        final String trimmedPrompt = rawUserPrompt != null ? rawUserPrompt.trim() : "";
+        final String effectivePrompt = !trimmedPrompt.isEmpty()
+            ? trimmedPrompt
+            : (!attachments.isEmpty() ? "请查看并分析我上传的附件内容。" : "");
+        if (effectivePrompt.isEmpty() && attachments.isEmpty()) {
+            return;
+        }
+        final String titleSeed = !trimmedPrompt.isEmpty()
+            ? trimmedPrompt
+            : ("附件: " + attachments.get(0).displayName);
 
         final Thread prevWorker = mWorkerThread;
 
@@ -470,14 +496,17 @@ public class AcidAgentLoop {
                 // Create and display User UI bubble after previous worker has unwound cleanly
                 AcidSessionStore.UiMessageItem userItem = new AcidSessionStore.UiMessageItem();
                 userItem.type = AcidSessionStore.TYPE_USER;
-                userItem.text = userPrompt;
+                userItem.text = trimmedPrompt;
+                if (!attachments.isEmpty()) {
+                    userItem.attachments.addAll(attachments);
+                }
                 userItem.timestamp = System.currentTimeMillis();
                 synchronized (mSessionStore) {
                     if (isRunCancelled(runGen)) {
                         return;
                     }
                     if (mSessionStore.getActiveSession() == session) {
-                        mSessionStore.updateTitleIfDefault(userPrompt);
+                        mSessionStore.updateTitleIfDefault(titleSeed);
                     }
                     session.uiItems.add(userItem);
                     mSessionStore.saveSession(session);
@@ -489,7 +518,7 @@ public class AcidAgentLoop {
                 if (isRunCancelled(runGen)) {
                     return;
                 }
-                runAgentLoopInternal(session, userPrompt, runGen);
+                runAgentLoopInternal(session, effectivePrompt, attachments, runGen);
             }
         }, "AcidAgentLoopThread");
         mWorkerThread = worker;
@@ -535,6 +564,7 @@ public class AcidAgentLoop {
             "- **Closed-Loop Web Navigation**: Every `browser` action (`navigate`, `click`, `fill`, `select`, `scroll`, `wait`, `upload`, `set_mode`) automatically returns the updated page observation (`[e1..eN]` interactive element handles and text excerpt). Always inspect the returned `[eN]` handles before issuing your next click or fill.\n" +
             "- **Visual Screenshot Observation**: Call `browser(action='screenshot', som=true/false, save_path='...')` whenever you need to see the rendered page visually (charts, canvas, layout checks, image/CAPTCHA inspection, visual icons). Pass `som=true` to draw `[e1..eN]` labels strictly onto the returned screenshot image (without modifying the webpage). Pass optional `save_path` (`.png`/`.jpg`/`.jpeg` inside `acid_workspace/`) to save the exact same-resolution screenshot image to disk (for post-processing via `bash` and uploading via `browser(action='upload')`). After a screenshot, `browser(action='click', x=..., y=...)` automatically accepts pixel coordinates directly in the screenshot's dimensions (`coord_space='auto'`/`'screenshot'`) in both Mobile and Desktop modes.\n" +
             "- **Uploading Workspace Files**: To upload attachments onto a webpage, NEVER call `fill` on `input(file)`. Call `browser(action='upload', ref='e...', file_path='report.pdf')` (or `file_paths=['a.png', 'b.png']` for multi-file upload) targeting the `input(file)`, `label(file-trigger)`, or upload button. Only regular non-protected files inside `acid_workspace/` may be uploaded (protected config/state/homepage/userscripts/adblock/skills entries are denied).\n" +
+            "- **User Phone Attachments (`uploads/`)**: Files uploaded by the user in chat are copied into `uploads/` inside `acid_workspace/` (images also appear visually in multimodal prompts when present). Browse text/code files via `read` or `bash`, inspect or manipulate media/archives via `bash`, and upload any attached file onto a webpage via `browser(action='upload', file_path='uploads/...')`.\n" +
             "- **Deterministic Waiting**: When interacting with dynamic SPAs, waiting for AJAX requests, or waiting for a confirmation message/selector, use `browser(action='wait', condition='stable'|'selector'|'text'|'gone'|'ms', ...)` instead of busy looping.\n" +
             "- **Desktop vs Mobile Identity**: If a mobile webpage blocks content, hides buttons, or forces app download banners, immediately call `browser(action='set_mode', mode='desktop')` to switch to 1280px PC mode.\n" +
             "- **Sandbox & Local Reports**: You can save scraped data, write local HTML pages into the workspace via `write`, and display them directly in the browser via `browser(action='navigate', url='workspace://report.html')`.\n" +
@@ -551,7 +581,69 @@ public class AcidAgentLoop {
             "- Format your final explanations clearly using Markdown (headings, bold, lists, code blocks).";
     }
 
-    private void runAgentLoopInternal(AcidSessionStore.AgentSession session, String userPrompt, final int runGen) {
+    public static JSONObject buildUserApiMessage(
+        String userPrompt,
+        String initSnapshot,
+        java.io.File workspaceDir,
+        List<AgentAttachmentHelper.AttachmentItem> attachments
+    ) throws Exception {
+        String attachContext = AgentAttachmentHelper.buildAttachmentPromptContext(workspaceDir, attachments);
+        String fullText = (userPrompt != null ? userPrompt : "")
+            + attachContext
+            + (initSnapshot != null && !initSnapshot.isEmpty() ? "\n\n[Current Browser State]\n" + initSnapshot : "");
+
+        boolean hasVisionImages = false;
+        if (attachments != null) {
+            for (AgentAttachmentHelper.AttachmentItem att : attachments) {
+                if (att != null && att.isImage && att.imageBase64 != null && !att.imageBase64.isEmpty()) {
+                    hasVisionImages = true;
+                    break;
+                }
+            }
+        }
+
+        JSONObject userMsg = new JSONObject();
+        userMsg.put("role", "user");
+        if (!hasVisionImages) {
+            userMsg.put("content", fullText);
+            return userMsg;
+        }
+
+        JSONArray parts = new JSONArray();
+        JSONObject textPart = new JSONObject();
+        textPart.put("type", "text");
+        textPart.put("text", fullText);
+        parts.put(textPart);
+        for (AgentAttachmentHelper.AttachmentItem att : attachments) {
+            if (att != null && att.isImage && att.imageBase64 != null && !att.imageBase64.isEmpty()) {
+                JSONObject urlObj = new JSONObject();
+                urlObj.put("url", "data:" + ScreenshotCaptureHelper.DEFAULT_MIME_TYPE + ";base64," + att.imageBase64);
+                urlObj.put("detail", "high");
+                JSONObject imgPart = new JSONObject();
+                imgPart.put("type", "image_url");
+                imgPart.put("image_url", urlObj);
+                parts.put(imgPart);
+            }
+        }
+        userMsg.put("content", parts);
+        return userMsg;
+    }
+
+    private void runAgentLoopInternal(
+        AcidSessionStore.AgentSession session,
+        String userPrompt,
+        List<AgentAttachmentHelper.AttachmentItem> attachments,
+        final int runGen
+    ) {
+        boolean hasAttachedVisionImages = false;
+        if (attachments != null) {
+            for (AgentAttachmentHelper.AttachmentItem att : attachments) {
+                if (att != null && att.isImage && att.imageBase64 != null && !att.imageBase64.isEmpty()) {
+                    hasAttachedVisionImages = true;
+                    break;
+                }
+            }
+        }
         try {
             if (isRunCancelled(runGen)) return;
             JSONObject initObs = mController.getAutomationDriver().observeSync(mController.isSomEnabled(), true, false);
@@ -559,10 +651,12 @@ public class AcidAgentLoop {
 
             synchronized (mSessionStore) {
                 if (isRunCancelled(runGen)) return;
-                JSONObject userMsg = new JSONObject();
-                userMsg.put("role", "user");
-                userMsg.put("content", userPrompt +
-                    (initSnapshot.isEmpty() ? "" : "\n\n[Current Browser State]\n" + initSnapshot));
+                JSONObject userMsg = buildUserApiMessage(
+                    userPrompt,
+                    initSnapshot,
+                    mSandboxTools.getWorkspaceDir(),
+                    attachments
+                );
                 session.apiMessages.add(userMsg);
                 mSessionStore.saveActiveSession();
             }
@@ -748,7 +842,14 @@ public class AcidAgentLoop {
             }
         } catch (final Exception e) {
             if (!mStopRequested && mRunGeneration.get() == runGen) {
-                addErrorItem(session, "请求异常: " + e.getMessage());
+                String msg = e.getMessage() != null ? e.getMessage() : "Unknown error";
+                String lower = msg.toLowerCase(java.util.Locale.US);
+                if (hasAttachedVisionImages && (lower.contains("image_url") || lower.contains("vision")
+                    || lower.contains("multimodal") || lower.contains("unknown variant")
+                    || lower.contains("expected a string"))) {
+                    msg = msg + "\n\n[提示] 当前选中模型可能不支持图片视觉输入，请切换支持视觉的模型（如 GPT-4o / Gemini / Claude / Qwen-VL 等），或改为上传文本/代码文件。";
+                }
+                addErrorItem(session, "请求异常: " + msg);
             }
         } finally {
             if (mRunGeneration.get() == runGen) {
@@ -955,10 +1056,11 @@ public class AcidAgentLoop {
 
         Object lock = sessionStore != null ? sessionStore : session;
         synchronized (lock) {
-            // Compact any previously stored screenshot messages so session JSON stays compact on disk
+            // Compact any previously stored browser screenshot messages so session JSON stays compact on disk,
+            // while preserving user-uploaded multimodal image attachments in the active conversation.
             for (int i = 0; i < session.apiMessages.size(); i++) {
                 JSONObject existing = session.apiMessages.get(i);
-                if (isMultimodalImageMessage(existing)) {
+                if (isBrowserScreenshotMessage(existing)) {
                     try {
                         existing.put("content", "[Earlier browser screenshot omitted]");
                     } catch (Exception ignored) {}
@@ -1010,6 +1112,11 @@ public class AcidAgentLoop {
         }
     }
 
+    public static boolean isBrowserScreenshotMessage(JSONObject msg) {
+        if (!isMultimodalImageMessage(msg)) return false;
+        return extractMessageText(msg).startsWith("[Attached Screenshot]");
+    }
+
     public static boolean isMultimodalImageMessage(JSONObject msg) {
         if (msg == null) return false;
         Object raw = msg.opt("content");
@@ -1050,16 +1157,21 @@ public class AcidAgentLoop {
             return new ArrayList<JSONObject>();
         }
 
-        // 1. Identify DOM observations (with Interactive Elements), multimodal screenshots, and oversized (>8192 chars) non-DOM tool outputs.
+        // 1. Identify DOM observations (with Interactive Elements), multimodal screenshots, user images, and oversized (>8192 chars) non-DOM tool outputs.
         List<Integer> domObsIndices = new ArrayList<Integer>();
         List<Integer> nonDomGiantIndices = new ArrayList<Integer>();
-        List<Integer> imageMsgIndices = new ArrayList<Integer>();
+        List<Integer> screenshotIndices = new ArrayList<Integer>();
+        List<Integer> userImageIndices = new ArrayList<Integer>();
         for (int i = 0; i < apiMessages.size(); i++) {
             JSONObject m = apiMessages.get(i);
             if (m == null) continue;
             String role = m.optString("role");
             if (isMultimodalImageMessage(m)) {
-                imageMsgIndices.add(i);
+                if (isBrowserScreenshotMessage(m)) {
+                    screenshotIndices.add(i);
+                } else {
+                    userImageIndices.add(i);
+                }
                 continue;
             }
             String content = extractMessageText(m);
@@ -1078,31 +1190,48 @@ public class AcidAgentLoop {
         // - The latest DOM observation (last in domObsIndices) MUST NEVER be pruned under any circumstances!
         // - Keep at least the last 3 DOM observations intact so pagination slices (offset=0, offset=180, offset=360) co-exist.
         // - Keep at least the last 2 oversized non-DOM tool outputs intact; compact older >8192 non-DOM outputs via DSH head/tail trimming.
-        // - Keep ONLY the latest 1 multimodal screenshot intact in the API payload; older screenshots downgrade to lightweight text placeholders.
+        // - Keep ONLY the latest 1 browser screenshot intact, plus the latest 2 user-attached image messages intact;
+        //   older user image turns preserve their text content while omitting image payloads.
         int domKeepThreshold = domObsIndices.size() > 3
             ? domObsIndices.get(domObsIndices.size() - 3)
             : -1;
         int nonDomKeepThreshold = nonDomGiantIndices.size() > 2
             ? nonDomGiantIndices.get(nonDomGiantIndices.size() - 2)
             : -1;
-        int imageKeepThreshold = imageMsgIndices.size() > 1
-            ? imageMsgIndices.get(imageMsgIndices.size() - 1)
+        int screenshotKeepThreshold = screenshotIndices.size() > 1
+            ? screenshotIndices.get(screenshotIndices.size() - 1)
+            : -1;
+        int userImageKeepThreshold = userImageIndices.size() > 2
+            ? userImageIndices.get(userImageIndices.size() - 2)
             : -1;
 
         Set<Integer> domIndicesSet = new HashSet<Integer>(domObsIndices);
         Set<Integer> nonDomGiantSet = new HashSet<Integer>(nonDomGiantIndices);
-        Set<Integer> imageIndicesSet = new HashSet<Integer>(imageMsgIndices);
+        Set<Integer> screenshotIndicesSet = new HashSet<Integer>(screenshotIndices);
+        Set<Integer> userImageIndicesSet = new HashSet<Integer>(userImageIndices);
         int latestDomIndex = !domObsIndices.isEmpty() ? domObsIndices.get(domObsIndices.size() - 1) : -1;
 
         List<JSONObject> result = new ArrayList<JSONObject>(apiMessages.size());
         for (int i = 0; i < apiMessages.size(); i++) {
             JSONObject orig = apiMessages.get(i);
             if (orig == null) continue;
-            if (imageKeepThreshold >= 0 && i < imageKeepThreshold && imageIndicesSet.contains(i)) {
+            if (screenshotKeepThreshold >= 0 && i < screenshotKeepThreshold && screenshotIndicesSet.contains(i)) {
                 try {
                     JSONObject prunedImg = new JSONObject(orig.toString());
                     prunedImg.put("content", "[Earlier browser screenshot omitted to preserve context]");
                     result.add(prunedImg);
+                } catch (Exception e) {
+                    result.add(orig);
+                }
+                continue;
+            }
+            if (userImageKeepThreshold >= 0 && i < userImageKeepThreshold && userImageIndicesSet.contains(i)) {
+                try {
+                    JSONObject prunedUserImg = new JSONObject(orig.toString());
+                    String userText = extractMessageText(orig);
+                    String note = "[Earlier attached user image omitted from context; original file remains in workspace uploads/]";
+                    prunedUserImg.put("content", userText.isEmpty() ? note : (userText + "\n\n" + note));
+                    result.add(prunedUserImg);
                 } catch (Exception e) {
                     result.add(orig);
                 }

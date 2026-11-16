@@ -38,6 +38,7 @@ import android.widget.TextView;
 public class BrowserActivity extends Activity implements BrowserController.BrowserStateListener {
 
     private static final String TAG = "BrowserActivity";
+    public static final int REQUEST_CODE_AGENT_ATTACH = 0x4644;
 
     private BrowserDataStore mDataStore;
     private BrowserController mController;
@@ -313,6 +314,30 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onFloatingShown() {
                 mOverlayStack.notifyViewportShown(mAgentFloatingView);
             }
+
+            @Override
+            public void onPickAgentAttachments(int currentPendingCount) {
+                if (currentPendingCount >= AgentAttachmentHelper.MAX_ATTACHMENTS) {
+                    AcidFeedback.warn(BrowserActivity.this, "单次最多上传 " + AgentAttachmentHelper.MAX_ATTACHMENTS + " 个附件");
+                    return;
+                }
+                try {
+                    startActivityForResult(
+                        AgentAttachmentHelper.buildAttachmentPickerIntent(true),
+                        REQUEST_CODE_AGENT_ATTACH
+                    );
+                } catch (Exception e) {
+                    try {
+                        startActivityForResult(
+                            AgentAttachmentHelper.buildAttachmentPickerIntent(false),
+                            REQUEST_CODE_AGENT_ATTACH
+                        );
+                    } catch (Exception e2) {
+                        Log.w(TAG, "No activity can handle agent attachment picker", e2);
+                        AcidFeedback.warn(BrowserActivity.this, "没有找到可用的文件选择器");
+                    }
+                }
+            }
         });
         mAgentFloatingView.setHeightProvider(new AgentFloatingView.HeightProvider() {
             @Override
@@ -332,6 +357,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onSessionSwitched(String sessionId) {
                 if (mAgentFloatingView != null && mAgentLoop != null) {
+                    mAgentFloatingView.clearPendingAttachments(true);
                     mAgentFloatingView.renderSessionChatStream(mAgentLoop.getActiveSession());
                 }
             }
@@ -339,6 +365,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onSessionCreated() {
                 if (mAgentFloatingView != null && mAgentLoop != null) {
+                    mAgentFloatingView.clearPendingAttachments(true);
                     mAgentFloatingView.renderSessionChatStream(mAgentLoop.getActiveSession());
                 }
             }
@@ -1913,6 +1940,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (mController != null && requestCode == BrowserController.REQUEST_CODE_FILE_CHOOSER) {
             mController.onFileChooserResult(requestCode, resultCode, data);
+            return;
+        }
+        if (mAgentFloatingView != null && requestCode == REQUEST_CODE_AGENT_ATTACH) {
+            mAgentFloatingView.handleAttachmentPickerResult(resultCode, data);
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);

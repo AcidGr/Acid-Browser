@@ -1223,5 +1223,13 @@ public final class AcidLocale {
         EN_MAP.put("网页提示", "Page Alert");
         EN_MAP.put("网页确认", "Page Confirm");
         EN_MAP.put("网页输入", "Page Prompt");
+
+        // Agent Chat Attachments
+        EN_MAP.put("正在读取附件...", "Importing attachments...");
+        EN_MAP.put("正在导入所选附件，请稍候...", "Importing selected attachments, please wait...");
+        EN_MAP.put("任务执行或接管中，暂不支持添加新附件", "Cannot attach files while Agent is running or paused for takeover");
+        EN_MAP.put("单次最多上传 5 个附件", "Up to 5 attachments can be added per message");
+        EN_MAP.put("请输入要让 Agent 执行的任务指令，或点击左侧 + 上传附件", "Enter a task instruction or tap + on the left to attach files");
+        EN_MAP.put("工作区路径: ", "Workspace path: ");
     }
 }
