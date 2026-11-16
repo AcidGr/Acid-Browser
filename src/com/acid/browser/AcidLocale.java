@@ -1231,5 +1231,6 @@ public final class AcidLocale {
         EN_MAP.put("单次最多上传 5 个附件", "Up to 5 attachments can be added per message");
         EN_MAP.put("请输入要让 Agent 执行的任务指令，或点击左侧 + 上传附件", "Enter a task instruction or tap + on the left to attach files");
         EN_MAP.put("工作区路径: ", "Workspace path: ");
+        EN_MAP.put("继续加载更多", "Load more");
     }
 }

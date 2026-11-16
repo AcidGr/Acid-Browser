@@ -172,6 +172,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testAgentChatAttachmentsFeature(); }
         });
 
+        // 24. Bottom Sheet IME Resize Recovery & Bookmarks/History Batch Preparation
+        run("24. Sheet IME Resize & History/Bookmarks Paging: Scroll Ceiling Math, Batch Buckets & Index Preservation", new TestCase() {
+            @Override public void execute() throws Exception { testSheetImeCeilingAndHistoryBookmarksPaging(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -3724,5 +3729,80 @@ public final class TestRunner {
         } finally {
             SkillStorageVault.deleteRecursiveSafe(wsRoot);
         }
+    }
+
+    static void testSheetImeCeilingAndHistoryBookmarksPaging() throws Exception {
+        // 1. AcidBottomSheetView scroll ceiling shrinks cleanly with IME and restores on dismissal
+        int fullCeiling = AcidBottomSheetView.computeScrollCeilingPx(2200, 0.75f, 300, 540);
+        assertEquals(Integer.valueOf(1350), Integer.valueOf(fullCeiling),
+            "Full-screen host computes 75% ceiling minus chrome reserve");
+
+        int imeOpenCeiling = AcidBottomSheetView.computeScrollCeilingPx(1200, 0.75f, 300, 540);
+        assertEquals(Integer.valueOf(600), Integer.valueOf(imeOpenCeiling),
+            "Shrunk IME host computes reduced scroll ceiling");
+
+        int restoredCeiling = AcidBottomSheetView.computeScrollCeilingPx(2200, 0.75f, 300, 540);
+        assertEquals(Integer.valueOf(1350), Integer.valueOf(restoredCeiling),
+            "Restored host height recomputes full 1350px ceiling without remaining short");
+
+        int tightLandscapeCeiling = AcidBottomSheetView.computeScrollCeilingPx(700, 0.75f, 300, 540);
+        assertEquals(Integer.valueOf(400), Integer.valueOf(tightLandscapeCeiling),
+            "Very tight host height clamps scroll ceiling to available space above chrome");
+
+        // 2. Batch paging constants and incremental preparation across Bookmarks & History
+        assertEquals(Integer.valueOf(40), Integer.valueOf(BookmarksHistorySheet.INITIAL_BATCH_SIZE),
+            "Initial batch size stays 40");
+        assertEquals(Integer.valueOf(40), Integer.valueOf(BookmarksHistorySheet.LOAD_MORE_BATCH_SIZE),
+            "Load-more batch size stays 40");
+
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.set(2026, java.util.Calendar.NOVEMBER, 16, 15, 0, 0);
+        cal.set(java.util.Calendar.MILLISECOND, 0);
+        long now = cal.getTimeInMillis();
+        long dayMs = 86400000L;
+
+        List<BrowserDataStore.EntryItem> rawHistory = new ArrayList<BrowserDataStore.EntryItem>();
+        rawHistory.add(new BrowserDataStore.EntryItem("Today 1", "https://today1.example", now - 60000L));
+        rawHistory.add(new BrowserDataStore.EntryItem("Yesterday 1", "https://yest.example", now - dayMs));
+        rawHistory.add(new BrowserDataStore.EntryItem("Today 2", "https://today2.example", now - 120000L));
+        rawHistory.add(new BrowserDataStore.EntryItem("Past Week", "https://week.example", now - 3 * dayMs));
+        rawHistory.add(new BrowserDataStore.EntryItem("Old Site", "https://old.example", now - 20 * dayMs));
+
+        List<BookmarksHistorySheet.PreparedEntry> bucketedHistory =
+            BookmarksHistorySheet.buildPreparedEntries(rawHistory, false, "", now);
+        assertEquals(Integer.valueOf(5), Integer.valueOf(bucketedHistory.size()), "All history entries prepared");
+        assertEquals("今天 (2)", bucketedHistory.get(0).sectionHeader, "Today bucket ordered first with count");
+        assertEquals("Today 1", bucketedHistory.get(0).item.title, "Preserves Today item 1");
+        assertEquals("Today 2", bucketedHistory.get(1).item.title, "Preserves Today item 2");
+        assertEquals("昨天 (1)", bucketedHistory.get(2).sectionHeader, "Yesterday bucket follows Today");
+        assertEquals("最近 7 天 (1)", bucketedHistory.get(3).sectionHeader, "Past 7 days bucket follows Yesterday");
+        assertEquals("更早以前 (1)", bucketedHistory.get(4).sectionHeader, "Earlier bucket ordered last");
+
+        // Search inside history flattens into Search Results without time buckets
+        List<BookmarksHistorySheet.PreparedEntry> searchedHistory =
+            BookmarksHistorySheet.buildPreparedEntries(rawHistory, false, "today", now);
+        assertEquals(Integer.valueOf(2), Integer.valueOf(searchedHistory.size()), "History search filters matches");
+        assertEquals("搜索结果 (2)", searchedHistory.get(0).sectionHeader, "Search header includes total match count");
+
+        // Bookmarks preserve original index across filtered searches so edit/delete target exact item
+        List<BrowserDataStore.EntryItem> rawBookmarks = new ArrayList<BrowserDataStore.EntryItem>();
+        for (int i = 0; i < 120; i++) {
+            rawBookmarks.add(new BrowserDataStore.EntryItem("Bookmark " + i, "https://b" + i + ".example"));
+        }
+        List<BookmarksHistorySheet.PreparedEntry> allBookmarks =
+            BookmarksHistorySheet.buildPreparedEntries(rawBookmarks, true, "", now);
+        assertEquals(Integer.valueOf(120), Integer.valueOf(allBookmarks.size()), "Prepares all bookmarks cleanly");
+        assertEquals("全部书签 (120)", allBookmarks.get(0).sectionHeader, "Bookmarks header reflects total count");
+        assertEquals(Integer.valueOf(99), Integer.valueOf(allBookmarks.get(99).originalIndex), "Retains exact index");
+
+        List<BookmarksHistorySheet.PreparedEntry> filteredBookmarks =
+            BookmarksHistorySheet.buildPreparedEntries(rawBookmarks, true, "b105", now);
+        assertEquals(Integer.valueOf(1), Integer.valueOf(filteredBookmarks.size()), "Matches single filtered bookmark");
+        assertEquals(Integer.valueOf(105), Integer.valueOf(filteredBookmarks.get(0).originalIndex),
+            "Filtered bookmark keeps original backing index 105 for edit/delete");
+        assertEquals("搜索结果 (1)", filteredBookmarks.get(0).sectionHeader, "Filtered bookmarks use search header");
+
+        assertTrue(BookmarksHistorySheet.buildPreparedEntries(rawBookmarks, true, "nonexistent_xyz", now).isEmpty(),
+            "Unmatched search yields empty list safely");
     }
 }

@@ -198,24 +198,18 @@ public final class FaviconManager {
     }
 
     // =========================================================================
-    // Synchronous Fast Queries (Memory -> Disk, Non-Blocking)
+    // Synchronous Fast Queries (Memory Only, Non-Blocking)
     // =========================================================================
 
     /**
-     * Synchronously checks memory LruCache and local disk cache.
-     * Returns immediately (never performs network I/O).
+     * Synchronously checks the in-memory LruCache only (zero disk or network I/O).
      *
-     * @return Decoded {@link Bitmap} or {@code null} if not yet cached locally.
+     * @return Cached {@link Bitmap} or {@code null} if not currently in memory.
      */
-    public Bitmap getFaviconFast(String urlOrHost) {
+    public Bitmap getFaviconInMemory(String urlOrHost) {
         final String host = extractHost(urlOrHost);
         if (host.isEmpty()) return null;
-
-        Bitmap mem = getFaviconFromMemCache(host);
-        if (mem != null) {
-            return mem;
-        }
-        return getFaviconFromDisk(host);
+        return getFaviconFromMemCache(host);
     }
 
     private Bitmap getFaviconFromMemCache(String host) {
@@ -226,10 +220,6 @@ public final class FaviconManager {
             }
         }
         return null;
-    }
-
-    private Bitmap getFaviconFromDisk(String host) {
-        return getFaviconFromDisk(host, mCacheGeneration.get());
     }
 
     private Bitmap getFaviconFromDisk(String host, int expectedGen) {
@@ -292,14 +282,24 @@ public final class FaviconManager {
     // =========================================================================
 
     /**
-     * Asynchronously loads the favicon for a URL or hostname.
-     * <ol>
-     *   <li>If already in memory or disk, dispatches to {@code callback} immediately.</li>
-     *   <li>If missing and not in negative cooldown, probes origin and CDN endpoints in background.</li>
-     *   <li>Saves discovered icon to memory and disk, then dispatches to {@code callback}.</li>
-     * </ol>
+     * Asynchronously loads a locally cached favicon from memory or disk without issuing network requests.
+     */
+    public void loadCachedFaviconAsync(String urlOrHost, final FaviconCallback callback) {
+        loadFaviconAsyncInternal(urlOrHost, false, callback);
+    }
+
+    /**
+     * Asynchronously loads the favicon for a URL or hostname (memory -> disk -> network probe).
      */
     public void loadFaviconAsync(String urlOrHost, final FaviconCallback callback) {
+        loadFaviconAsyncInternal(urlOrHost, true, callback);
+    }
+
+    private void loadFaviconAsyncInternal(
+        String urlOrHost,
+        final boolean allowNetworkProbe,
+        final FaviconCallback callback
+    ) {
         final String host = extractHost(urlOrHost);
         if (host.isEmpty()) {
             if (callback != null) callback.onFaviconLoaded("", null);
@@ -314,22 +314,25 @@ public final class FaviconManager {
             return;
         }
 
-        // Check 15-minute negative cache
-        Long lastFail = mNegativeCache.get(host);
-        if (lastFail != null && (System.currentTimeMillis() - lastFail.longValue()) < NEGATIVE_CACHE_TTL_MS) {
-            if (callback != null) {
-                callback.onFaviconLoaded(host, null);
+        if (allowNetworkProbe) {
+            // Check 15-minute negative cache before network probing
+            Long lastFail = mNegativeCache.get(host);
+            if (lastFail != null && (System.currentTimeMillis() - lastFail.longValue()) < NEGATIVE_CACHE_TTL_MS) {
+                if (callback != null) {
+                    callback.onFaviconLoaded(host, null);
+                }
+                return;
             }
-            return;
         }
 
-        // Deduplicate in-flight requests for the same host
+        // Deduplicate in-flight requests for the same host + network capability
+        final String inflightKey = allowNetworkProbe ? host : ("disk:" + host);
         boolean isFirstRequester = false;
         synchronized (mInFlightCallbacks) {
-            List<FaviconCallback> list = mInFlightCallbacks.get(host);
+            List<FaviconCallback> list = mInFlightCallbacks.get(inflightKey);
             if (list == null) {
                 list = new ArrayList<FaviconCallback>();
-                mInFlightCallbacks.put(host, list);
+                mInFlightCallbacks.put(inflightKey, list);
                 isFirstRequester = true;
             }
             if (callback != null) {
@@ -346,7 +349,7 @@ public final class FaviconManager {
             @Override
             public void run() {
                 Bitmap resultBmp = getFaviconFromDisk(host, startGen);
-                if (resultBmp == null && mCacheGeneration.get() == startGen) {
+                if (allowNetworkProbe && resultBmp == null && mCacheGeneration.get() == startGen) {
                     byte[] downloaded = probeAndDownloadFaviconBytes(host);
                     if (mCacheGeneration.get() == startGen) {
                         if (downloaded != null && isValidFaviconBytes(downloaded)) {
@@ -369,7 +372,7 @@ public final class FaviconManager {
                 final Bitmap finalBmp = (mCacheGeneration.get() == startGen) ? resultBmp : null;
                 final List<FaviconCallback> waiting;
                 synchronized (mInFlightCallbacks) {
-                    waiting = mInFlightCallbacks.remove(host);
+                    waiting = mInFlightCallbacks.remove(inflightKey);
                 }
 
                 if (waiting != null && !waiting.isEmpty()) {

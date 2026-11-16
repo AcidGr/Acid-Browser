@@ -59,6 +59,10 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         void render(LinearLayout pinnedHeader, LinearLayout contentContainer, LinearLayout pinnedFooter);
     }
 
+    public interface OnScrollNearBottomListener {
+        void onScrollNearBottom();
+    }
+
     public static final class SheetPage {
         public final String title;
         public boolean rawTitle = false;
@@ -139,15 +143,33 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     private static final class AdaptiveScrollView extends ScrollView {
         private int mMaxHeightPx = 0;
         private int mMinHeightPx = 0;
+        private OnScrollNearBottomListener mNearBottomListener = null;
+        private int mNearBottomThresholdPx = 0;
 
         AdaptiveScrollView(Context context) {
             super(context);
             setOverScrollMode(OVER_SCROLL_IF_CONTENT_SCROLLS);
         }
 
-        void setMaxHeightPx(int maxPx) {
+        void setOnScrollNearBottomListener(OnScrollNearBottomListener listener, int thresholdPx) {
+            mNearBottomListener = listener;
+            mNearBottomThresholdPx = Math.max(0, thresholdPx);
+        }
+
+        int getMaxHeightPx() {
+            return mMaxHeightPx;
+        }
+
+        boolean setMaxHeightPxNoRelayout(int maxPx) {
             if (mMaxHeightPx != maxPx) {
                 mMaxHeightPx = maxPx;
+                return true;
+            }
+            return false;
+        }
+
+        void setMaxHeightPx(int maxPx) {
+            if (setMaxHeightPxNoRelayout(maxPx)) {
                 requestLayout();
             }
         }
@@ -157,6 +179,17 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
                 mMinHeightPx = minPx;
                 setMinimumHeight(minPx);
                 requestLayout();
+            }
+        }
+
+        @Override
+        protected void onScrollChanged(int l, int t, int oldl, int oldt) {
+            super.onScrollChanged(l, t, oldl, oldt);
+            if (mNearBottomListener != null && t >= oldt && getChildCount() > 0) {
+                View child = getChildAt(0);
+                if (child != null && t + getHeight() >= child.getBottom() - mNearBottomThresholdPx) {
+                    mNearBottomListener.onScrollNearBottom();
+                }
             }
         }
 
@@ -345,31 +378,79 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
     }
 
     @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int hMode = MeasureSpec.getMode(heightMeasureSpec);
+        int hSize = MeasureSpec.getSize(heightMeasureSpec);
+        if (hMode != MeasureSpec.UNSPECIFIED && hSize > 0) {
+            int wSize = MeasureSpec.getSize(widthMeasureSpec);
+            int cardContentW = wSize > 0
+                ? Math.max(0, wSize - mCardLayout.getPaddingLeft() - mCardLayout.getPaddingRight())
+                : resolveCardContentWidthPx();
+            int ceiling = computeCurrentScrollCeilingPx(hSize, cardContentW);
+            mScrollView.setMaxHeightPxNoRelayout(ceiling);
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+
+    @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        if (h != oldh) {
-            updateScrollCeiling();
+        if (h > 0 && h != oldh) {
+            // Defer outside active layout pass so requestLayout() is never swallowed after IME dismissal
+            post(new Runnable() {
+                @Override
+                public void run() {
+                    updateScrollCeiling();
+                }
+            });
         }
     }
 
-    private int resolveSlotHeightPx(View slotView) {
+    private int resolveCardContentWidthPx() {
+        int w = mCardLayout.getWidth() - mCardLayout.getPaddingLeft() - mCardLayout.getPaddingRight();
+        if (w <= 0) {
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            w = dm.widthPixels - AcidTheme.dp(getContext(), 32);
+        }
+        return Math.max(0, w);
+    }
+
+    private int resolveSlotHeightPx(View slotView, int availableWidthPx) {
         if (slotView == null || slotView.getVisibility() != View.VISIBLE) return 0;
-        int measured = slotView.getMeasuredHeight();
-        if (measured > 0) return measured;
         try {
-            int w = mCardLayout.getWidth() - mCardLayout.getPaddingLeft() - mCardLayout.getPaddingRight();
-            if (w <= 0) {
-                DisplayMetrics dm = getResources().getDisplayMetrics();
-                w = dm.widthPixels - AcidTheme.dp(getContext(), 32);
-            }
-            slotView.measure(
-                MeasureSpec.makeMeasureSpec(Math.max(0, w), MeasureSpec.AT_MOST),
-                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
-            );
+            int wSpec = availableWidthPx > 0
+                ? MeasureSpec.makeMeasureSpec(availableWidthPx, MeasureSpec.EXACTLY)
+                : MeasureSpec.makeMeasureSpec(0, MeasureSpec.AT_MOST);
+            slotView.measure(wSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
             int h = slotView.getMeasuredHeight();
             if (h > 0) return h;
         } catch (Exception ignored) {}
         return AcidTheme.dp(getContext(), FALLBACK_SLOT_RESERVE_DP);
+    }
+
+    public static int computeScrollCeilingPx(
+        int hostHeightPx,
+        float maxHeightRatio,
+        int chromeReservePx,
+        int minScrollCeilingPx
+    ) {
+        if (hostHeightPx <= 0) return Math.max(1, minScrollCeilingPx);
+        int maxTotal = Math.round(hostHeightPx * maxHeightRatio);
+        int available = Math.max(0, hostHeightPx - Math.max(0, chromeReservePx));
+        int desired = Math.max(minScrollCeilingPx, maxTotal - Math.max(0, chromeReservePx));
+        return Math.max(1, Math.min(desired, available));
+    }
+
+    private int computeCurrentScrollCeilingPx(int hostHeightPx, int cardContentWidthPx) {
+        int chromeReserve = AcidTheme.dp(getContext(), HEADER_CHROME_RESERVE_DP);
+        chromeReserve += resolveSlotHeightPx(mPinnedHeaderContainer, cardContentWidthPx);
+        chromeReserve += resolveSlotHeightPx(mPinnedFooterContainer, cardContentWidthPx);
+        return computeScrollCeilingPx(
+            hostHeightPx,
+            mMaxHeightRatio,
+            chromeReserve,
+            AcidTheme.dp(getContext(), MIN_SCROLL_CEILING_DP)
+        );
     }
 
     private void updateScrollCeiling() {
@@ -378,12 +459,15 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
             DisplayMetrics dm = getResources().getDisplayMetrics();
             hostH = dm.heightPixels;
         }
-        int chromeReserve = AcidTheme.dp(getContext(), HEADER_CHROME_RESERVE_DP);
-        chromeReserve += resolveSlotHeightPx(mPinnedHeaderContainer);
-        chromeReserve += resolveSlotHeightPx(mPinnedFooterContainer);
-        int maxTotal = Math.round(hostH * mMaxHeightRatio);
-        int maxScroll = Math.max(AcidTheme.dp(getContext(), MIN_SCROLL_CEILING_DP), maxTotal - chromeReserve);
+        int maxScroll = computeCurrentScrollCeilingPx(hostH, resolveCardContentWidthPx());
         mScrollView.setMaxHeightPx(maxScroll);
+    }
+
+    public void setOnScrollNearBottomListener(OnScrollNearBottomListener listener) {
+        mScrollView.setOnScrollNearBottomListener(
+            listener,
+            AcidTheme.dp(getContext(), 160)
+        );
     }
 
     public void setMaxHeightRatio(float ratio) {

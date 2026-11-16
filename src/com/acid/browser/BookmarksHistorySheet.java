@@ -7,15 +7,19 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -24,12 +28,8 @@ import java.util.Locale;
  * Bookmarks & Browsing History Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage}
  * template, {@link AcidWidgets.ListRow}, {@link AcidContextMenu}, and {@link AcidDialogs}.
  *
- * <p>Supports:
- * <ul>
- *   <li>Real-time fuzzy search across both title and URL keywords.</li>
- *   <li>Smart time-bucketing for browsing history (Today, Yesterday, Past 7 Days, Earlier).</li>
- *   <li>Relative and absolute timestamps (e.g. "15:42", "昨天 20:15", "10-24 09:30").</li>
- * </ul>
+ * <p>Features incremental batch rendering ({@link #INITIAL_BATCH_SIZE} / {@link #LOAD_MORE_BATCH_SIZE}),
+ * non-blocking Favicon resolution, single-pass JSON loading, and debounced search across both tabs.
  */
 public class BookmarksHistorySheet extends AcidBottomSheetView {
 
@@ -39,6 +39,21 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
 
     public static final int TAB_BOOKMARKS = 0;
     public static final int TAB_HISTORY = 1;
+    public static final int INITIAL_BATCH_SIZE = 40;
+    public static final int LOAD_MORE_BATCH_SIZE = 40;
+    private static final long SEARCH_DEBOUNCE_MS = 100L;
+
+    public static final class PreparedEntry {
+        public final String sectionHeader;
+        public final BrowserDataStore.EntryItem item;
+        public final int originalIndex;
+
+        public PreparedEntry(String sectionHeader, BrowserDataStore.EntryItem item, int originalIndex) {
+            this.sectionHeader = sectionHeader;
+            this.item = item;
+            this.originalIndex = originalIndex;
+        }
+    }
 
     private final BrowserDataStore mDataStore;
     private final BrowserController mController;
@@ -48,6 +63,23 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
     private String mCurrentPageTitle = "";
     private String mCurrentPageUrl = "";
     private String mSearchQuery = "";
+
+    private List<BrowserDataStore.EntryItem> mCachedTabEntries = Collections.emptyList();
+    private List<PreparedEntry> mPreparedEntries = Collections.emptyList();
+    private LinearLayout mActiveListContainer = null;
+    private boolean mActiveContainerIsBookmarks = false;
+    private int mRenderedCount = 0;
+    private String mLastRenderedSection = null;
+    private View mLoadMoreFooterView = null;
+    private int mRenderGeneration = 0;
+    private boolean mAppendingBatch = false;
+    private boolean mPendingLoadMorePosted = false;
+    private Runnable mPendingSearchRunnable = null;
+
+    private long mRenderStartOfToday = 0L;
+    private long mRenderStartOfYesterday = 0L;
+    private SimpleDateFormat mTimeOnlyFmt = null;
+    private SimpleDateFormat mMonthDayTimeFmt = null;
 
     public BookmarksHistorySheet(
         Context context,
@@ -59,20 +91,35 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         mDataStore = dataStore;
         mController = controller;
         mNavigateListener = navigateListener;
+        setOnScrollNearBottomListener(new OnScrollNearBottomListener() {
+            @Override
+            public void onScrollNearBottom() {
+                scheduleLoadMoreBatch();
+            }
+        });
         setRootPage(buildActiveTabPage());
     }
 
     @Override
     protected void onResetToRootPage() {
+        cancelPendingSearch();
         mSearchQuery = "";
         setRootPage(buildActiveTabPage());
     }
 
     public void prepareTab(int tab, String currentTitle, String currentUrl) {
+        cancelPendingSearch();
         mActiveTab = tab;
         mCurrentPageTitle = currentTitle != null ? currentTitle : "";
         mCurrentPageUrl = currentUrl != null ? currentUrl : "";
         mSearchQuery = "";
+    }
+
+    private void cancelPendingSearch() {
+        if (mPendingSearchRunnable != null) {
+            removeCallbacks(mPendingSearchRunnable);
+            mPendingSearchRunnable = null;
+        }
     }
 
     private SheetPage buildActiveTabPage() {
@@ -81,7 +128,9 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         final SheetPage page = new SheetPage("书签与历史", new PageRenderer() {
             @Override
             public void render(LinearLayout pinned, final LinearLayout container) {
+                cancelPendingSearch();
                 final boolean isBookmarks = (mActiveTab == TAB_BOOKMARKS);
+                mCachedTabEntries = isBookmarks ? mDataStore.loadBookmarks() : mDataStore.loadHistory();
 
                 // 1. Pinned Header: Tabs switcher
                 pinned.addView(AcidWidgets.segmentedTabs(
@@ -94,6 +143,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                         @Override
                         public void onTabSelected(int index) {
                             if (mActiveTab != index) {
+                                cancelPendingSearch();
                                 mActiveTab = index;
                                 refreshActivePage();
                             }
@@ -117,12 +167,21 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                     @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
                     @Override
                     public void afterTextChanged(Editable s) {
-                        String q = s != null ? s.toString().trim() : "";
-                        if (!mSearchQuery.equals(q)) {
-                            mSearchQuery = q;
-                            container.removeAllViews();
-                            renderContainerEntries(container, mActiveTab == TAB_BOOKMARKS);
-                        }
+                        final String q = s != null ? s.toString().trim() : "";
+                        if (mSearchQuery.equals(q)) return;
+                        cancelPendingSearch();
+                        final Runnable task = new Runnable() {
+                            @Override
+                            public void run() {
+                                if (mPendingSearchRunnable != this || !isShowing()) return;
+                                mPendingSearchRunnable = null;
+                                mSearchQuery = q;
+                                getScrollView().scrollTo(0, 0);
+                                renderContainerEntries(container, mActiveTab == TAB_BOOKMARKS);
+                            }
+                        };
+                        mPendingSearchRunnable = task;
+                        postDelayed(task, SEARCH_DEBOUNCE_MS);
                     }
                 });
 
@@ -134,14 +193,20 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                 );
                 pinned.addView(searchBox);
 
-                syncHeaderActionForActiveTab(isBookmarks);
+                syncHeaderActionForActiveTab(isBookmarks, mCachedTabEntries);
                 renderContainerEntries(container, isBookmarks);
+            }
+        }).withOnPause(new Runnable() {
+            @Override
+            public void run() {
+                cancelPendingSearch();
+                mRenderGeneration++;
             }
         });
         return page;
     }
 
-    private void syncHeaderActionForActiveTab(boolean isBookmarks) {
+    private void syncHeaderActionForActiveTab(boolean isBookmarks, List<BrowserDataStore.EntryItem> entries) {
         final Context ctx = getContext();
         if (isBookmarks) {
             if (!TextUtils.isEmpty(mCurrentPageUrl)) {
@@ -157,7 +222,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                 hideAction();
             }
         } else {
-            if (!mDataStore.loadHistory().isEmpty()) {
+            if (entries != null && !entries.isEmpty()) {
                 setAction(AcidIcons.ICON_TRASH, "清空历史", AcidTheme.COLOR_RED, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
@@ -170,28 +235,119 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         }
     }
 
-    private void renderContainerEntries(LinearLayout container, boolean isBookmarks) {
-        final Context ctx = getContext();
-        List<BrowserDataStore.EntryItem> rawList = isBookmarks ? mDataStore.loadBookmarks() : mDataStore.loadHistory();
-
-        // 1. Filter by Query (Title or URL keywords), preserving original index in rawList
-        String q = mSearchQuery.toLowerCase(Locale.ROOT).trim();
+    /**
+     * Prepares ordered entries with section headers in a lightweight POJO pass without inflating views.
+     */
+    public static List<PreparedEntry> buildPreparedEntries(
+        List<BrowserDataStore.EntryItem> rawList,
+        boolean isBookmarks,
+        String searchQuery,
+        long nowMillis
+    ) {
+        if (rawList == null || rawList.isEmpty()) {
+            return Collections.emptyList();
+        }
+        String q = searchQuery != null ? searchQuery.toLowerCase(Locale.ROOT).trim() : "";
         List<BrowserDataStore.EntryItem> filteredList = new ArrayList<BrowserDataStore.EntryItem>();
         List<Integer> originalIndices = new ArrayList<Integer>();
+
         for (int rawIdx = 0; rawIdx < rawList.size(); rawIdx++) {
             BrowserDataStore.EntryItem item = rawList.get(rawIdx);
             if (item == null) continue;
             if (q.isEmpty()
-                || item.title.toLowerCase(Locale.ROOT).contains(q)
-                || item.url.toLowerCase(Locale.ROOT).contains(q)) {
+                || (item.title != null && item.title.toLowerCase(Locale.ROOT).contains(q))
+                || (item.url != null && item.url.toLowerCase(Locale.ROOT).contains(q))) {
                 filteredList.add(item);
                 originalIndices.add(Integer.valueOf(rawIdx));
             }
         }
-
-        // 2. Empty States
         if (filteredList.isEmpty()) {
-            if (!q.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<PreparedEntry> prepared = new ArrayList<PreparedEntry>(filteredList.size());
+        if (isBookmarks || !q.isEmpty()) {
+            String headerText = !q.isEmpty()
+                ? ("搜索结果 (" + filteredList.size() + ")")
+                : ("全部书签 (" + filteredList.size() + ")");
+            for (int i = 0; i < filteredList.size(); i++) {
+                prepared.add(new PreparedEntry(
+                    headerText,
+                    filteredList.get(i),
+                    originalIndices.get(i).intValue()
+                ));
+            }
+            return prepared;
+        }
+
+        // History smart time-bucketing (Today / Yesterday / Past 7 Days / Earlier)
+        long startOfToday = getStartOfDay(nowMillis);
+        long startOfYesterday = startOfToday - 86400000L;
+        long startOfPast7Days = startOfToday - 6 * 86400000L;
+
+        List<PreparedEntry> todayList = new ArrayList<PreparedEntry>();
+        List<PreparedEntry> yesterdayList = new ArrayList<PreparedEntry>();
+        List<PreparedEntry> past7DaysList = new ArrayList<PreparedEntry>();
+        List<PreparedEntry> earlierList = new ArrayList<PreparedEntry>();
+
+        for (int i = 0; i < filteredList.size(); i++) {
+            BrowserDataStore.EntryItem item = filteredList.get(i);
+            int origIdx = originalIndices.get(i).intValue();
+            if (item.time >= startOfToday) {
+                todayList.add(new PreparedEntry(null, item, origIdx));
+            } else if (item.time >= startOfYesterday) {
+                yesterdayList.add(new PreparedEntry(null, item, origIdx));
+            } else if (item.time >= startOfPast7Days) {
+                past7DaysList.add(new PreparedEntry(null, item, origIdx));
+            } else {
+                earlierList.add(new PreparedEntry(null, item, origIdx));
+            }
+        }
+
+        appendBucketWithHeader(prepared, todayList, "今天");
+        appendBucketWithHeader(prepared, yesterdayList, "昨天");
+        appendBucketWithHeader(prepared, past7DaysList, "最近 7 天");
+        appendBucketWithHeader(prepared, earlierList, "更早以前");
+        return prepared;
+    }
+
+    private static void appendBucketWithHeader(
+        List<PreparedEntry> out,
+        List<PreparedEntry> bucket,
+        String bucketTitle
+    ) {
+        if (bucket.isEmpty()) return;
+        String header = bucketTitle + " (" + bucket.size() + ")";
+        for (PreparedEntry entry : bucket) {
+            out.add(new PreparedEntry(header, entry.item, entry.originalIndex));
+        }
+    }
+
+    private void renderContainerEntries(LinearLayout container, boolean isBookmarks) {
+        final Context ctx = getContext();
+        mRenderGeneration++;
+        mActiveListContainer = container;
+        mActiveContainerIsBookmarks = isBookmarks;
+        mRenderedCount = 0;
+        mLastRenderedSection = null;
+        mLoadMoreFooterView = null;
+        mPendingLoadMorePosted = false;
+        container.removeAllViews();
+
+        long now = System.currentTimeMillis();
+        mRenderStartOfToday = getStartOfDay(now);
+        mRenderStartOfYesterday = mRenderStartOfToday - 86400000L;
+        mTimeOnlyFmt = new SimpleDateFormat("HH:mm", Locale.getDefault());
+        mMonthDayTimeFmt = new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault());
+
+        List<BrowserDataStore.EntryItem> rawList = mCachedTabEntries != null
+            ? mCachedTabEntries
+            : Collections.<BrowserDataStore.EntryItem>emptyList();
+        mPreparedEntries = buildPreparedEntries(rawList, isBookmarks, mSearchQuery, now);
+
+        // Empty States
+        if (mPreparedEntries.isEmpty()) {
+            if (!mSearchQuery.trim().isEmpty()) {
                 container.addView(AcidWidgets.emptyState(
                     ctx,
                     mIsDarkMode,
@@ -209,75 +365,79 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             return;
         }
 
-        // 3. Render Bookmarks or Search Results (Single flat list)
-        if (isBookmarks || !q.isEmpty()) {
-            String headerText;
-            if (!q.isEmpty()) {
-                headerText = "搜索结果 (" + filteredList.size() + ")";
-            } else {
-                headerText = "全部书签 (" + filteredList.size() + ")";
-            }
-            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, headerText));
+        appendNextBatch(INITIAL_BATCH_SIZE);
+    }
 
-            for (int i = 0; i < filteredList.size(); i++) {
-                final int realIndex = originalIndices.get(i).intValue();
-                final BrowserDataStore.EntryItem item = filteredList.get(i);
-                renderEntryRow(container, item, realIndex, isBookmarks);
+    private void scheduleLoadMoreBatch() {
+        if (mPendingLoadMorePosted || mAppendingBatch) return;
+        if (mActiveListContainer == null || mRenderedCount >= mPreparedEntries.size()) return;
+        mPendingLoadMorePosted = true;
+        final int expectedGen = mRenderGeneration;
+        post(new Runnable() {
+            @Override
+            public void run() {
+                mPendingLoadMorePosted = false;
+                if (expectedGen == mRenderGeneration && isShowing()) {
+                    appendNextBatch(LOAD_MORE_BATCH_SIZE);
+                }
             }
-            return;
+        });
+    }
+
+    private void appendNextBatch(int batchSize) {
+        if (mAppendingBatch || mActiveListContainer == null) return;
+        if (mRenderedCount >= mPreparedEntries.size()) return;
+        mAppendingBatch = true;
+        try {
+            final Context ctx = getContext();
+            if (mLoadMoreFooterView != null) {
+                mActiveListContainer.removeView(mLoadMoreFooterView);
+                mLoadMoreFooterView = null;
+            }
+            int targetEnd = Math.min(mPreparedEntries.size(), mRenderedCount + Math.max(1, batchSize));
+            for (int i = mRenderedCount; i < targetEnd; i++) {
+                PreparedEntry entry = mPreparedEntries.get(i);
+                if (entry.sectionHeader != null && !entry.sectionHeader.equals(mLastRenderedSection)) {
+                    mActiveListContainer.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, entry.sectionHeader));
+                    mLastRenderedSection = entry.sectionHeader;
+                }
+                renderEntryRow(mActiveListContainer, entry.item, entry.originalIndex, mActiveContainerIsBookmarks);
+                mRenderedCount++;
+            }
+
+            if (mRenderedCount < mPreparedEntries.size()) {
+                mLoadMoreFooterView = buildLoadMoreFooter(mRenderedCount, mPreparedEntries.size());
+                mActiveListContainer.addView(mLoadMoreFooterView);
+            }
+        } finally {
+            mAppendingBatch = false;
         }
+    }
 
-        // 4. Render History with Smart Time-Bucketing (Today / Yesterday / Past 7 Days / Earlier)
-        long now = System.currentTimeMillis();
-        long startOfToday = getStartOfDay(now);
-        long startOfYesterday = startOfToday - 86400000L;
-        long startOfPast7Days = startOfToday - 6 * 86400000L;
-
-        List<BrowserDataStore.EntryItem> todayList = new ArrayList<BrowserDataStore.EntryItem>();
-        List<BrowserDataStore.EntryItem> yesterdayList = new ArrayList<BrowserDataStore.EntryItem>();
-        List<BrowserDataStore.EntryItem> past7DaysList = new ArrayList<BrowserDataStore.EntryItem>();
-        List<BrowserDataStore.EntryItem> earlierList = new ArrayList<BrowserDataStore.EntryItem>();
-
-        for (BrowserDataStore.EntryItem item : filteredList) {
-            if (item.time >= startOfToday) {
-                todayList.add(item);
-            } else if (item.time >= startOfYesterday) {
-                yesterdayList.add(item);
-            } else if (item.time >= startOfPast7Days) {
-                past7DaysList.add(item);
-            } else {
-                earlierList.add(item);
+    private View buildLoadMoreFooter(int shown, int total) {
+        Context ctx = getContext();
+        TextView tv = new TextView(ctx);
+        tv.setText(AcidLocale.tr("继续加载更多") + " (" + shown + " / " + total + ")");
+        tv.setTextColor(AcidTheme.accent(mIsDarkMode));
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(AcidTheme.dp(ctx, 12), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 12), AcidTheme.dp(ctx, 10));
+        tv.setBackground(AcidTheme.cardBorderBg(
+            ctx, AcidTheme.subtle(mIsDarkMode), AcidTheme.subtleBorder(mIsDarkMode), 1, AcidTheme.RADIUS_CONTROL
+        ));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        lp.topMargin = AcidTheme.dp(ctx, 8);
+        lp.bottomMargin = AcidTheme.dp(ctx, 6);
+        tv.setLayoutParams(lp);
+        tv.setOnClickListener(new OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                appendNextBatch(LOAD_MORE_BATCH_SIZE);
             }
-        }
-
-        int globalIndex = 0;
-        if (!todayList.isEmpty()) {
-            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "今天 (" + todayList.size() + ")"));
-            for (BrowserDataStore.EntryItem item : todayList) {
-                renderEntryRow(container, item, globalIndex++, false);
-            }
-        }
-
-        if (!yesterdayList.isEmpty()) {
-            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "昨天 (" + yesterdayList.size() + ")"));
-            for (BrowserDataStore.EntryItem item : yesterdayList) {
-                renderEntryRow(container, item, globalIndex++, false);
-            }
-        }
-
-        if (!past7DaysList.isEmpty()) {
-            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "最近 7 天 (" + past7DaysList.size() + ")"));
-            for (BrowserDataStore.EntryItem item : past7DaysList) {
-                renderEntryRow(container, item, globalIndex++, false);
-            }
-        }
-
-        if (!earlierList.isEmpty()) {
-            container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "更早以前 (" + earlierList.size() + ")"));
-            for (BrowserDataStore.EntryItem item : earlierList) {
-                renderEntryRow(container, item, globalIndex++, false);
-            }
-        }
+        });
+        return tv;
     }
 
     private void renderEntryRow(
@@ -291,37 +451,9 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             .title(item.title)
             .subtitle(item.url);
 
-        if (isBookmarks) {
-            FaviconManager fm = FaviconManager.getInstance(ctx);
-            Bitmap fastBmp = fm.getFaviconFast(item.url);
-            final FrameLayout avatar = AcidWidgets.createFaviconAvatar(
-                ctx, mIsDarkMode, fastBmp, item.title, item.url
-            );
-            rowBuilder.leadingCustomView(avatar);
-
-            if (fastBmp == null) {
-                fm.loadFaviconAsync(item.url, new FaviconManager.FaviconCallback() {
-                    @Override
-                    public void onFaviconLoaded(String host, Bitmap bitmap) {
-                        if (bitmap != null && !bitmap.isRecycled()) {
-                            AcidWidgets.updateFaviconAvatarView(
-                                avatar, ctx, mIsDarkMode, bitmap, item.title, item.url
-                            );
-                        }
-                    }
-                });
-            }
-        } else {
-            FaviconManager fm = FaviconManager.getInstance(ctx);
-            Bitmap fastBmp = fm.getFaviconFast(item.url);
-            if (fastBmp != null) {
-                rowBuilder.leadingFavicon(ctx, mIsDarkMode, fastBmp, item.title, item.url);
-            } else {
-                rowBuilder.leadingIcon(AcidIcons.ICON_HISTORY, AcidTheme.COLOR_AMBER, 18);
-            }
-            if (item.time > 0) {
-                rowBuilder.trailingText(ctx, mIsDarkMode, formatTimestamp(item.time));
-            }
+        bindRowFavicon(ctx, rowBuilder, item, isBookmarks);
+        if (!isBookmarks && item.time > 0) {
+            rowBuilder.trailingText(ctx, mIsDarkMode, formatTimestamp(item.time));
         }
 
         final LinearLayout row = rowBuilder.build(ctx, mIsDarkMode);
@@ -348,6 +480,39 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         container.addView(row);
     }
 
+    private void bindRowFavicon(
+        final Context ctx,
+        AcidWidgets.ListRow rowBuilder,
+        final BrowserDataStore.EntryItem item,
+        boolean allowNetworkProbe
+    ) {
+        FaviconManager fm = FaviconManager.getInstance(ctx);
+        Bitmap memBmp = fm.getFaviconInMemory(item.url);
+        final FrameLayout avatar = AcidWidgets.createFaviconAvatar(
+            ctx, mIsDarkMode, memBmp, item.title, item.url
+        );
+        rowBuilder.leadingCustomView(avatar);
+
+        if (memBmp == null) {
+            final int gen = mRenderGeneration;
+            FaviconManager.FaviconCallback cb = new FaviconManager.FaviconCallback() {
+                @Override
+                public void onFaviconLoaded(String host, Bitmap bitmap) {
+                    if (gen == mRenderGeneration && isShowing() && bitmap != null && !bitmap.isRecycled()) {
+                        AcidWidgets.updateFaviconAvatarView(
+                            avatar, ctx, mIsDarkMode, bitmap, item.title, item.url
+                        );
+                    }
+                }
+            };
+            if (allowNetworkProbe) {
+                fm.loadFaviconAsync(item.url, cb);
+            } else {
+                fm.loadCachedFaviconAsync(item.url, cb);
+            }
+        }
+    }
+
     private static long getStartOfDay(long timeMillis) {
         Calendar cal = Calendar.getInstance();
         cal.setTimeInMillis(timeMillis);
@@ -358,18 +523,15 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         return cal.getTimeInMillis();
     }
 
-    private static String formatTimestamp(long timeMillis) {
+    private String formatTimestamp(long timeMillis) {
         if (timeMillis <= 0) return "";
-        long now = System.currentTimeMillis();
-        long startOfToday = getStartOfDay(now);
-        long startOfYesterday = startOfToday - 86400000L;
-
-        if (timeMillis >= startOfToday) {
-            return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(timeMillis));
-        } else if (timeMillis >= startOfYesterday) {
-            return "昨天 " + new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(timeMillis));
+        Date d = new Date(timeMillis);
+        if (timeMillis >= mRenderStartOfToday) {
+            return mTimeOnlyFmt.format(d);
+        } else if (timeMillis >= mRenderStartOfYesterday) {
+            return "昨天 " + mTimeOnlyFmt.format(d);
         } else {
-            return new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(new Date(timeMillis));
+            return mMonthDayTimeFmt.format(d);
         }
     }
 
