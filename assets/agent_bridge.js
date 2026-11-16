@@ -546,6 +546,29 @@
                                     href: el.getAttribute('href') || ''
                                 };
                                 const inputType = tag === 'input' ? (el.type || 'text').toLowerCase() : undefined;
+                                let associatedFileInput = null;
+                                if (tag === 'label') {
+                                    let ctrl = el.control || null;
+                                    if (!ctrl && el.getAttribute) {
+                                        const forId = el.getAttribute('for');
+                                        if (forId) {
+                                            const rootNode = el.getRootNode ? el.getRootNode() : (el.ownerDocument || document);
+                                            if (rootNode && typeof rootNode.getElementById === 'function') {
+                                                ctrl = rootNode.getElementById(forId);
+                                            } else if (document && typeof document.getElementById === 'function') {
+                                                ctrl = document.getElementById(forId);
+                                            }
+                                        }
+                                    }
+                                    if (ctrl && ctrl.tagName && ctrl.tagName.toLowerCase() === 'input' &&
+                                        (ctrl.type || '').toLowerCase() === 'file') {
+                                        associatedFileInput = ctrl;
+                                    }
+                                }
+                                const fileInputEl = (tag === 'input' && inputType === 'file') ? el : associatedFileInput;
+                                const fileTrigger = associatedFileInput ? true : undefined;
+                                const acceptTypes = fileInputEl ? (cleanText(fileInputEl.getAttribute('accept') || '', 60) || undefined) : undefined;
+                                const fileMultiple = (fileInputEl && fileInputEl.multiple) ? true : undefined;
                                 const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
                                 const readonly = !!el.readOnly || el.getAttribute('aria-readonly') === 'true';
                                 const checked = (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) ? !!el.checked : undefined;
@@ -595,6 +618,9 @@
                                     tag: tag,
                                     role: role,
                                     type: inputType,
+                                    fileTrigger: fileTrigger,
+                                    accept: acceptTypes,
+                                    fileMultiple: fileMultiple,
                                     label: label,
                                     value: val,
                                     badge: badge,
@@ -732,9 +758,12 @@
             const it = items[i];
             let desc = '[' + it.ref + '] ' + it.tag;
             if (it.type) desc += '(' + it.type + ')';
+            else if (it.fileTrigger) desc += '(file-trigger)';
             else if (it.role && it.role !== it.tag) desc += '(' + it.role + ')';
             if (it.label) desc += ' "' + it.label + '"';
             if (it.badge) desc += ' badge="' + it.badge + '"';
+            if (it.accept) desc += ' accept="' + it.accept + '"';
+            if (it.fileMultiple) desc += ' [multiple]';
             if (it.value !== undefined && it.value !== '') desc += ' value="' + it.value + '"';
             if (it.checked !== undefined) desc += ' checked=' + it.checked;
             if (it.expanded !== undefined) desc += ' expanded=' + it.expanded;
@@ -1399,7 +1428,7 @@
                     ok: false,
                     error: 'FILE_INPUT_NOT_SUPPORTED',
                     ref: ref,
-                    message: 'Element ' + ref + ' is a file input. Direct text fill is blocked by browser security.'
+                    message: 'Element ' + ref + ' is a file input. Use browser(action="upload") instead of fill.'
                 };
             }
             if (inputType === 'checkbox' || inputType === 'radio') {

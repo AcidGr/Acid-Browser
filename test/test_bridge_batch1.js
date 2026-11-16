@@ -523,4 +523,47 @@ assert.deepStrictEqual(global.__acidGmScopeResult, {
 delete global.__acidGmScopeResult;
 console.log('✓ Case 14: runtime_shim.js locks __acid_dispatch_http_cb and filters GM.* by @grant');
 
-console.log('\n[TestBridgeBatch1] All 14 Batch-1/Batch-2 JS regression checks PASSED!\n');
+// Case 15: observe() annotates visible input(file) and label(file-trigger) with accept & multiple
+{
+    const visibleFile = makeEl('input', {
+        id: 'doc_upload',
+        type: 'file',
+        attrs: { accept: '.pdf,.png' },
+        rect: { left: 10, top: 20, width: 200, height: 36, right: 210, bottom: 56 }
+    });
+    visibleFile.multiple = true;
+
+    const hiddenFile = makeEl('input', {
+        id: 'hidden_img_upload',
+        type: 'file',
+        attrs: { accept: 'image/*' },
+        style: { display: 'none' },
+        rect: { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }
+    });
+    const triggerLabel = makeEl('label', {
+        id: 'img_trigger',
+        text: '选择图片',
+        attrs: { for: 'hidden_img_upload' },
+        control: hiddenFile,
+        rect: { left: 10, top: 80, width: 140, height: 36, right: 150, bottom: 116 }
+    });
+
+    bodyEl.children = [visibleFile, hiddenFile, triggerLabel];
+    const prevGetById = global.document.getElementById;
+    global.document.getElementById = (id) => (id === 'hidden_img_upload' ? hiddenFile : null);
+    try {
+        const obs = bridge.observe({ includeSom: false });
+        assert.strictEqual(obs.ok, true, 'observe succeeds for file upload inputs');
+        assert.ok(obs.compactText.includes('input(file)'), 'compactText marks visible file input');
+        assert.ok(obs.compactText.includes('accept=".pdf,.png"'), 'compactText preserves accept attribute');
+        assert.ok(obs.compactText.includes('[multiple]'), 'compactText marks multiple attribute');
+        assert.ok(obs.compactText.includes('label(file-trigger) "选择图片" accept="image/*"'),
+            'compactText marks label backed by hidden file input with file-trigger and accept');
+    } finally {
+        global.document.getElementById = prevGetById;
+        bodyEl.children = [];
+    }
+}
+console.log('✓ Case 15: observe() annotates input(file) and label(file-trigger) with accept & multiple');
+
+console.log('\n[TestBridgeBatch1] All 15 Batch-1/Batch-2 JS regression checks PASSED!\n');

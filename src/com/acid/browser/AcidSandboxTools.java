@@ -125,6 +125,7 @@ public class AcidSandboxTools {
                     "- 'scroll': Scroll viewport ('direction': 'down'|'up'|'top'|'bottom', 'amount': 0.8).\n" +
                     "- 'wait': Wait for a specific condition ('condition': 'networkidle'|'selector'|'stable'|'text'|'gone'|'ms', optional 'selector', 'text', 'quiet_ms', 'ms', 'timeout_ms'). Returns a receipt {satisfied, timed_out, elapsed_ms, error_code?} followed by the latest page observation. Always check 'satisfied' before proceeding.\n" +
                     "- 'eval': Evaluate JavaScript ('code') on current page and return {ok, result, result_type}. Accepts an expression, multiple statements (value of the last statement is returned automatically), or a function body with explicit 'return'. Supports async/await; Promises are awaited. Syntax errors return SYNTAX_ERROR without executing.\n" +
+                    "- 'upload': Upload one or more files from acid_workspace/ to a webpage file input/upload button by clicking the trigger ('ref', 'text', 'selector', or 'x'/'y') and providing 'file_path' or 'file_paths' (supports multiple when webpage allows; protected workspace config/state files are blocked).\n" +
                     "- 'download': Open the browser's built-in multi-threaded download confirmation sheet for a direct file URL ('url', optional 'file_name', 'user_agent'). Automatically injects cloud-drive client User-Agent & Cookies (Baidu PCS, Quark, UC, 115) so WebView never hits HTTP 403.\n" +
                     "- 'set_mode': Switch browser identity ('mode': 'desktop' for 1280px PC view or 'mobile'), or toggle 'som' (true/false).\n" +
                     "- 'tabs': Manage tabs ('tab_action': 'list'|'new'|'switch'|'close', optional 'tab_id', 'url').\n" +
@@ -133,15 +134,17 @@ public class AcidSandboxTools {
                     "- 'request_takeover': Pause automation loop and ask human user to manually handle login/CAPTCHA ('reason').",
                     new String[]{
                         "observe", "navigate", "click", "fill", "select",
-                        "scroll", "wait", "eval", "download", "set_mode", "tabs", "back", "reload", "request_takeover"
+                        "scroll", "wait", "eval", "upload", "download", "set_mode", "tabs", "back", "reload", "request_takeover"
                     }
                 ));
                 browserProps.put("url", prop("string", "Target URL for 'navigate', 'download', or 'tabs' (new)."));
+                browserProps.put("file_path", prop("string", "Workspace-relative file path for 'upload' (inside acid_workspace/, e.g. 'report.pdf'). Protected workspace files are rejected."));
+                browserProps.put("file_paths", propStringArray("List of workspace-relative file paths for multi-file 'upload' (inside acid_workspace/)."));
                 browserProps.put("file_name", prop("string", "Optional save filename override for 'download' (e.g. 'app.apk')."));
                 browserProps.put("user_agent", prop("string", "Optional custom User-Agent header for 'download' (auto-populated for Baidu/Quark/UC/115 if omitted)."));
-                browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'fill', 'select', or container 'scroll'. Supports auto-healing if the DOM refreshed."));
-                browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', visible element text for semantic 'click' (e.g. '消息'/'发送'), or expected text for 'wait'."));
-                browserProps.put("selector", prop("string", "CSS selector for 'click', 'fill', 'wait', or container scope for 'observe' (e.g. '[role=\"dialog\"]', 'table')."));
+                browserProps.put("ref", prop("string", "Target element handle from observe snapshot (e.g. 'e1', 'e7') for 'click', 'upload', 'fill', 'select', or container 'scroll'. Supports auto-healing if the DOM refreshed."));
+                browserProps.put("text", prop("string", "Text value for 'fill', option value/label for 'select', visible element text for semantic 'click'/'upload' (e.g. '上传'/'选择文件'), or expected text for 'wait'."));
+                browserProps.put("selector", prop("string", "CSS selector for 'click', 'upload', 'fill', 'wait', or container scope for 'observe' (e.g. '[role=\"dialog\"]', 'table')."));
                 browserProps.put("exact", prop("boolean", "Whether semantic text matching requires exact full equality (default false)."));
                 browserProps.put("condition", prop("string", "Wait condition for 'wait': 'stable' (DOM quiet), 'selector' (element exists), 'text' (text present), 'gone' (element/text disappeared), 'networkidle' (page loaded), 'ms' (fixed sleep)."));
                 browserProps.put("quiet_ms", prop("integer", "Quiet threshold in ms without DOM mutations for 'stable' wait (default 300)."));
@@ -168,7 +171,7 @@ public class AcidSandboxTools {
 
                 return makeTool(
                     "browser",
-                    "Control the built-in Acid WebView browser. Every state-changing action (navigate, click, fill, select, scroll, set_mode, back, reload) automatically returns the updated page observation snapshot so you can immediately decide the next step.",
+                    "Control the built-in Acid WebView browser. Every state-changing action (navigate, click, fill, select, scroll, upload, set_mode, back, reload) automatically returns the updated page observation snapshot so you can immediately decide the next step.",
                     browserProps,
                     new String[]{"action"}
                 );
@@ -344,6 +347,16 @@ public class AcidSandboxTools {
         return o;
     }
 
+    private static JSONObject propStringArray(String description) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("type", "array");
+        JSONObject item = new JSONObject();
+        item.put("type", "string");
+        o.put("items", item);
+        o.put("description", description);
+        return o;
+    }
+
     private static JSONObject propEnum(String type, String description, String[] values) throws Exception {
         JSONObject o = new JSONObject();
         o.put("type", type);
@@ -447,6 +460,7 @@ public class AcidSandboxTools {
             boolean mutatesActiveTab = "navigate".equals(action) || "click".equals(action)
                 || "fill".equals(action) || "select".equals(action)
                 || "scroll".equals(action) || "eval".equals(action)
+                || "upload".equals(action)
                 || "back".equals(action) || "reload".equals(action)
                 || "set_mode".equals(action);
             if (mutatesActiveTab) {
@@ -502,23 +516,18 @@ public class AcidSandboxTools {
             if (driver == null || mController == null) {
                 return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
             }
-            JSONObject clickRes;
-            if (args.has("x") && args.has("y")) {
-                clickRes = driver.clickCoordinateSync((float) args.optDouble("x", 0), (float) args.optDouble("y", 0));
-            } else if (args.has("ref") || args.has("text") || args.has("selector")) {
-                JSONObject targetOpts = new JSONObject();
-                if (args.has("ref")) targetOpts.put("ref", args.optString("ref").trim());
-                if (args.has("text")) targetOpts.put("text", args.optString("text").trim());
-                if (args.has("selector")) targetOpts.put("selector", args.optString("selector").trim());
-                if (args.has("exact")) targetOpts.put("exact", args.optBoolean("exact", false));
-                clickRes = driver.clickTargetSync(targetOpts, true);
-            } else {
+            if (!hasClickTarget(args)) {
                 return new ToolExecResult("Error: browser click requires 'ref' (e.g. 'e1'), semantic 'text', 'selector', or ('x', 'y') coordinates.", false, null);
             }
+            JSONObject clickRes = dispatchClickTarget(driver, args);
             Thread.sleep(380); // Let page animations/DOM settle after click
             String dlNotice = awaitAndFormatDownloadNotice(dlBefore, 500);
             JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             return new ToolExecResult(dlNotice + formatObservationWithActionHeader("CLICK", clickRes, obs), false, null);
+        }
+
+        if ("upload".equals(action)) {
+            return executeUploadAction(driver, args);
         }
 
         if ("fill".equals(action)) {
@@ -797,6 +806,136 @@ public class AcidSandboxTools {
         }
 
         return new ToolExecResult("Error: Unknown browser action: " + action, false, null);
+    }
+
+    private static boolean hasClickTarget(JSONObject args) {
+        if (args == null) return false;
+        return (args.has("x") && args.has("y"))
+            || args.has("ref")
+            || args.has("text")
+            || args.has("selector");
+    }
+
+    private JSONObject dispatchClickTarget(WebAutomationDriver driver, JSONObject args) throws Exception {
+        if (args.has("x") && args.has("y")) {
+            return driver.clickCoordinateSync((float) args.optDouble("x", 0), (float) args.optDouble("y", 0));
+        }
+        JSONObject targetOpts = new JSONObject();
+        if (args.has("ref")) targetOpts.put("ref", args.optString("ref").trim());
+        if (args.has("text")) targetOpts.put("text", args.optString("text").trim());
+        if (args.has("selector")) targetOpts.put("selector", args.optString("selector").trim());
+        if (args.has("exact")) targetOpts.put("exact", args.optBoolean("exact", false));
+        return driver.clickTargetSync(targetOpts, true);
+    }
+
+    private static List<String> collectUploadPaths(JSONObject args) {
+        List<String> paths = new ArrayList<String>();
+        if (args == null) return paths;
+        JSONArray arr = args.optJSONArray("file_paths");
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                paths.add(arr.optString(i, ""));
+            }
+        }
+        if (args.has("file_path")) {
+            String single = args.optString("file_path", "");
+            if (!single.trim().isEmpty() || paths.isEmpty()) {
+                paths.add(single);
+            }
+        }
+        return paths;
+    }
+
+    private ToolExecResult executeUploadAction(WebAutomationDriver driver, JSONObject args) throws Exception {
+        if (!hasClickTarget(args)) {
+            return new ToolExecResult(
+                "Error: browser(action='upload') requires 'ref' (e.g. 'e1'), semantic 'text', 'selector', or ('x', 'y') coordinates to click the upload button/input.",
+                false,
+                null
+            );
+        }
+        List<String> rawPaths = collectUploadPaths(args);
+        AgentUploadManager.UploadResolution resolution = AgentUploadManager.resolveUploadFiles(mWorkspaceDir, rawPaths);
+        if (!resolution.ok) {
+            return new ToolExecResult("Error: " + resolution.errorMessage, false, null);
+        }
+
+        if (driver == null || mController == null) {
+            return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
+        }
+        BrowserController.TabSession targetTab = mController.getTargetTab();
+        if (targetTab == null || targetTab.id <= 0 || targetTab.webView == null) {
+            return new ToolExecResult("Error: NO_TARGET_TAB: No active or bound browser tab available for upload.", false, null);
+        }
+        AgentUploadManager uploadManager = mController.getUploadManager();
+        if (uploadManager == null) {
+            return new ToolExecResult("Error: Upload manager unavailable", false, null);
+        }
+
+        AgentUploadManager.ArmedUpload slot = uploadManager.arm(targetTab.id, resolution.files);
+        try {
+            JSONObject clickRes = dispatchClickTarget(driver, args);
+            if (clickRes == null || !clickRes.optBoolean("ok", false)) {
+                String clickErr = clickRes != null ? clickRes.optString("error", "Click target failed") : "Click target failed";
+                JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
+                return new ToolExecResult(
+                    "Error: browser(action='upload') failed to click upload target: " + clickErr
+                        + "\n\n" + formatObservationWithActionHeader("UPLOAD_FAILED", clickRes, obs),
+                    false,
+                    null
+                );
+            }
+
+            AgentUploadManager.ConsumeResult consumeRes = uploadManager.awaitCompletion(slot, 2500L);
+            if (!consumeRes.triggered) {
+                JSONObject failReceipt = new JSONObject();
+                failReceipt.put("ok", false);
+                failReceipt.put("error", consumeRes.errorCode);
+                failReceipt.put("message", consumeRes.errorMessage);
+                failReceipt.put("targetTabActive", mController.isTargetTabActive());
+                JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
+                String tabHint = !mController.isTargetTabActive()
+                    ? " Note: target tab is not in foreground, so WebView may block synthetic clicks without a user gesture."
+                    : "";
+                return new ToolExecResult(
+                    "Error: browser(action='upload') did not trigger a webpage file chooser ("
+                        + consumeRes.errorCode + "): " + consumeRes.errorMessage + tabHint
+                        + "\n\n" + formatObservationWithActionHeader("UPLOAD_FAILED", failReceipt, obs),
+                    false,
+                    null
+                );
+            }
+            if (!consumeRes.accepted) {
+                JSONObject failReceipt = new JSONObject();
+                failReceipt.put("ok", false);
+                failReceipt.put("error", consumeRes.errorCode);
+                failReceipt.put("message", consumeRes.errorMessage);
+                JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
+                return new ToolExecResult(
+                    "Error: browser(action='upload') rejected by webpage file input ("
+                        + consumeRes.errorCode + "): " + consumeRes.errorMessage
+                        + "\n\n" + formatObservationWithActionHeader("UPLOAD_FAILED", failReceipt, obs),
+                    false,
+                    null
+                );
+            }
+
+            Thread.sleep(450); // Allow page change handler / multipart upload initiation to settle
+            JSONObject uploadReceipt = new JSONObject();
+            uploadReceipt.put("ok", true);
+            uploadReceipt.put("uploaded", true);
+            uploadReceipt.put("count", consumeRes.fileNames.size());
+            JSONArray uploadedArr = new JSONArray();
+            for (String fn : consumeRes.fileNames) {
+                uploadedArr.put(fn);
+            }
+            uploadReceipt.put("files", uploadedArr);
+            uploadReceipt.put("multipleAllowed", consumeRes.multipleAllowed);
+            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
+            return new ToolExecResult(formatObservationWithActionHeader("UPLOAD", uploadReceipt, obs), false, null);
+        } finally {
+            uploadManager.disarm(slot);
+        }
     }
 
     private JSONObject cleanReceipt(JSONObject r) {

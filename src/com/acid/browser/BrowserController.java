@@ -110,6 +110,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private final SkillManager mSkillManager;
     private final WebAutomationDriver mAutomationDriver;
     private final DownloadCoordinator mDownloadCoordinator;
+    private final AgentUploadManager mUploadManager = new AgentUploadManager();
 
     private final List<TabSession> mTabs = new CopyOnWriteArrayList<TabSession>();
     private final List<Integer> mTabHistory = new CopyOnWriteArrayList<Integer>();
@@ -275,6 +276,10 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public File getWorkspaceDir() {
         return mUserscriptManager.getWorkspaceDir();
+    }
+
+    public AgentUploadManager getUploadManager() {
+        return mUploadManager;
     }
 
     @Override
@@ -456,6 +461,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (mFileChooserTabId == tabId) {
             cancelPendingFileChooser("tab-closed");
         }
+        mUploadManager.cancelForTab(tabId, "tab-closed");
         if (mAgentBoundTabId == tabId) {
             // The agent's target is gone when actively driving. Mark it lost rather than merely unbinding:
             // without the flag, getTargetTab() would fall back to mActiveTab and the agent would silently
@@ -533,6 +539,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (isTabDrivenByAgent(t.id)) {
                     continue; // Preserve and protect the active agent-driven tab
                 }
+                mUploadManager.cancelForTab(t.id, "tab-closed");
                 if (t.snapshot != null && !t.snapshot.isRecycled()) {
                     try { t.snapshot.recycle(); } catch (Throwable ignored) {}
                     t.snapshot = null;
@@ -941,6 +948,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (mFileChooserTabId == tab.id) {
                     cancelPendingFileChooser("navigated");
                 }
+                mUploadManager.cancelForTab(tab.id, "navigated");
                 // Install the phase bootstrap first; it reports document-start / end / idle
                 // back to us when the page really reaches them.
                 mUserscriptManager.injectBootstrap(view, url);
@@ -2145,15 +2153,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         // 上一次请求若还悬着，先给它 null 收尾，否则 WebView 会两边都不回。
         cancelPendingFileChooser("superseded");
 
-        if (getControlMode() == AgentOverlayView.MODE_AGENT) {
-            // Agent 无人值守地驱动页面；弹系统选择器会让它卡死在等结果那一步。
-            emitLog("[FILE_CHOOSER] 网页请求选择文件，Agent 模式自动取消（需要上传请切回人工模式再点）");
-            try {
-                callback.onReceiveValue(null);
-            } catch (Exception ignored) {}
-            return true;
-        }
-
         int tabId = -1;
         for (TabSession t : mTabs) {
             if (t.webView == view) {
@@ -2161,9 +2160,37 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 break;
             }
         }
-        mFileChooserCallback = callback;
-        mFileChooserAllowMultiple = (params != null
+        boolean allowMultiple = (params != null
             && params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);
+
+        AgentUploadManager.ConsumeOutcome armedOutcome = mUploadManager.consumeForTab(tabId, allowMultiple);
+        if (armedOutcome != null) {
+            try {
+                if (armedOutcome.accepted) {
+                    emitLog("[FILE_CHOOSER] Agent/MCP 自动上传 " + armedOutcome.uris.length
+                        + " 个工作区文件: " + armedOutcome.summary);
+                    callback.onReceiveValue(armedOutcome.uris);
+                } else {
+                    emitLog("[FILE_CHOOSER] 自动上传被拒绝: " + armedOutcome.errorMessage);
+                    callback.onReceiveValue(null);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to deliver armed upload files", e);
+            }
+            return true;
+        }
+
+        if (getControlMode() == AgentOverlayView.MODE_AGENT) {
+            // Agent 无人值守地驱动页面；弹系统选择器会让它卡死在等结果那一步。
+            emitLog("[FILE_CHOOSER] 网页请求选择文件，Agent 模式自动取消（需要上传请切回人工模式或使用 upload 动作）");
+            try {
+                callback.onReceiveValue(null);
+            } catch (Exception ignored) {}
+            return true;
+        }
+
+        mFileChooserCallback = callback;
+        mFileChooserAllowMultiple = allowMultiple;
         mFileChooserTabId = tabId;
 
         Intent intent = buildFileChooserIntent(params);
@@ -2266,6 +2293,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void destroy() {
         cancelPendingFileChooser("destroy");
+        mUploadManager.cancelAll("destroy");
         if (isCustomViewShowing()) {
             hideCustomView();
         }

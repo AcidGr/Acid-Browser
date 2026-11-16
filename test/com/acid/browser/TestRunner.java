@@ -152,6 +152,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testPostAudit3Regressions(); }
         });
 
+        // 20. Agent/MCP Workspace File Upload Support & Protected Files Isolation
+        run("20. Workspace Upload: AgentUploadManager Path/Protected Policy, Multi-file & Single-file Rejection, TTL/Cancel, MCP Schema & Parity", new TestCase() {
+            @Override public void execute() throws Exception { testAgentWorkspaceUploadFeature(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -3102,5 +3107,192 @@ public final class TestRunner {
         JSONObject nullClickRes = nullDriver.clickCoordinateSync(10f, 10f);
         assertTrue(nullClickRes != null && !nullClickRes.optBoolean("ok", true),
             "WebAutomationDriver.clickCoordinateSync degrades cleanly with null Context and no target tab");
+    }
+
+    static void testAgentWorkspaceUploadFeature() throws Exception {
+        File testRoot = new File("build/test_agent_upload");
+        SkillStorageVault.deleteRecursiveSafe(testRoot);
+        File wsDir = new File(testRoot, "acid_workspace");
+        File outsideFile = new File(testRoot, "outside_secret.txt");
+        wsDir.mkdirs();
+        AcidIo.writeFileUtf8Safe(outsideFile, "secret");
+
+        // Regular uploadable workspace files
+        File reportPdf = new File(wsDir, "report.pdf");
+        File imgSub = new File(wsDir, "notes/chart 1.png");
+        File txtSub = new File(wsDir, "drafts/summary.txt");
+        AcidIo.writeFileUtf8Safe(reportPdf, "%PDF-1.4");
+        AcidIo.writeFileUtf8Safe(imgSub, "PNG");
+        AcidIo.writeFileUtf8Safe(txtSub, "hello");
+
+        // All workspace-cleanup-protected entries
+        String[] protectedRelPaths = new String[] {
+            "settings.json",
+            "bookmarks.json",
+            "history.json",
+            "skills_sync.json",
+            "userscript_storage.json",
+            "homepage/index.html",
+            "userscripts/anti.user.js",
+            "adblock/custom_rules.txt",
+            "skills/cloud.md"
+        };
+        for (String rel : protectedRelPaths) {
+            AcidIo.writeFileUtf8Safe(new File(wsDir, rel), "protected");
+        }
+
+        try {
+            // 1. Resolve single & multi-file valid paths (including workspace:// prefix & spaces)
+            AgentUploadManager.UploadResolution singleRes =
+                AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("report.pdf"));
+            assertTrue(singleRes.ok && singleRes.files.size() == 1, "Resolves single workspace file");
+
+            AgentUploadManager.UploadResolution multiRes = AgentUploadManager.resolveUploadFiles(
+                wsDir, java.util.Arrays.asList("workspace://notes/chart 1.png", "drafts/summary.txt"));
+            assertTrue(multiRes.ok && multiRes.files.size() == 2, "Resolves multi-file workspace paths");
+
+            // 2. Protected cleanup entries are strictly denied for upload
+            for (String rel : protectedRelPaths) {
+                AgentUploadManager.UploadResolution denied =
+                    AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList(rel));
+                assertTrue(!denied.ok, "Protected workspace path must be denied: " + rel);
+                AgentUploadManager.UploadResolution deniedWithUri =
+                    AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("workspace://" + rel));
+                assertTrue(!deniedWithUri.ok, "Protected workspace:// path must be denied: " + rel);
+            }
+            assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("drafts/../settings.json")).ok,
+                "Normalized traversal into protected file denied");
+
+            // 3. Escape, directory, missing, null-byte & empty inputs denied
+            assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("../outside_secret.txt")).ok,
+                "Relative escape outside workspace denied");
+            assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList(outsideFile.getAbsolutePath())).ok,
+                "Absolute path outside workspace denied");
+            assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("notes")).ok,
+                "Directory path rejected as upload target");
+            assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList(".")).ok,
+                "Workspace root itself rejected as upload target");
+            assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("does_not_exist.txt")).ok,
+                "Missing file rejected");
+            assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("bad\0.txt")).ok,
+                "Null byte path rejected");
+            assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("report.pdf", "")).ok,
+                "Blank item inside file_paths rejected atomically");
+
+            // Optional symlink protection check (when FS permits symlinks)
+            File symLeak = new File(wsDir, "sym_settings.txt");
+            try {
+                java.nio.file.Files.createSymbolicLink(symLeak.toPath(), new File(wsDir, "settings.json").toPath());
+                assertTrue(!AgentUploadManager.resolveUploadFiles(wsDir, java.util.Arrays.asList("sym_settings.txt")).ok,
+                    "Symlink pointing to protected workspace file denied");
+            } catch (Throwable ignored) {}
+
+            // 4. Parity with BrowserDataStore.clearWorkspaceTempFiles
+            BrowserDataStore store = new BrowserDataStore(
+                new InMemoryPrefs(), new InMemoryPrefs(),
+                new File(wsDir, "settings.json"),
+                new File(wsDir, "bookmarks.json"),
+                new File(wsDir, "history.json")
+            );
+            int cleaned = store.clearWorkspaceTempFiles(wsDir);
+            assertTrue(cleaned >= 3, "Temporary files cleaned by clearWorkspaceTempFiles");
+            assertTrue(!reportPdf.exists() && !imgSub.exists() && !txtSub.exists(),
+                "Non-protected temp files removed by clearWorkspaceTempFiles");
+            for (String rel : protectedRelPaths) {
+                assertTrue(new File(wsDir, rel).exists(), "Protected file preserved by cleanup: " + rel);
+            }
+
+            // Re-seed files for state-machine & tool dispatch checks
+            AcidIo.writeFileUtf8Safe(reportPdf, "%PDF-1.4");
+            AcidIo.writeFileUtf8Safe(imgSub, "PNG");
+
+            // 5. ArmedUpload state machine: one-shot, multi-file, single-file rejection, tab isolation, expiry & cancel
+            AgentUploadManager mgr = new AgentUploadManager();
+            AgentUploadManager.ArmedUpload slot1 = mgr.arm(10, singleRes.files);
+            assertTrue(mgr.consumeForTab(99, true) == null, "Unrelated tab does not consume armed upload");
+            AgentUploadManager.ConsumeOutcome out1 = mgr.consumeForTab(10, false);
+            assertTrue(out1 != null && out1.accepted && out1.uris.length == 1, "Single file consumed for matching tab");
+            assertEquals("report.pdf", out1.uris[0].getLastPathSegment(), "Uri.fromFile preserves filename");
+            assertTrue(mgr.consumeForTab(10, false) == null, "Armed upload is strictly one-shot");
+            AgentUploadManager.ConsumeResult res1 = mgr.awaitCompletion(slot1, 50L);
+            assertTrue(res1.triggered && res1.accepted && res1.fileNames.size() == 1, "Completion recorded");
+
+            // Multi-file accepted when multiple=true
+            List<File> twoFiles = java.util.Arrays.asList(reportPdf.getCanonicalFile(), imgSub.getCanonicalFile());
+            AgentUploadManager.ArmedUpload slot2 = mgr.arm(11, twoFiles);
+            AgentUploadManager.ConsumeOutcome out2 = mgr.consumeForTab(11, true);
+            assertTrue(out2 != null && out2.accepted && out2.uris.length == 2, "Multiple files delivered when allowed");
+            assertEquals("/chart 1.png", out2.uris[1].getPath().substring(out2.uris[1].getPath().lastIndexOf('/')),
+                "Uri.fromFile percent-encoding decodes spaces cleanly");
+            AgentUploadManager.ConsumeResult res2 = mgr.awaitCompletion(slot2, 50L);
+            assertTrue(res2.triggered && res2.accepted && res2.multipleAllowed && res2.fileNames.size() == 2,
+                "Multi-file completion recorded");
+
+            // Multi-file rejected cleanly when webpage input is single-file only
+            AgentUploadManager.ArmedUpload slot3 = mgr.arm(12, twoFiles);
+            AgentUploadManager.ConsumeOutcome out3 = mgr.consumeForTab(12, false);
+            assertTrue(out3 != null && !out3.accepted, "Multi-file rejected for single-file webpage input");
+            AgentUploadManager.ConsumeResult res3 = mgr.awaitCompletion(slot3, 50L);
+            assertTrue(res3.triggered && !res3.accepted && "SINGLE_FILE_INPUT_ONLY".equals(res3.errorCode),
+                "Single-file rejection reports SINGLE_FILE_INPUT_ONLY");
+
+            // Expiry guard
+            mgr.arm(13, singleRes.files, 15L);
+            Thread.sleep(30L);
+            assertTrue(mgr.consumeForTab(13, true) == null, "Expired armed upload is ignored");
+
+            // Cancellation wakes awaitCompletion
+            AgentUploadManager.ArmedUpload slot4 = mgr.arm(14, singleRes.files, 5000L);
+            mgr.cancelForTab(14, "navigated");
+            AgentUploadManager.ConsumeResult res4 = mgr.awaitCompletion(slot4, 50L);
+            assertTrue(!res4.triggered && "CANCELLED".equals(res4.errorCode), "Cancel aborts armed upload immediately");
+
+            // 6. MCP tool schema & AcidSandboxTools validation (MCP + AGENT_UI)
+            JSONArray mcpTools = AcidSandboxTools.buildMcpToolsList();
+            JSONObject browserSchema = null;
+            for (int i = 0; i < mcpTools.length(); i++) {
+                JSONObject item = mcpTools.optJSONObject(i);
+                if (item != null && "browser".equals(item.optString("name"))) {
+                    browserSchema = item;
+                    break;
+                }
+            }
+            assertTrue(browserSchema != null, "MCP tools list includes browser");
+            JSONObject props = browserSchema.optJSONObject("inputSchema").optJSONObject("properties");
+            assertTrue(props.has("file_path") && props.has("file_paths"),
+                "MCP browser schema exposes file_path and file_paths");
+            assertTrue(props.optJSONObject("action").optJSONArray("enum").toString().contains("\"upload\""),
+                "MCP browser action enum includes upload");
+
+            AcidSandboxTools tools = new AcidSandboxTools(null, wsDir);
+            AcidSandboxTools.ToolExecResult missingTarget = tools.executeTool("browser",
+                new JSONObject().put("action", "upload").put("file_path", "report.pdf"),
+                AcidSandboxTools.ToolSource.MCP);
+            assertTrue(missingTarget.outputText.startsWith("Error:"), "MCP upload requires trigger target");
+
+            AcidSandboxTools.ToolExecResult deniedProtectedMcp = tools.executeTool("browser",
+                new JSONObject().put("action", "upload").put("ref", "e1").put("file_path", "settings.json"),
+                AcidSandboxTools.ToolSource.MCP);
+            assertTrue(deniedProtectedMcp.outputText.contains("protected workspace item"),
+                "MCP upload blocks protected workspace files");
+
+            AcidSandboxTools.ToolExecResult deniedProtectedUi = tools.executeTool("browser",
+                new JSONObject().put("action", "upload").put("ref", "e1").put("file_path", "userscripts/anti.user.js"),
+                AcidSandboxTools.ToolSource.AGENT_UI);
+            assertTrue(deniedProtectedUi.outputText.contains("protected workspace item"),
+                "Agent UI upload also blocks protected workspace files");
+
+            AcidSandboxTools.ToolExecResult allowedPassValidationMcp = tools.executeTool("browser",
+                new JSONObject()
+                    .put("action", "upload")
+                    .put("ref", "e1")
+                    .put("file_paths", new JSONArray().put("report.pdf").put("notes/chart 1.png")),
+                AcidSandboxTools.ToolSource.MCP);
+            assertTrue(allowedPassValidationMcp.outputText.contains("Browser controller or automation driver unavailable"),
+                "MCP multi-file workspace upload passes policy checks and reaches browser execution: "
+                    + allowedPassValidationMcp.outputText);
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(testRoot);
+        }
     }
 }

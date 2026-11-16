@@ -9,6 +9,18 @@ public abstract class Uri {
         return new StringUri(uriString);
     }
 
+    public static Uri fromFile(java.io.File file) {
+        if (file == null) {
+            throw new NullPointerException("file");
+        }
+        try {
+            URI u = new URI("file", "", file.getAbsolutePath(), null);
+            return parse(u.toASCIIString());
+        } catch (Exception e) {
+            return parse("file://" + file.getAbsolutePath());
+        }
+    }
+
     public abstract String getScheme();
     public abstract String getHost();
     public abstract String getPath();

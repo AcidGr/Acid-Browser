@@ -788,7 +788,7 @@ public class HttpControlServer {
         status.put("endpoints", endpoints);
 
         JSONArray toolsList = new JSONArray();
-        toolsList.put("browser (Web Automation: navigate, click, fill, select, scroll, wait, eval, tabs)");
+        toolsList.put("browser (Web Automation: navigate, click, fill, select, scroll, wait, eval, upload, download, tabs)");
         toolsList.put("read (Read sandbox file)");
         toolsList.put("write (Write sandbox file)");
         toolsList.put("edit (Replace string in sandbox file)");

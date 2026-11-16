@@ -761,15 +761,7 @@ public class BrowserDataStore {
         int deletedCount = 0;
         for (File f : files) {
             String name = f.getName();
-            if ("settings.json".equals(name) ||
-                "bookmarks.json".equals(name) ||
-                "history.json".equals(name) ||
-                "homepage".equals(name) ||
-                "userscripts".equals(name) ||
-                "adblock".equals(name) ||
-                "skills".equals(name) ||
-                "skills_sync.json".equals(name) ||
-                "userscript_storage.json".equals(name)) {
+            if (AgentUploadManager.isProtectedWorkspaceName(name)) {
                 continue;
             }
             if (f.isDirectory()) {
