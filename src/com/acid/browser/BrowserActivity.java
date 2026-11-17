@@ -1048,6 +1048,24 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         exitLp.bottomMargin = dp(24);
         mRootContainer.addView(mBtnExitFullscreen, exitLp);
 
+        if (Build.VERSION.SDK_INT >= 30) {
+            mRootContainer.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+                @Override
+                public android.view.WindowInsets onApplyWindowInsets(View v, android.view.WindowInsets insets) {
+                    boolean activeFullscreen = mIsFullscreenMode
+                        || (mController != null && mController.isCustomViewShowing());
+                    int bottomPad = 0;
+                    if (activeFullscreen && mCustomViewContainer.getVisibility() != View.VISIBLE) {
+                        bottomPad = extractImeBottomInset(insets);
+                    }
+                    if (v.getPaddingBottom() != bottomPad || v.getPaddingTop() != 0) {
+                        v.setPadding(0, 0, 0, bottomPad);
+                    }
+                    return v.onApplyWindowInsets(insets);
+                }
+            });
+        }
+
         return mRootContainer;
     }
 
@@ -1341,10 +1359,15 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         }
         applyFullscreenWindowFlags(enabled);
 
-        mTopBar.setVisibility(enabled ? View.GONE : View.VISIBLE);
-        mTopBarDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
-        if (mProgressBar != null) {
-            mProgressBar.setVisibility(enabled ? View.GONE : View.INVISIBLE);
+        mTopBar.setVisibility(View.VISIBLE);
+        if (enabled) {
+            mTopBar.setPadding(dp(10), dp(3), dp(10), dp(3));
+        } else {
+            mTopBar.setPadding(dp(8), dp(6), dp(8), dp(6));
+        }
+        mTopBarDivider.setVisibility(View.VISIBLE);
+        if (mProgressBar != null && mProgressBar.getVisibility() == View.GONE) {
+            mProgressBar.setVisibility(View.INVISIBLE);
         }
         mBottomBar.setVisibility(enabled ? View.GONE : View.VISIBLE);
         mBottomDivider.setVisibility(enabled ? View.GONE : View.VISIBLE);
@@ -1363,14 +1386,44 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         );
     }
 
+    private static int extractImeBottomInset(android.view.WindowInsets insets) {
+        if (insets == null || Build.VERSION.SDK_INT < 30) return 0;
+        try {
+            // WindowInsets.Type.ime() == 8 (1 << 3)
+            java.lang.reflect.Method getInsets = insets.getClass().getMethod("getInsets", int.class);
+            Object imeInsets = getInsets.invoke(insets, 8);
+            if (imeInsets != null) {
+                int bottom = imeInsets.getClass().getField("bottom").getInt(imeInsets);
+                return Math.max(0, bottom);
+            }
+        } catch (Exception ignored) {}
+        return 0;
+    }
+
     private void applyFullscreenWindowFlags(boolean fullscreen) {
         Window window = getWindow();
         if (window == null) return;
         View decorView = window.getDecorView();
 
+        // Android 9+ (API 28): permit window & top search bar into display cutout band (eliminates black letterbox bar)
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                WindowManager.LayoutParams lp = window.getAttributes();
+                if (lp != null) {
+                    java.lang.reflect.Field cutoutField = lp.getClass().getField("layoutInDisplayCutoutMode");
+                    // 3 = ALWAYS (API 30+), 1 = SHORT_EDGES (API 28-29), 0 = DEFAULT
+                    int targetMode = fullscreen ? (Build.VERSION.SDK_INT >= 30 ? 3 : 1) : 0;
+                    if (cutoutField.getInt(lp) != targetMode) {
+                        cutoutField.setInt(lp, targetMode);
+                        window.setAttributes(lp);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
         if (Build.VERSION.SDK_INT >= 30) {
             try {
-                // Release decor insets pinning so webpage naturally occupies the true physical top edge
+                // Release decor insets pinning so top bar sits cleanly at physical y=0
                 java.lang.reflect.Method setDecorFits = window.getClass().getMethod("setDecorFitsSystemWindows", boolean.class);
                 setDecorFits.invoke(window, !fullscreen);
 
@@ -1407,6 +1460,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         }
         decorView.setSystemUiVisibility(flags);
+        if (mRootContainer != null) {
+            if (!fullscreen && (mRootContainer.getPaddingBottom() != 0 || mRootContainer.getPaddingTop() != 0)) {
+                mRootContainer.setPadding(0, 0, 0, 0);
+            }
+            mRootContainer.requestApplyInsets();
+        }
     }
 
     private void startMcpServerInternal() {
@@ -1671,9 +1730,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void run() {
                 if (mProgressBar != null) {
-                    if (mIsFullscreenMode) {
-                        mProgressBar.setVisibility(View.GONE);
-                    } else if (isLoading) {
+                    if (isLoading) {
                         mProgressBar.setPivotX(0f);
                         float scale = Math.max(0.06f, Math.min(1.0f, progress / 100f));
                         mProgressBar.setScaleX(scale);
@@ -1994,6 +2051,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         super.onResume();
         if (mController != null) {
             mController.onResume();
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && (mIsFullscreenMode || (mController != null && mController.isCustomViewShowing()))) {
+            applyFullscreenWindowFlags(true);
         }
     }
 
