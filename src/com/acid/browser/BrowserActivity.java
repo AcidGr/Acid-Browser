@@ -72,6 +72,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private FrameLayout mCenterFrame;
     private FrameLayout mWebViewContainer;
     private AgentOverlayView mOverlayView;
+    private AgentLockChromeOverlay mLockBorderOverlay;
 
     // Takeover Bar
     private LinearLayout mTakeoverBar;
@@ -126,6 +127,65 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mController != null) {
             mController.setHumanUiInputFocused(mUrlBarFocused || mAgentInputFocused);
         }
+    }
+
+    private boolean isChromeLockedByAgent() {
+        return mController != null && mController.isAgentControllingVisibleTab();
+    }
+
+    private boolean blockIfChromeLocked() {
+        if (!isChromeLockedByAgent()) return false;
+        AgentLockChromeOverlay.showLockedHint(this);
+        return true;
+    }
+
+    private void navigateFromSecondaryUi(String url) {
+        if (mController == null) return;
+        if (isChromeLockedByAgent()) {
+            mController.createNewTab(url, true);
+        } else {
+            mController.loadUrl(url);
+        }
+    }
+
+    private void syncChromeLockUi() {
+        if (mController == null || mBottomBar == null) return;
+        boolean locked = isChromeLockedByAgent();
+        boolean overviewOpen = (mTabsOverview != null && mTabsOverview.isShowing());
+
+        if (locked && mEtUrl != null && mEtUrl.hasFocus()) {
+            if (mMainContentLayout != null) {
+                mMainContentLayout.requestFocus();
+            } else {
+                mEtUrl.clearFocus();
+            }
+            AcidTheme.hideKeyboard(this);
+        }
+
+        if (mLockBorderOverlay != null) {
+            mLockBorderOverlay.setLockBorderVisible(locked && !overviewOpen);
+            if (locked && !overviewOpen) {
+                mLockBorderOverlay.postInvalidateOnAnimation();
+            }
+        }
+
+        AgentLockChromeOverlay.applyUrlBarLockStyle(
+            mSearchContainer, mSearchIcon, mEtUrl, locked, mIsDarkMode, mIncognitoMode
+        );
+        updateShieldVisual();
+
+        int muted = AcidTheme.muted(mIsDarkMode);
+        int icon = AcidTheme.icon(mIsDarkMode);
+        AgentLockChromeOverlay.applyIconButtonLockStyle(
+            mReloadBox, mBtnReload, locked, true, mIsDarkMode, muted, AcidTheme.RADIUS_PILL
+        );
+        updateNavButtons();
+        AgentLockChromeOverlay.applyIconButtonLockStyle(
+            mBtnHome, mIconHome, locked, true, mIsDarkMode, icon, AcidTheme.RADIUS_CONTROL
+        );
+        AgentLockChromeOverlay.applyIconButtonLockStyle(
+            mBtnMenu, mIconMenu, locked, true, mIsDarkMode, icon, AcidTheme.RADIUS_CONTROL
+        );
     }
 
     private BroadcastReceiver mDownloadReceiver;
@@ -223,10 +283,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onOverviewShown() {
                 mOverlayStack.notifyViewportShown(mTabsOverview);
+                syncChromeLockUi();
             }
 
             @Override
-            public void onOverviewClosed() {}
+            public void onOverviewClosed() {
+                syncChromeLockUi();
+            }
         });
         mCenterFrame.addView(mTabsOverview, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
@@ -393,7 +456,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 @Override
                 public void onNavigateUrl(String url) {
                     mOverlayStack.dismissAllModals();
-                    mController.loadUrl(url);
+                    navigateFromSecondaryUi(url);
                 }
             }
         );
@@ -412,7 +475,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onNavigateToUrl(String url) {
                 mOverlayStack.dismissAllModals();
-                mController.loadUrl(url);
+                navigateFromSecondaryUi(url);
             }
 
             @Override
@@ -818,10 +881,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     return;
                 }
                 BrowserController.TabSession active = mController.getActiveTab();
-                boolean reuseInitialHome = active != null
+                boolean reuseInitialHome = !isChromeLockedByAgent()
+                    && active != null
                     && mController.getTabs().size() == 1
                     && mController.isHomeUrl(active.url);
-                if (reuseInitialHome || !BrowserController.canOpenScriptedTab(mController.getTabs().size())) {
+                if (reuseInitialHome || (!isChromeLockedByAgent() && !BrowserController.canOpenScriptedTab(mController.getTabs().size()))) {
                     mController.loadUrl(targetUrl);
                 } else {
                     mController.createNewTab(targetUrl, true);
@@ -868,6 +932,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mShieldBox.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (blockIfChromeLocked()) return;
                 if (mAdBlockSheet != null) {
                     mAdBlockSheet.renderContent();
                     mOverlayStack.openRootModal(mAdBlockSheet);
@@ -893,6 +958,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mEtUrl.setImeOptions(EditorInfo.IME_ACTION_GO);
         mEtUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         mEtUrl.setSelectAllOnFocus(true);
+        View.OnClickListener lockedUrlClickGuard = new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                blockIfChromeLocked();
+            }
+        };
+        mSearchContainer.setOnClickListener(lockedUrlClickGuard);
+        mEtUrl.setOnClickListener(lockedUrlClickGuard);
         mEtUrl.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean hasFocus) {
@@ -905,6 +978,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
                 if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE ||
                     (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN)) {
+                    if (blockIfChromeLocked()) return true;
                     AcidTheme.hideKeyboard(BrowserActivity.this);
                     if (mTabsOverview != null && mTabsOverview.isShowing()) {
                         mTabsOverview.dismiss();
@@ -937,6 +1011,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mReloadBox.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (blockIfChromeLocked()) return;
                 BrowserController.TabSession tab = mController.getActiveTab();
                 if (tab != null) {
                     if (tab.isLoading) {
@@ -1019,6 +1094,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mCenterFrame = new FrameLayout(this);
         mWebViewContainer = new FrameLayout(this);
         mOverlayView = new AgentOverlayView(this);
+        mOverlayView.setDelegateAgentBorderToChromeOverlay(true);
         mCenterFrame.addView(mWebViewContainer, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
@@ -1056,6 +1132,31 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mRootContainer.addView(mMainContentLayout, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
+
+        mLockBorderOverlay = new AgentLockChromeOverlay(this);
+        mLockBorderOverlay.attachTrackedViews(
+            mRootContainer,
+            mMainContentLayout,
+            mTopBar,
+            mSearchContainer,
+            mBtnTopAgent,
+            mTakeoverBar,
+            mCenterFrame,
+            mBottomBar,
+            mBtnTabs
+        );
+        mRootContainer.addView(mLockBorderOverlay, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        mMainContentLayout.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int left, int top, int right, int bottom,
+                                       int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                if (mLockBorderOverlay != null && mLockBorderOverlay.getVisibility() == View.VISIBLE) {
+                    mLockBorderOverlay.postInvalidateOnAnimation();
+                }
+            }
+        });
 
         // Video / CustomView Fullscreen layer
         mCustomViewContainer = new FrameLayout(this);
@@ -1184,6 +1285,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mTabsOverview.dismiss();
                     return;
                 }
+                if (blockIfChromeLocked()) return;
                 BrowserController.TabSession tab = mController.getActiveTab();
                 if (tab != null && tab.webView.canGoBack()) {
                     tab.webView.goBack();
@@ -1202,6 +1304,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mTabsOverview.dismiss();
                     return;
                 }
+                if (blockIfChromeLocked()) return;
                 BrowserController.TabSession tab = mController.getActiveTab();
                 if (tab != null && tab.webView.canGoForward()) {
                     tab.webView.goForward();
@@ -1219,6 +1322,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 if (mTabsOverview != null && mTabsOverview.isShowing()) {
                     mTabsOverview.dismiss();
                 }
+                if (blockIfChromeLocked()) return;
                 mController.loadUrl(mController.getHomeUrl());
             }
         });
@@ -1243,6 +1347,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mBtnMenu.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (blockIfChromeLocked()) return;
                 if (mMenuSheet != null) {
                     if (mMenuSheet.isShowing()) {
                         mMenuSheet.dismiss();
@@ -1403,6 +1508,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mBtnExitFullscreen.setVisibility(enabled ? View.VISIBLE : View.GONE);
         }
         updateMenuSheetCards();
+        syncChromeLockUi();
     }
 
     public void toggleFullscreenMode() {
@@ -1595,7 +1701,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private void updateShieldVisual() {
         if (mBtnShield == null) return;
         boolean adBlockEnabled = AdBlockManager.getInstance(this).isEnabled();
-        mBtnShield.setColor(adBlockEnabled ? AcidTheme.accent(mIsDarkMode) : AcidTheme.muted(mIsDarkMode));
+        int normalColor = adBlockEnabled ? AcidTheme.accent(mIsDarkMode) : AcidTheme.muted(mIsDarkMode);
+        AgentLockChromeOverlay.applyIconButtonLockStyle(
+            mShieldBox, mBtnShield, isChromeLockedByAgent(), true,
+            mIsDarkMode, normalColor, AcidTheme.RADIUS_CONTROL
+        );
     }
 
     private void updateAddressBarVisual() {
@@ -1606,10 +1716,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             : AcidTheme.searchBorder(mIsDarkMode);
         mSearchContainer.setBackground(AcidTheme.pillBg(this, searchBg, searchBorder, AcidTheme.RADIUS_PILL));
         mSearchIcon.setIcon(mIncognitoMode ? AcidIcons.ICON_INCOGNITO : AcidIcons.ICON_SEARCH);
-        mSearchIcon.setColor(mIncognitoMode ? AcidTheme.COLOR_PURPLE : AcidTheme.muted(mIsDarkMode));
         mEtUrl.setHint(AcidLocale.tr(mIncognitoMode ? "无痕模式 · 搜索或输入网址..." : "搜索或输入网址..."));
         mEtUrl.setTextColor(AcidTheme.text(mIsDarkMode));
         mEtUrl.setHintTextColor(AcidTheme.muted(mIsDarkMode));
+        AgentLockChromeOverlay.applyUrlBarLockStyle(
+            mSearchContainer, mSearchIcon, mEtUrl, isChromeLockedByAgent(), mIsDarkMode, mIncognitoMode
+        );
     }
 
     private void applyTheme(boolean dark) {
@@ -1654,23 +1766,16 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mBottomDivider.setBackgroundColor(border);
         mTakeoverBar.setBackgroundColor(AcidTheme.takeoverBg(dark));
 
-        mShieldBox.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, AcidTheme.RADIUS_CONTROL));
-        mReloadBox.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, AcidTheme.RADIUS_PILL));
-        mBtnReload.setColor(muted);
-
         updateAddressBarVisual();
-        updateShieldVisual();
         mProgressBar.setBackgroundColor(accent);
 
-        View[] bottomBtns = new View[]{mBtnBack, mBtnForward, mBtnHome, mBtnTabs, mBtnMenu};
-        for (View b : bottomBtns) {
-            b.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, AcidTheme.RADIUS_CONTROL));
+        if (mBtnTabs != null) {
+            mBtnTabs.setBackground(AcidTheme.interactiveBg(this, Color.TRANSPARENT, pressed, 0, AcidTheme.RADIUS_CONTROL));
         }
-
-        updateNavButtons();
-        mIconHome.setColor(icon);
-        mIconTabs.setColor(icon);
-        mIconMenu.setColor(icon);
+        if (mIconTabs != null) {
+            mIconTabs.setColor(icon);
+        }
+        syncChromeLockUi();
 
         updateTopAgentButton(
             mAgentLoop != null && mAgentLoop.isRunning(),
@@ -1716,10 +1821,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         BrowserController.TabSession tab = mController != null ? mController.getActiveTab() : null;
         boolean canBack = tab != null && tab.webView.canGoBack();
         boolean canForward = tab != null && tab.webView.canGoForward();
+        boolean locked = isChromeLockedByAgent();
         int activeIcon = AcidTheme.icon(mIsDarkMode);
-        int disabledIcon = AcidTheme.iconDisabled(mIsDarkMode);
-        mIconBack.setColor(canBack ? activeIcon : disabledIcon);
-        mIconForward.setColor(canForward ? activeIcon : disabledIcon);
+        AgentLockChromeOverlay.applyIconButtonLockStyle(
+            mBtnBack, mIconBack, locked, canBack, mIsDarkMode, activeIcon, AcidTheme.RADIUS_CONTROL
+        );
+        AgentLockChromeOverlay.applyIconButtonLockStyle(
+            mBtnForward, mIconForward, locked, canForward, mIsDarkMode, activeIcon, AcidTheme.RADIUS_CONTROL
+        );
     }
 
     // =========================================================================
@@ -1817,6 +1926,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 int desiredVisibility = visible ? View.VISIBLE : View.GONE;
                 if (mTakeoverBar.getVisibility() != desiredVisibility) {
                     mTakeoverBar.setVisibility(desiredVisibility);
+                    if (mLockBorderOverlay != null && mLockBorderOverlay.getVisibility() == View.VISIBLE) {
+                        mLockBorderOverlay.postInvalidateOnAnimation();
+                    }
                 }
                 if (!visible) return;
 
@@ -1884,6 +1996,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     mAgentLoop != null && mAgentLoop.isPausedForTakeover()
                 );
                 refreshTakeoverBanner();
+                syncChromeLockUi();
                 updateMenuSheetCards();
             }
         });
@@ -2074,6 +2187,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         }
         if (mIsFullscreenMode) {
             setFullscreenMode(false);
+            return;
+        }
+        if (blockIfChromeLocked()) {
             return;
         }
         BrowserController.TabSession tab = mController != null ? mController.getActiveTab() : null;

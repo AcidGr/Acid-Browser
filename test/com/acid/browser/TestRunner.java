@@ -182,6 +182,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testWebViewFocusAndImeIsolationPolicy(); }
         });
 
+        // 26. Chrome Lock State & One-Stroke Border Outline Geometry
+        run("26. Chrome Lock & One-Stroke Border: Multi-Tab Lock Switching & Phone/Tablet/Fullscreen/Split Outline Geometry", new TestCase() {
+            @Override public void execute() throws Exception { testChromeLockPolicyAndOutlineGeometry(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -3905,5 +3910,111 @@ public final class TestRunner {
         assertEquals(Integer.valueOf(1),
             Integer.valueOf(AcidWebView.resolveModeReloadTabId(1, 1, true)),
             "Foreground bound tab still reloads tab 1 cleanly");
+    }
+
+    private static void assertStrictlyOrthogonalClosedLoop(AgentLockChromeOverlay.OutlineGeometry geom, String label) {
+        assertTrue(geom != null && geom.vertexCount() >= 4, label + ": valid polygon generated");
+        int n = geom.vertexCount();
+        for (int i = 0; i < n; i++) {
+            int j = (i + 1) % n;
+            float dx = Math.abs(geom.points[j * 2] - geom.points[i * 2]);
+            float dy = Math.abs(geom.points[j * 2 + 1] - geom.points[i * 2 + 1]);
+            boolean horizontal = (dy < 0.01f && dx > 0.5f);
+            boolean vertical = (dx < 0.01f && dy > 0.5f);
+            assertTrue(horizontal ^ vertical,
+                label + ": edge " + i + " must be strictly orthogonal non-zero (dx=" + dx + ", dy=" + dy + ")");
+        }
+    }
+
+    static void testChromeLockPolicyAndOutlineGeometry() {
+        // 1. Lock state follows active tab & control mode cleanly
+        assertTrue(!AgentLockChromeOverlay.isChromeLocked(AgentOverlayView.MODE_HUMAN, false, -1, 1),
+            "Human mode never locks Chrome buttons");
+        assertTrue(!AgentLockChromeOverlay.isChromeLocked(AgentOverlayView.MODE_TAKEOVER_REQUESTED, false, 2, 2),
+            "Human takeover unlocks all Chrome buttons even on bound tab");
+        assertTrue(AgentLockChromeOverlay.isChromeLocked(AgentOverlayView.MODE_AGENT, false, 2, 2),
+            "Foreground Agent-driven tab locks Chrome controls");
+        assertTrue(!AgentLockChromeOverlay.isChromeLocked(AgentOverlayView.MODE_AGENT, false, 2, 5),
+            "Switching to an unbound tab immediately unlocks Chrome controls");
+        assertTrue(!AgentLockChromeOverlay.isChromeLocked(AgentOverlayView.MODE_AGENT, true, 2, 2),
+            "Lost target tab does not stay stuck locked");
+        assertTrue(AgentLockChromeOverlay.isChromeLocked(AgentOverlayView.MODE_AGENT, false, -1, 1),
+            "Unbound MODE_AGENT locks active foreground tab");
+
+        // 2. Phone portrait (1080x2400) produces 10-vertex one-stroke path skipping top-right AI & bottom Tabs
+        AgentLockChromeOverlay.OutlineGeometry phone = AgentLockChromeOverlay.computeOutlineGeometry(
+            new AgentLockChromeOverlay.Bounds(0, 0, 1080, 2400),
+            new AgentLockChromeOverlay.Bounds(0, 0, 1080, 160),
+            new AgentLockChromeOverlay.Bounds(130, 12, 950, 148),
+            new AgentLockChromeOverlay.Bounds(968, 18, 1068, 142),
+            new AgentLockChromeOverlay.Bounds(0, 168, 1080, 268),
+            new AgentLockChromeOverlay.Bounds(0, 268, 1080, 2254),
+            new AgentLockChromeOverlay.Bounds(0, 2256, 1080, 2400),
+            new AgentLockChromeOverlay.Bounds(648, 2256, 864, 2400),
+            9f, 27f, 18f
+        );
+        assertStrictlyOrthogonalClosedLoop(phone, "Phone portrait");
+        assertEquals(Integer.valueOf(10), Integer.valueOf(phone.vertexCount()),
+            "Phone layout carves both top-right AI notch and bottom Tabs notch");
+        assertEquals(Float.valueOf(959f), Float.valueOf(phone.points[2]),
+            "Top notch splits cleanly between search bar and AI button");
+        assertTrue(phone.points[4] == phone.points[2] && phone.points[5] > 160f && phone.points[5] < 168f,
+            "Top step sits centered between top bar and takeover banner");
+        assertEquals(Float.valueOf(864f), Float.valueOf(phone.points[10]),
+            "Bottom notch aligns to Tabs right bound");
+        assertEquals(Float.valueOf(648f), Float.valueOf(phone.points[14]),
+            "Bottom notch aligns to Tabs left bound");
+
+        // 3. Tablet landscape (2560x1600) adapts dynamically without fixed pixel assumptions
+        AgentLockChromeOverlay.OutlineGeometry tablet = AgentLockChromeOverlay.computeOutlineGeometry(
+            new AgentLockChromeOverlay.Bounds(0, 0, 2560, 1600),
+            new AgentLockChromeOverlay.Bounds(0, 0, 2560, 140),
+            new AgentLockChromeOverlay.Bounds(120, 10, 2400, 130),
+            new AgentLockChromeOverlay.Bounds(2420, 16, 2540, 124),
+            new AgentLockChromeOverlay.Bounds(0, 146, 2560, 236),
+            new AgentLockChromeOverlay.Bounds(0, 236, 2560, 1454),
+            new AgentLockChromeOverlay.Bounds(0, 1456, 2560, 1600),
+            new AgentLockChromeOverlay.Bounds(1536, 1456, 2048, 1600),
+            9f, 27f, 18f
+        );
+        assertStrictlyOrthogonalClosedLoop(tablet, "Tablet landscape");
+        assertEquals(Integer.valueOf(10), Integer.valueOf(tablet.vertexCount()),
+            "Tablet landscape preserves full 10-vertex one-stroke geometry");
+        assertEquals(Float.valueOf(2410f), Float.valueOf(tablet.points[2]),
+            "Tablet top notch dynamically tracks wide search/AI boundary");
+        assertEquals(Float.valueOf(1536f), Float.valueOf(tablet.points[14]),
+            "Tablet bottom notch dynamically tracks 1/5th Tabs width");
+
+        // 4. Fullscreen mode (bottom bar hidden) cleanly switches to flat bottom edge (6 vertices)
+        AgentLockChromeOverlay.OutlineGeometry fullscreen = AgentLockChromeOverlay.computeOutlineGeometry(
+            new AgentLockChromeOverlay.Bounds(0, 0, 1080, 2400),
+            new AgentLockChromeOverlay.Bounds(0, 0, 1080, 130),
+            new AgentLockChromeOverlay.Bounds(110, 8, 950, 122),
+            new AgentLockChromeOverlay.Bounds(966, 12, 1066, 118),
+            new AgentLockChromeOverlay.Bounds(0, 136, 1080, 232),
+            new AgentLockChromeOverlay.Bounds(0, 232, 1080, 2400),
+            null,
+            null,
+            9f, 27f, 18f
+        );
+        assertStrictlyOrthogonalClosedLoop(fullscreen, "Fullscreen cutout");
+        assertEquals(Integer.valueOf(6), Integer.valueOf(fullscreen.vertexCount()),
+            "Fullscreen omits bottom notch while keeping top-right AI notch");
+
+        // 5. Ultra-narrow split-screen clamps corner radius safely below half shortest segment
+        AgentLockChromeOverlay.OutlineGeometry narrow = AgentLockChromeOverlay.computeOutlineGeometry(
+            new AgentLockChromeOverlay.Bounds(0, 0, 220, 900),
+            new AgentLockChromeOverlay.Bounds(0, 0, 220, 90),
+            new AgentLockChromeOverlay.Bounds(40, 8, 178, 82),
+            new AgentLockChromeOverlay.Bounds(196, 10, 214, 80),
+            new AgentLockChromeOverlay.Bounds(0, 124, 220, 184),
+            new AgentLockChromeOverlay.Bounds(0, 184, 220, 810),
+            new AgentLockChromeOverlay.Bounds(0, 812, 220, 900),
+            new AgentLockChromeOverlay.Bounds(132, 812, 176, 900),
+            6f, 24f, 12f
+        );
+        assertStrictlyOrthogonalClosedLoop(narrow, "Ultra-narrow split");
+        assertTrue(narrow.cornerRadius < 24f && narrow.cornerRadius >= 1f,
+            "Clamps corner radius safely for narrow segments (" + narrow.cornerRadius + ")");
     }
 }

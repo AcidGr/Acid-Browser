@@ -33,6 +33,7 @@ public class AgentOverlayView extends View {
     private int mControlMode = MODE_HUMAN;
     private TabStateProvider mTabStateProvider = null;
     private boolean mDismissedTip = false;
+    private boolean mDelegateAgentBorderToChromeOverlay = false;
 
     private final Paint mBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint mPulsePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -108,6 +109,17 @@ public class AgentOverlayView extends View {
     public void setTabStateProvider(TabStateProvider provider) {
         mTabStateProvider = provider;
         postInvalidateOnAnimation();
+    }
+
+    /**
+     * When true, {@link AgentLockChromeOverlay} draws the seamless one-stroke border around
+     * locked Chrome controls + viewport in {@link #MODE_AGENT}, so this view omits its inner rect.
+     */
+    public void setDelegateAgentBorderToChromeOverlay(boolean delegate) {
+        if (mDelegateAgentBorderToChromeOverlay != delegate) {
+            mDelegateAgentBorderToChromeOverlay = delegate;
+            postInvalidateOnAnimation();
+        }
     }
 
     public int getControlMode() {
@@ -216,8 +228,9 @@ public class AgentOverlayView extends View {
             canvas.drawText(AcidLocale.tr("● 点击关闭遮罩提示 ●"), centerX, startY, mTipFootPaint);
         }
 
-        // 2. Draw breathing border in AGENT (only if driving currently visible tab) or TAKEOVER_REQUESTED mode
-        if ((mControlMode == MODE_AGENT && isCurrentTabDriven) || mControlMode == MODE_TAKEOVER_REQUESTED) {
+        // 2. Draw breathing border in AGENT (unless delegated to full-chrome overlay) or TAKEOVER_REQUESTED mode
+        boolean drawAgentInnerBorder = (mControlMode == MODE_AGENT && isCurrentTabDriven && !mDelegateAgentBorderToChromeOverlay);
+        if (drawAgentInnerBorder || mControlMode == MODE_TAKEOVER_REQUESTED) {
             needsMoreFrames = true;
             double phase = (now % 1800) / 1800.0 * Math.PI * 2.0;
             float alphaFactor = (float) (0.45 + 0.55 * (0.5 + 0.5 * Math.sin(phase)));

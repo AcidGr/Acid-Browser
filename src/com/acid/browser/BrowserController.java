@@ -568,11 +568,26 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
      * tab_action='switch'|'new')} after the user closed the tab it was driving.
      */
     public void setAgentBoundTabId(int tabId) {
+        boolean changed = (mAgentBoundTabId != tabId) || mAgentTargetLost;
         mAgentBoundTabId = tabId;
         mAgentTargetLost = false;
         syncAllTabWebViewPolicies();
         if (mOverlayView != null) {
             mOverlayView.postInvalidateOnAnimation();
+        }
+        if (changed && mListener != null) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                mListener.onModeChanged(mIsDesktopMode, getControlMode(), mSomEnabled);
+            } else {
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (mListener != null) {
+                            mListener.onModeChanged(mIsDesktopMode, getControlMode(), mSomEnabled);
+                        }
+                    }
+                });
+            }
         }
     }
 
@@ -744,6 +759,17 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (mAgentTargetLost) return false;
         if (mAgentBoundTabId <= 0) return true;
         return mActiveTab != null && mActiveTab.id == mAgentBoundTabId;
+    }
+
+    /**
+     * Returns true when browser Chrome navigation/menu controls on the active visible tab
+     * must be locked against human interference (unaffected by tabs overview visibility).
+     */
+    public boolean isAgentControllingVisibleTab() {
+        int activeId = (mActiveTab != null) ? mActiveTab.id : -1;
+        return AgentLockChromeOverlay.isChromeLocked(
+            getControlMode(), mAgentTargetLost, mAgentBoundTabId, activeId
+        );
     }
 
     @Override
