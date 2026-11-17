@@ -133,6 +133,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private boolean mSomEnabled = false;
     private boolean mDarkMode = false;
     private String mTakeoverReason = "";
+    private boolean mHumanUiInputFocused = false;
     private int mBlockedDeepLinks = 0;
     private String mLastBlockedDeepLink = "";
     private String mLastAskedAppLaunchUrl = "";
@@ -297,50 +298,42 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     // =========================================================================
 
     public TabSession createNewTab(String initialUrl, boolean switchToIt) {
-        final int tabId = mNextTabId++;
-        WebView wv = new WebView(mContext);
-        final TabSession tab = new TabSession(tabId, wv);
-        configureWebView(tab);
-
-        mTabs.add(tab);
-        mWebViewContainer.addView(wv, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ));
-        wv.setVisibility(android.view.View.GONE);
-
-        if (switchToIt || mActiveTab == null) {
-            switchToTab(tabId);
-        }
-
-        String targetUrl = (initialUrl != null && !initialUrl.isEmpty()) ? initialUrl : getHomeUrl();
-        tab.url = targetUrl;
-        if (initialUrl != null && !initialUrl.isEmpty()) {
-            loadUrlWithTab(tab, targetUrl, true);
-        } else {
-            wv.loadUrl(targetUrl);
-        }
-
-        if (mListener != null) {
-            mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
-        }
-        return tab;
+        return createTabInternal(initialUrl, switchToIt, true);
     }
 
     public TabSession createNewTabBlank(boolean switchToIt) {
+        return createTabInternal(null, switchToIt, false);
+    }
+
+    private TabSession createTabInternal(String initialUrl, boolean switchToIt, boolean loadInitialPage) {
         final int tabId = mNextTabId++;
-        WebView wv = new WebView(mContext);
+        WebView wv = new AcidWebView(mContext);
         final TabSession tab = new TabSession(tabId, wv);
-        tab.url = "about:blank";
+        if (!loadInitialPage) {
+            tab.url = "about:blank";
+        }
         configureWebView(tab);
 
         mTabs.add(tab);
         mWebViewContainer.addView(wv, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        wv.setVisibility(android.view.View.GONE);
+        wv.setVisibility(android.view.View.INVISIBLE);
 
         if (switchToIt || mActiveTab == null) {
             switchToTab(tabId);
+        } else {
+            syncAllTabWebViewPolicies();
+        }
+
+        if (loadInitialPage) {
+            String targetUrl = (initialUrl != null && !initialUrl.isEmpty()) ? initialUrl : getHomeUrl();
+            tab.url = targetUrl;
+            if (initialUrl != null && !initialUrl.isEmpty()) {
+                loadUrlWithTab(tab, targetUrl, true);
+            } else {
+                wv.loadUrl(targetUrl);
+            }
         }
 
         if (mListener != null) {
@@ -388,14 +381,12 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
         captureActiveTabSnapshot();
 
-        for (TabSession t : mTabs) {
-            t.webView.setVisibility(t.id == tabId ? android.view.View.VISIBLE : android.view.View.INVISIBLE);
-        }
         try {
             target.webView.onResume();
         } catch (Throwable ignored) {}
         target.webView.bringToFront();
         mActiveTab = target;
+        syncAllTabWebViewPolicies();
 
         mTabHistory.remove(Integer.valueOf(tabId));
         mTabHistory.add(tabId);
@@ -579,8 +570,56 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void setAgentBoundTabId(int tabId) {
         mAgentBoundTabId = tabId;
         mAgentTargetLost = false;
+        syncAllTabWebViewPolicies();
         if (mOverlayView != null) {
             mOverlayView.postInvalidateOnAnimation();
+        }
+    }
+
+    public void setHumanUiInputFocused(boolean focused) {
+        if (mHumanUiInputFocused == focused) return;
+        mHumanUiInputFocused = focused;
+        syncAllTabWebViewPolicies();
+    }
+
+    private TabSession findTabByWebView(WebView view) {
+        if (view == null) return null;
+        for (TabSession t : mTabs) {
+            if (t.webView == view) return t;
+        }
+        return null;
+    }
+
+    private void syncAllTabWebViewPolicies() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    applyAllTabWebViewPoliciesOnMain();
+                }
+            });
+            return;
+        }
+        applyAllTabWebViewPoliciesOnMain();
+    }
+
+    private void applyAllTabWebViewPoliciesOnMain() {
+        int activeId = (mActiveTab != null) ? mActiveTab.id : -1;
+        int controlMode = (mOverlayView != null) ? mOverlayView.getControlMode() : AgentOverlayView.MODE_HUMAN;
+        for (TabSession t : mTabs) {
+            if (t.webView == null) continue;
+            boolean isActive = (t.id == activeId);
+            // Keep inactive tabs INVISIBLE (not GONE) so background automation retains layout metrics
+            t.webView.setVisibility(isActive ? android.view.View.VISIBLE : android.view.View.INVISIBLE);
+            if (t.webView instanceof AcidWebView) {
+                boolean isDriven = (mAgentBoundTabId > 0)
+                    ? (t.id == mAgentBoundTabId)
+                    : (isActive && controlMode == AgentOverlayView.MODE_AGENT);
+                AcidWebView.IsolationPolicy policy = AcidWebView.resolveIsolationPolicy(
+                    isActive, controlMode, isDriven, mHumanUiInputFocused
+                );
+                ((AcidWebView) t.webView).applyIsolationPolicy(policy);
+            }
         }
     }
 
@@ -1083,7 +1122,14 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 }
                 try {
                     WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
-                    TabSession newTab = createNewTabBlank(true);
+                    TabSession sourceTab = findTabByWebView(view);
+                    boolean switchToNew = AcidWebView.shouldSwitchToNewWindow(
+                        sourceTab == null || sourceTab == mActiveTab
+                    );
+                    TabSession newTab = createNewTabBlank(switchToNew);
+                    if (!switchToNew && sourceTab != null && sourceTab.id == mAgentBoundTabId) {
+                        setAgentBoundTabId(newTab.id);
+                    }
                     transport.setWebView(newTab.webView);
                     resultMsg.sendToTarget();
                     return true;
@@ -2005,17 +2051,44 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
-    public void setDesktopMode(boolean desktop, boolean reloadCurrent) {
-        mIsDesktopMode = desktop;
-        mAutomationDriver.clearAllScreenshotFrames();
-        for (TabSession t : mTabs) {
-            applyIdentityToSettings(t.webView, desktop);
-            if (t.webView != null && DesktopViewportManager.isEligibleUrl(t.url)) {
-                DesktopViewportManager.applyDesktopViewport(t.webView, desktop);
-            }
+    private void applyDesktopModeToTab(TabSession tab, boolean desktop) {
+        if (tab == null || tab.webView == null) return;
+        applyIdentityToSettings(tab.webView, desktop);
+        if (DesktopViewportManager.isEligibleUrl(tab.url)) {
+            DesktopViewportManager.applyDesktopViewport(tab.webView, desktop);
         }
-        if (reloadCurrent && mActiveTab != null) {
-            mActiveTab.webView.reload();
+    }
+
+    public void setDesktopMode(boolean desktop, boolean reloadCurrent) {
+        setDesktopMode(desktop, reloadCurrent, false);
+    }
+
+    public void setDesktopMode(boolean desktop, boolean reloadTarget, boolean targetBoundOnly) {
+        TabSession boundTab = mAgentBoundTabId > 0 ? getTabById(mAgentBoundTabId) : null;
+        boolean isolateToBound = targetBoundOnly && boundTab != null && boundTab != mActiveTab;
+        int activeId = (mActiveTab != null) ? mActiveTab.id : -1;
+        int reloadTabId = AcidWebView.resolveModeReloadTabId(
+            activeId, boundTab != null ? boundTab.id : -1, isolateToBound
+        );
+
+        mAutomationDriver.clearAllScreenshotFrames();
+        if (isolateToBound) {
+            applyDesktopModeToTab(boundTab, desktop);
+            if (reloadTarget && boundTab.webView != null) {
+                boundTab.webView.reload();
+            }
+            return;
+        }
+
+        mIsDesktopMode = desktop;
+        for (TabSession t : mTabs) {
+            applyDesktopModeToTab(t, desktop);
+        }
+        if (reloadTarget) {
+            TabSession reloadTab = getTabById(reloadTabId);
+            if (reloadTab != null && reloadTab.webView != null) {
+                reloadTab.webView.reload();
+            }
         }
         if (mListener != null) {
             mListener.onModeChanged(mIsDesktopMode, mOverlayView.getControlMode(), mSomEnabled);
@@ -2030,6 +2103,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     public void setControlMode(int mode, String reason) {
         mTakeoverReason = (reason != null) ? reason : "";
         mOverlayView.setControlMode(mode);
+        syncAllTabWebViewPolicies();
         if (mListener != null) {
             mListener.onModeChanged(mIsDesktopMode, mode, mSomEnabled);
         }

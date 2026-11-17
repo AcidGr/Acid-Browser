@@ -119,6 +119,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private FrameLayout mBtnExitFullscreen;
     private boolean mSyncingHotReload = false;
     private volatile String mLastAgentActivitySummary = "";
+    private boolean mUrlBarFocused = false;
+    private boolean mAgentInputFocused = false;
+
+    private void syncHumanUiInputFocus() {
+        if (mController != null) {
+            mController.setHumanUiInputFocused(mUrlBarFocused || mAgentInputFocused);
+        }
+    }
 
     private BroadcastReceiver mDownloadReceiver;
 
@@ -337,6 +345,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                         AcidFeedback.warn(BrowserActivity.this, "没有找到可用的文件选择器");
                     }
                 }
+            }
+
+            @Override
+            public void onAgentInputFocusChanged(boolean focused) {
+                mAgentInputFocused = focused;
+                syncHumanUiInputFocus();
             }
         });
         mAgentFloatingView.setHeightProvider(new AgentFloatingView.HeightProvider() {
@@ -833,6 +847,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mMainContentLayout = new LinearLayout(this);
         mMainContentLayout.setOrientation(LinearLayout.VERTICAL);
         mMainContentLayout.setBackgroundColor(AcidTheme.LIGHT_BG);
+        // Act as non-editor focus sink so clearFocus()/GONE never bounces into mEtUrl or WebView
+        mMainContentLayout.setFocusable(true);
+        mMainContentLayout.setFocusableInTouchMode(true);
+        mMainContentLayout.setDescendantFocusability(ViewGroup.FOCUS_BEFORE_DESCENDANTS);
 
         // --- Top Bar ---
         mTopBar = new LinearLayout(this);
@@ -875,6 +893,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mEtUrl.setImeOptions(EditorInfo.IME_ACTION_GO);
         mEtUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         mEtUrl.setSelectAllOnFocus(true);
+        mEtUrl.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                mUrlBarFocused = hasFocus;
+                syncHumanUiInputFocus();
+            }
+        });
         mEtUrl.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
@@ -886,8 +911,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     }
                     mController.loadUrl(mEtUrl.getText().toString());
                     BrowserController.TabSession tab = mController.getActiveTab();
-                    if (tab != null && tab.webView != null) {
+                    if (tab != null && tab.webView != null && tab.webView.isFocusable()) {
                         tab.webView.requestFocus();
+                    } else if (mMainContentLayout != null) {
+                        mMainContentLayout.requestFocus();
                     } else {
                         mEtUrl.clearFocus();
                     }
@@ -1785,40 +1812,63 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void run() {
                 if (mController == null || mTakeoverBar == null || mTvTakeoverStatus == null || mBtnTakeoverAction == null) return;
                 int controlMode = mController.getControlMode();
+                boolean visible = (controlMode == AgentOverlayView.MODE_AGENT
+                    || controlMode == AgentOverlayView.MODE_TAKEOVER_REQUESTED);
+                int desiredVisibility = visible ? View.VISIBLE : View.GONE;
+                if (mTakeoverBar.getVisibility() != desiredVisibility) {
+                    mTakeoverBar.setVisibility(desiredVisibility);
+                }
+                if (!visible) return;
+
                 int accent = AcidTheme.accent(mIsDarkMode);
+                int bannerIconId;
+                int bannerColor;
+                String rawStatus;
+                int actionIconId;
+                String actionLabel;
+                int actionColor;
 
                 if (controlMode == AgentOverlayView.MODE_AGENT) {
-                    mTakeoverBar.setVisibility(View.VISIBLE);
-                    mTakeoverIcon.setIcon(AcidIcons.ICON_AGENT);
-                    mTakeoverIcon.setColor(accent);
-
+                    bannerIconId = AcidIcons.ICON_AGENT;
+                    bannerColor = accent;
                     boolean isDrivingCurrent = mController.isAgentDrivingCurrentTab();
-
                     // 1. 文本内容100%复用单一事实源，前台受控页与后台浏览页均展示当前实时工具/思考/回答摘要
                     String summary = mLastAgentActivitySummary;
                     if (summary == null || summary.trim().isEmpty()) {
                         summary = isDrivingCurrent ? "自动化运行中 · 页面触控已锁定" : "后台自动化进行中 · 当前页可自由浏览";
                     }
-                    mTvTakeoverStatus.setText(AcidLocale.tr(summary));
-                    mTvTakeoverStatus.setTextColor(accent);
-
+                    rawStatus = summary;
                     // 2. 前台受控与后台非受控唯一的区别：右侧动作按钮不同
                     if (isDrivingCurrent) {
-                        mBtnTakeoverAction.update(AcidIcons.ICON_HUMAN, "点此接管", AcidTheme.COLOR_AMBER);
+                        actionIconId = AcidIcons.ICON_HUMAN;
+                        actionLabel = "点此接管";
+                        actionColor = AcidTheme.COLOR_AMBER;
                     } else {
-                        mBtnTakeoverAction.update(AcidIcons.ICON_GLOBE, "点击查看", accent);
+                        actionIconId = AcidIcons.ICON_GLOBE;
+                        actionLabel = "点击查看";
+                        actionColor = accent;
                     }
-                } else if (controlMode == AgentOverlayView.MODE_TAKEOVER_REQUESTED) {
-                    mTakeoverBar.setVisibility(View.VISIBLE);
-                    String reason = mController.getTakeoverReason();
-                    mTakeoverIcon.setIcon(AcidIcons.ICON_HUMAN);
-                    mTakeoverIcon.setColor(AcidTheme.COLOR_AMBER);
-                    mTvTakeoverStatus.setText(AcidLocale.tr("请人工协助: " + (reason.isEmpty() ? "请完成页面操作" : reason)));
-                    mTvTakeoverStatus.setTextColor(AcidTheme.COLOR_AMBER);
-                    mBtnTakeoverAction.update(AcidIcons.ICON_AGENT, "交还AI", accent);
                 } else {
-                    mTakeoverBar.setVisibility(View.GONE);
+                    String reason = mController.getTakeoverReason();
+                    bannerIconId = AcidIcons.ICON_HUMAN;
+                    bannerColor = AcidTheme.COLOR_AMBER;
+                    rawStatus = "请人工协助: " + (reason.isEmpty() ? "请完成页面操作" : reason);
+                    actionIconId = AcidIcons.ICON_AGENT;
+                    actionLabel = "交还AI";
+                    actionColor = accent;
                 }
+
+                mTakeoverIcon.setIcon(bannerIconId);
+                mTakeoverIcon.setColor(bannerColor);
+                String nextStatus = AcidLocale.tr(rawStatus);
+                CharSequence curStatus = mTvTakeoverStatus.getText();
+                if (curStatus == null || !nextStatus.contentEquals(curStatus)) {
+                    mTvTakeoverStatus.setText(nextStatus);
+                }
+                if (mTvTakeoverStatus.getCurrentTextColor() != bannerColor) {
+                    mTvTakeoverStatus.setTextColor(bannerColor);
+                }
+                mBtnTakeoverAction.update(actionIconId, actionLabel, actionColor);
             }
         });
     }

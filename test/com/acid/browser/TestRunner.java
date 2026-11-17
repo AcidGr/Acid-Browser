@@ -177,6 +177,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testSheetImeCeilingAndHistoryBookmarksPaging(); }
         });
 
+        // 25. Multi-Tab Focus & IME Isolation Policy During Agent Automation
+        run("25. WebView Focus & IME Isolation: Foreground Agent IME Suppression, Background Lock, Window Hijack & Mode Reload Target", new TestCase() {
+            @Override public void execute() throws Exception { testWebViewFocusAndImeIsolationPolicy(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -3834,5 +3839,71 @@ public final class TestRunner {
 
         assertTrue(BookmarksHistorySheet.buildPreparedEntries(rawBookmarks, true, "nonexistent_xyz", now).isEmpty(),
             "Unmatched search yields empty list safely");
+    }
+
+    static void testWebViewFocusAndImeIsolationPolicy() {
+        // 1. Active human tab allows focus & IME unless human UI chrome input holds focus
+        AcidWebView.IsolationPolicy activeHuman = AcidWebView.resolveIsolationPolicy(
+            true, AgentOverlayView.MODE_HUMAN, false, false
+        );
+        assertTrue(activeHuman.allowFocus && activeHuman.allowIme,
+            "Active human tab allows View focus and IME input");
+
+        AcidWebView.IsolationPolicy uiInputFocused = AcidWebView.resolveIsolationPolicy(
+            true, AgentOverlayView.MODE_HUMAN, false, true
+        );
+        assertTrue(!uiInputFocused.allowFocus && !uiInputFocused.allowIme,
+            "Active WebView cannot steal focus/IME while URL bar or Agent input is focused");
+
+        // 2. Active tab driven by Agent locks both View focus and IME popup (while non-agent active tab stays free)
+        AcidWebView.IsolationPolicy foregroundAgent = AcidWebView.resolveIsolationPolicy(
+            true, AgentOverlayView.MODE_AGENT, true, false
+        );
+        assertTrue(!foregroundAgent.allowFocus && !foregroundAgent.allowIme,
+            "Foreground Agent-driven tab blocks Android focus and IME popup even when Agent dialog is collapsed");
+
+        AcidWebView.IsolationPolicy freeTabDuringBgAgent = AcidWebView.resolveIsolationPolicy(
+            true, AgentOverlayView.MODE_AGENT, false, false
+        );
+        assertTrue(freeTabDuringBgAgent.allowFocus && freeTabDuringBgAgent.allowIme,
+            "Human browsing non-agent active tab keeps full focus and IME while background tab runs Agent");
+
+        // 3. Human takeover restores focus and IME
+        AcidWebView.IsolationPolicy takeover = AcidWebView.resolveIsolationPolicy(
+            true, AgentOverlayView.MODE_TAKEOVER_REQUESTED, true, false
+        );
+        assertTrue(takeover.allowFocus && takeover.allowIme,
+            "Takeover mode restores focus and IME for human interaction");
+
+        // 4. Background inactive tabs must ALWAYS block both focus and IME regardless of mode
+        int[] allModes = new int[] {
+            AgentOverlayView.MODE_HUMAN,
+            AgentOverlayView.MODE_AGENT,
+            AgentOverlayView.MODE_TAKEOVER_REQUESTED
+        };
+        for (int m : allModes) {
+            for (boolean driven : new boolean[] { false, true }) {
+                AcidWebView.IsolationPolicy bg = AcidWebView.resolveIsolationPolicy(false, m, driven, false);
+                assertTrue(!bg.allowFocus && !bg.allowIme,
+                    "Background tab isolates focus & IME (mode=" + m + ", driven=" + driven + ")");
+            }
+        }
+
+        // 5. Window creation (onCreateWindow) switches only when triggered by the foreground active tab
+        assertTrue(AcidWebView.shouldSwitchToNewWindow(true),
+            "Active tab window.open switches foreground to new window");
+        assertTrue(!AcidWebView.shouldSwitchToNewWindow(false),
+            "Background tab window.open must not hijack active foreground tab");
+
+        // 6. Agent set_mode desktop/mobile reload targets agent-bound tab when isolated
+        assertEquals(Integer.valueOf(7),
+            Integer.valueOf(AcidWebView.resolveModeReloadTabId(1, 7, true)),
+            "Background Agent mode change reloads only bound tab 7, leaving active tab 1 intact");
+        assertEquals(Integer.valueOf(1),
+            Integer.valueOf(AcidWebView.resolveModeReloadTabId(1, 7, false)),
+            "Human UI mode change targets active tab 1");
+        assertEquals(Integer.valueOf(1),
+            Integer.valueOf(AcidWebView.resolveModeReloadTabId(1, 1, true)),
+            "Foreground bound tab still reloads tab 1 cleanly");
     }
 }

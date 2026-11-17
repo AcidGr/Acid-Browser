@@ -792,7 +792,7 @@ public class AcidSandboxTools {
                         if (args.has("mode")) {
                             String m = args.optString("mode", "mobile").toLowerCase();
                             boolean desktop = "desktop".equals(m) || "pc".equals(m);
-                            mController.setDesktopMode(desktop, true);
+                            mController.setDesktopMode(desktop, true, true);
                         }
                         if (args.has("som")) {
                             mController.setSomEnabled(args.optBoolean("som", false));

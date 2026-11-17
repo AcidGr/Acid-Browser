@@ -746,6 +746,9 @@ public class AcidIcons {
     public static class BadgeButton extends LinearLayout {
         private final SvgIconView mIconView;
         private final TextView mTextView;
+        private int mLastIconId = -1;
+        private String mLastText = null;
+        private int mLastAccentColor = 0;
 
         public BadgeButton(Context context, int iconId, String text, int accentColor, OnClickListener listener) {
             super(context);
@@ -806,9 +809,17 @@ public class AcidIcons {
         }
 
         public void update(int iconId, String text, int accentColor) {
+            String resolved = AcidLocale.tr(text);
+            if (iconId == mLastIconId && accentColor == mLastAccentColor
+                    && (resolved == null ? mLastText == null : resolved.equals(mLastText))) {
+                return;
+            }
+            mLastIconId = iconId;
+            mLastText = resolved;
+            mLastAccentColor = accentColor;
             mIconView.setIcon(iconId);
             mIconView.setColor(accentColor);
-            mTextView.setText(AcidLocale.tr(text));
+            mTextView.setText(resolved);
             mTextView.setTextColor(accentColor);
             applyFrame(accentColor);
         }

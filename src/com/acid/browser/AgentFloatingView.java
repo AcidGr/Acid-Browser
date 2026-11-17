@@ -46,6 +46,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         void onOpenSessionsSheet();
         void onFloatingShown();
         void onPickAgentAttachments(int currentPendingCount);
+        void onAgentInputFocusChanged(boolean focused);
     }
 
     public interface HeightProvider {
@@ -165,6 +166,12 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
 
     @Override
     public void dismiss() {
+        if (mEtAgentTaskInput != null) {
+            mEtAgentTaskInput.clearFocus();
+        }
+        if (mHostCallback != null) {
+            mHostCallback.onAgentInputFocusChanged(false);
+        }
         hideKeyboard();
         setVisibility(View.GONE);
     }
@@ -491,6 +498,14 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mEtAgentTaskInput.setPadding(AcidTheme.dp(ctx, 12), AcidTheme.dp(ctx, 6), AcidTheme.dp(ctx, 12), AcidTheme.dp(ctx, 6));
         mEtAgentTaskInput.setBackground(AcidTheme.pillBg(ctx, AcidTheme.LIGHT_SEARCH_BG, AcidTheme.LIGHT_SEARCH_BORDER, AcidTheme.RADIUS_PILL));
         mEtAgentTaskInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        mEtAgentTaskInput.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (mHostCallback != null) {
+                    mHostCallback.onAgentInputFocusChanged(hasFocus && isShowing());
+                }
+            }
+        });
         mEtAgentTaskInput.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
@@ -1334,17 +1349,22 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
     }
 
     private void scrollChatToBottom() {
-        if (mChatScrollView == null) return;
+        if (mChatScrollView == null || !isShowing()) return;
         mChatScrollView.post(new Runnable() {
             @Override
             public void run() {
-                mChatScrollView.fullScroll(View.FOCUS_DOWN);
+                if (mChatScrollView == null || !isShowing()) return;
+                View content = mChatScrollView.getChildAt(0);
+                if (content == null) return;
+                int targetY = Math.max(0, content.getHeight() - mChatScrollView.getHeight());
+                // Scroll without fullScroll(FOCUS_DOWN), which steals View focus onto selectable TextViews
+                mChatScrollView.scrollTo(0, targetY);
             }
         });
     }
 
     private void scrollChatToBottomIfNearBottom() {
-        if (mChatScrollView == null) return;
+        if (mChatScrollView == null || !isShowing()) return;
         View content = mChatScrollView.getChildAt(0);
         if (content == null) {
             scrollChatToBottom();
