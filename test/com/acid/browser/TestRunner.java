@@ -848,6 +848,32 @@ public final class TestRunner {
             assertTrue(bookmarksFile.exists(), "bookmarks.json protected by whitelist");
             assertTrue(settingsFile.exists(), "settings.json protected by whitelist");
             assertTrue(dummyHomepage.exists(), "homepage directory protected by whitelist");
+
+            // E. Bounded IntKey web_text_zoom persistence, clamping & settings.json hot-reload
+            assertEquals(Integer.valueOf(100), Integer.valueOf(store.getWebTextZoom()), "Default web text zoom is 100");
+            assertEquals("integer (75-160)", AcidSettings.WEB_TEXT_ZOOM.schemaTypeDescription(), "WEB_TEXT_ZOOM schema bounds");
+            assertTrue(AcidSettings.describeJsonSchemaForPrompt().contains("`web_text_zoom`: integer (75-160)"), "Prompt schema includes web_text_zoom");
+
+            store.setWebTextZoom(30);
+            assertEquals(Integer.valueOf(75), Integer.valueOf(store.getWebTextZoom()), "Zoom below min clamped to 75");
+            store.setWebTextZoom(250);
+            assertEquals(Integer.valueOf(160), Integer.valueOf(store.getWebTextZoom()), "Zoom above max clamped to 160");
+            store.setWebTextZoom(125);
+            assertEquals(Integer.valueOf(125), Integer.valueOf(store.getWebTextZoom()), "Valid zoom 125 persisted");
+            store.syncSettingsJsonFile();
+            String exportedJson = AcidIo.readFileUtf8OrEmpty(settingsFile, 64 * 1024);
+            assertTrue(exportedJson.contains("\"web_text_zoom\":125") || exportedJson.contains("\"web_text_zoom\": 125"), "settings.json exports web_text_zoom");
+
+            JSONObject mutatedJson = new JSONObject(exportedJson);
+            mutatedJson.put("web_text_zoom", 999);
+            AcidIo.writeFileUtf8Safe(settingsFile, mutatedJson.toString(2));
+            assertTrue(store.reloadFromJsonFile(true), "Reload mutated settings.json");
+            assertEquals(Integer.valueOf(160), Integer.valueOf(store.getWebTextZoom()), "External settings.json zoom clamped to 160");
+
+            mutatedJson.put("web_text_zoom", 90);
+            AcidIo.writeFileUtf8Safe(settingsFile, mutatedJson.toString(2));
+            assertTrue(store.reloadFromJsonFile(true), "Reload valid 90 zoom from settings.json");
+            assertEquals(Integer.valueOf(90), Integer.valueOf(store.getWebTextZoom()), "Hot-reloaded zoom updated to 90");
         } finally {
             SkillStorageVault.deleteRecursiveSafe(tmpDir);
         }
@@ -1244,6 +1270,10 @@ public final class TestRunner {
                 AcidLocale.tr("已停用 · 所有网站 · v1.0 · document-end"),
                 "Userscript subtitle translated to English"
             );
+            assertEquals("Display & Typography", AcidLocale.tr("显示与排版"), "Display section header translated");
+            assertEquals("Webpage Font Size", AcidLocale.tr("网页字体大小"), "Web font size title translated");
+            assertEquals("100% (Default)", AcidLocale.tr("100% (标准)"), "Default zoom pill translated");
+            assertEquals("Reset (100%)", AcidLocale.tr("恢复默认 (100%)"), "Reset zoom button translated");
 
             AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_ZH);
             assertTrue(!AcidLocale.isEn(), "AcidLocale switches back to Simplified Chinese");

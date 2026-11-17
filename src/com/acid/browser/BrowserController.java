@@ -745,6 +745,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         applyIdentityToSettings(wv, mIsDesktopMode);
         applyDarkModeToSettings(wv, mDarkMode);
         applyIncognitoToSettings(wv, mIncognitoMode);
+        int textZoom = mDataStore != null ? mDataStore.getWebTextZoom() : AcidSettings.WEB_TEXT_ZOOM_DEFAULT;
+        applyTextZoomToSettings(wv, textZoom);
         boolean blockImages = mDataStore != null && mDataStore.isBlockImagesEnabled();
         s.setLoadsImagesAutomatically(!blockImages);
         s.setBlockNetworkImage(blockImages);
@@ -1928,6 +1930,22 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
     }
 
+    private void applyTextZoomToSettings(WebView wv, int zoom) {
+        if (wv == null) return;
+        int clamped = AcidSettings.WEB_TEXT_ZOOM.sanitize(Integer.valueOf(zoom)).intValue();
+        WebSettings s = wv.getSettings();
+        if (s.getTextZoom() != clamped) {
+            s.setTextZoom(clamped);
+        }
+    }
+
+    public void setWebTextZoom(int zoom) {
+        int clamped = AcidSettings.WEB_TEXT_ZOOM.sanitize(Integer.valueOf(zoom)).intValue();
+        for (TabSession t : mTabs) {
+            applyTextZoomToSettings(t.webView, clamped);
+        }
+    }
+
     public void setBlockImages(boolean block) {
         boolean changed = false;
         for (TabSession t : mTabs) {
@@ -1974,6 +1992,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         try {
             setWebDebuggingEnabled(mDataStore.isWebDebuggingEnabled());
             setBlockImages(mDataStore.isBlockImagesEnabled());
+            setWebTextZoom(mDataStore.getWebTextZoom());
             AdBlockManager.getInstance(mContext).syncFromDataStore();
             if (mDarkMode != mDataStore.isDarkMode()) {
                 setDarkMode(mDataStore.isDarkMode());

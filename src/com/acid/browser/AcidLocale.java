@@ -368,6 +368,9 @@ public final class AcidLocale {
         if (s.startsWith("界面语言已切换为: ")) {
             return "Language switched to: " + tr(s.substring(10).trim());
         }
+        if (s.endsWith(" (标准)")) {
+            return s.substring(0, s.length() - 5) + " (Default)";
+        }
         if (s.startsWith("已切换模型: ")) {
             return "Switched model: " + s.substring(7);
         }
@@ -728,6 +731,18 @@ public final class AcidLocale {
         EN_MAP.put("选择默认下载引擎", "Select Download Engine");
         EN_MAP.put("内置下载器", "Built-in Downloader");
         EN_MAP.put("系统下载器", "System Downloader");
+        EN_MAP.put("显示与排版", "Display & Typography");
+        EN_MAP.put("网页字体大小", "Webpage Font Size");
+        EN_MAP.put("实时效果预览", "Live Preview");
+        EN_MAP.put("Acid Browser · 网页排版预览", "Acid Browser · Webpage Typography Preview");
+        EN_MAP.put("拖动下方滑块可全局调整所有网页的正文字号大小。当前阅读比例会实时应用于全部打开的标签页，无需手动刷新。",
+            "Drag the slider below to scale text across all webpages. Changes apply live to every open tab without reloading.");
+        EN_MAP.put("发布于今天 · 阅读约 3 分钟 · 评论 12", "Published today · 3 min read · 12 comments");
+        EN_MAP.put("字号调节", "Scale Adjustment");
+        EN_MAP.put("全局网页缩放", "Global Web Text Scale");
+        EN_MAP.put("100% 标准", "100% Default");
+        EN_MAP.put("恢复默认 (100%)", "Reset (100%)");
+        EN_MAP.put("已恢复默认网页字号 (100%)", "Webpage font size reset to default (100%)");
         EN_MAP.put("浏览数据管理", "Browsing Data");
         EN_MAP.put("清除浏览数据", "Clear Browsing Data");
         EN_MAP.put("退出时自动清理", "Clear Data on Exit");

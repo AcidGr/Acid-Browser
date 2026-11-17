@@ -652,6 +652,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 public void onLanguageChanged(int langIndex) {
                     applyLanguageHotSwitch();
                 }
+
+                @Override
+                public void onWebTextZoomChanged(int zoom) {
+                    if (mController != null) {
+                        mController.setWebTextZoom(zoom);
+                    }
+                }
             }
         );
         attachModalSheet(mSettingsSheet);

@@ -665,6 +665,9 @@ public class BrowserDataStore {
     public int getLanguageIndex() { return get(AcidSettings.LANGUAGE).intValue(); }
     public void setLanguageIndex(int langIndex) { set(AcidSettings.LANGUAGE, Integer.valueOf(langIndex)); }
 
+    public int getWebTextZoom() { return get(AcidSettings.WEB_TEXT_ZOOM).intValue(); }
+    public void setWebTextZoom(int zoom) { set(AcidSettings.WEB_TEXT_ZOOM, Integer.valueOf(zoom)); }
+
     public String getCustomHomeUrl() { return get(AcidSettings.HOME_CUSTOM_URL); }
     public void setCustomHomeUrl(String url) { set(AcidSettings.HOME_CUSTOM_URL, url); }
 

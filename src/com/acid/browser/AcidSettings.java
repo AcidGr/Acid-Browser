@@ -99,13 +99,47 @@ public final class AcidSettings {
     }
 
     public static final class IntKey extends SettingKey<Integer> {
+        public final int minValue;
+        public final int maxValue;
+        private final boolean mBounded;
+
         IntKey(String prefKey, String jsonKey, int defaultValue, String title, boolean exportToJson) {
+            this(prefKey, jsonKey, defaultValue, title, exportToJson, Integer.MIN_VALUE, Integer.MAX_VALUE, false);
+        }
+
+        IntKey(String prefKey, String jsonKey, int defaultValue, String title, boolean exportToJson, int minValue, int maxValue) {
+            this(prefKey, jsonKey, defaultValue, title, exportToJson, minValue, maxValue, true);
+        }
+
+        private IntKey(
+            String prefKey,
+            String jsonKey,
+            int defaultValue,
+            String title,
+            boolean exportToJson,
+            int minValue,
+            int maxValue,
+            boolean bounded
+        ) {
             super(prefKey, jsonKey, Integer.valueOf(defaultValue), title, exportToJson);
+            this.minValue = Math.min(minValue, maxValue);
+            this.maxValue = Math.max(minValue, maxValue);
+            this.mBounded = bounded;
+        }
+
+        @Override
+        public Integer sanitize(Integer candidate) {
+            int val = (candidate != null ? candidate : defaultValue).intValue();
+            if (mBounded) {
+                if (val < minValue) val = minValue;
+                if (val > maxValue) val = maxValue;
+            }
+            return Integer.valueOf(val);
         }
 
         @Override
         public Integer read(SharedPreferences primary, SharedPreferences legacy) {
-            return Integer.valueOf(primary.getInt(prefKey, defaultValue.intValue()));
+            return sanitize(Integer.valueOf(primary.getInt(prefKey, defaultValue.intValue())));
         }
 
         @Override
@@ -120,9 +154,9 @@ public final class AcidSettings {
 
         @Override
         public Integer parseFromJson(Object raw) {
-            if (raw instanceof Number) return Integer.valueOf(((Number) raw).intValue());
+            if (raw instanceof Number) return sanitize(Integer.valueOf(((Number) raw).intValue()));
             if (raw != null) {
-                try { return Integer.valueOf(Integer.parseInt(String.valueOf(raw).trim())); }
+                try { return sanitize(Integer.valueOf(Integer.parseInt(String.valueOf(raw).trim()))); }
                 catch (NumberFormatException ignored) {}
             }
             return defaultValue;
@@ -130,7 +164,7 @@ public final class AcidSettings {
 
         @Override
         public String schemaTypeDescription() {
-            return "integer";
+            return mBounded ? ("integer (" + minValue + "-" + maxValue + ")") : "integer";
         }
     }
 
@@ -338,6 +372,16 @@ public final class AcidSettings {
         new String[]{"system", "zh", "en"},
         new String[]{"跟随系统", "简体中文", "English"},
         new String[]{"auto", "system", "default", "system", "zh-cn", "zh", "cn", "zh", "chinese", "zh", "en-us", "en", "english", "en"}
+    ));
+
+    public static final int WEB_TEXT_ZOOM_MIN = 75;
+    public static final int WEB_TEXT_ZOOM_MAX = 160;
+    public static final int WEB_TEXT_ZOOM_DEFAULT = 100;
+    public static final int WEB_TEXT_ZOOM_STEP = 5;
+
+    public static final IntKey WEB_TEXT_ZOOM = register(new IntKey(
+        "web_text_zoom", "web_text_zoom", WEB_TEXT_ZOOM_DEFAULT, "网页字体大小", true,
+        WEB_TEXT_ZOOM_MIN, WEB_TEXT_ZOOM_MAX
     ));
 
     public static final BoolKey BLOCK_IMAGES = register(new BoolKey(

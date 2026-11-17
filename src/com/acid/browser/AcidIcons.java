@@ -81,6 +81,7 @@ public class AcidIcons {
     public static final int ICON_ADBLOCK = 48;        // adblock shield with slash
     public static final int ICON_FULLSCREEN = 49;     // fullscreen expand corners
     public static final int ICON_FULLSCREEN_EXIT = 50;// fullscreen collapse corners
+    public static final int ICON_TEXT_SIZE = 51;      // typographic "TT" text size icon
 
     /**
      * Parses a subset of SVG path data ("M x y L x y H x V y C x1 y1 x2 y2 x y Z")
@@ -608,6 +609,14 @@ public class AcidIcons {
                     "M 15.5 3.5 V 8.5 H 20.5 " +
                     "M 20.5 15.5 H 15.5 V 20.5 " +
                     "M 3.5 15.5 H 8.5 V 20.5"
+                ));
+                break;
+
+            case ICON_TEXT_SIZE:
+                // Typographic "TT" text size icon
+                p.addPath(parseSvgPath(
+                    "M 4 6 H 16 M 10 6 V 19 " +
+                    "M 13.5 12 H 21.5 M 17.5 12 V 19"
                 ));
                 break;
 
