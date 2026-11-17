@@ -92,6 +92,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         public volatile boolean isLoading = false;
         public volatile String lastHistoryUrl = "";
         public volatile String lastHistoryTitle = "";
+        public volatile boolean isDesktopMode = false;
         public Bitmap snapshot = null;
 
         public TabSession(int id, WebView webView) {
@@ -298,17 +299,23 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     // =========================================================================
 
     public TabSession createNewTab(String initialUrl, boolean switchToIt) {
-        return createTabInternal(initialUrl, switchToIt, true);
+        return createTabInternal(initialUrl, switchToIt, true, mIsDesktopMode);
     }
 
     public TabSession createNewTabBlank(boolean switchToIt) {
-        return createTabInternal(null, switchToIt, false);
+        return createTabInternal(null, switchToIt, false, mIsDesktopMode);
     }
 
-    private TabSession createTabInternal(String initialUrl, boolean switchToIt, boolean loadInitialPage) {
+    private TabSession createTabInternal(
+        String initialUrl,
+        boolean switchToIt,
+        boolean loadInitialPage,
+        boolean initialDesktopMode
+    ) {
         final int tabId = mNextTabId++;
         WebView wv = new AcidWebView(mContext);
         final TabSession tab = new TabSession(tabId, wv);
+        tab.isDesktopMode = initialDesktopMode;
         if (!loadInitialPage) {
             tab.url = "about:blank";
         }
@@ -577,13 +584,13 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
         if (changed && mListener != null) {
             if (Looper.myLooper() == Looper.getMainLooper()) {
-                mListener.onModeChanged(mIsDesktopMode, getControlMode(), mSomEnabled);
+                mListener.onModeChanged(isDesktopMode(), getControlMode(), mSomEnabled);
             } else {
                 mMainHandler.post(new Runnable() {
                     @Override
                     public void run() {
                         if (mListener != null) {
-                            mListener.onModeChanged(mIsDesktopMode, getControlMode(), mSomEnabled);
+                            mListener.onModeChanged(isDesktopMode(), getControlMode(), mSomEnabled);
                         }
                     }
                 });
@@ -807,7 +814,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             cm.setAcceptThirdPartyCookies(wv, true);
         }
 
-        applyIdentityToSettings(wv, mIsDesktopMode);
+        applyIdentityToSettings(wv, tab.isDesktopMode);
         applyDarkModeToSettings(wv, mDarkMode);
         applyIncognitoToSettings(wv, mIncognitoMode);
         int textZoom = mDataStore != null ? mDataStore.getWebTextZoom() : AcidSettings.WEB_TEXT_ZOOM_DEFAULT;
@@ -1025,7 +1032,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 if (mDataStore != null && mDataStore.isDoNotTrackEnabled()) {
                     view.evaluateJavascript("try{Object.defineProperty(navigator,'doNotTrack',{get:function(){return'1';},configurable:true,enumerable:true});}catch(e){}", null);
                 }
-                if (mIsDesktopMode && DesktopViewportManager.isEligibleUrl(url)) {
+                if (tab.isDesktopMode && DesktopViewportManager.isEligibleUrl(url)) {
                     DesktopViewportManager.applyDesktopViewport(view, true);
                 }
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
@@ -1042,7 +1049,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 // only a safety net for pages whose bootstrap never fired (e.g. JS disabled).
                 mUserscriptManager.injectBootstrap(view, url);
                 AdBlockManager.getInstance(mContext).injectElementHidingCss(view, url);
-                if (mIsDesktopMode && DesktopViewportManager.isEligibleUrl(url)) {
+                if (tab.isDesktopMode && DesktopViewportManager.isEligibleUrl(url)) {
                     DesktopViewportManager.applyDesktopViewport(view, true);
                 }
 
@@ -1077,7 +1084,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onProgressChanged(WebView view, int newProgress) {
                 tab.progress = newProgress;
                 tab.isLoading = (newProgress < 100);
-                if (mIsDesktopMode && newProgress >= 15 && DesktopViewportManager.isEligibleUrl(view.getUrl())) {
+                if (tab.isDesktopMode && newProgress >= 15 && DesktopViewportManager.isEligibleUrl(view.getUrl())) {
                     DesktopViewportManager.applyDesktopViewport(view, true);
                 }
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
@@ -1152,8 +1159,15 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     boolean switchToNew = AcidWebView.shouldSwitchToNewWindow(
                         sourceTab == null || sourceTab == mActiveTab
                     );
-                    TabSession newTab = createNewTabBlank(switchToNew);
-                    if (!switchToNew && sourceTab != null && sourceTab.id == mAgentBoundTabId) {
+                    boolean transferBinding = AcidWebView.shouldTransferAgentBindingToNewWindow(
+                        sourceTab != null && sourceTab.id == mAgentBoundTabId,
+                        getControlMode(),
+                        mAgentBoundTabId,
+                        sourceTab == mActiveTab
+                    );
+                    boolean initialDesktop = sourceTab != null ? sourceTab.isDesktopMode : mIsDesktopMode;
+                    TabSession newTab = createTabInternal(null, switchToNew, false, initialDesktop);
+                    if (transferBinding) {
                         setAgentBoundTabId(newTab.id);
                     }
                     transport.setWebView(newTab.webView);
@@ -2079,6 +2093,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     private void applyDesktopModeToTab(TabSession tab, boolean desktop) {
         if (tab == null || tab.webView == null) return;
+        tab.isDesktopMode = desktop;
         applyIdentityToSettings(tab.webView, desktop);
         if (DesktopViewportManager.isEligibleUrl(tab.url)) {
             DesktopViewportManager.applyDesktopViewport(tab.webView, desktop);
@@ -2091,23 +2106,29 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void setDesktopMode(boolean desktop, boolean reloadTarget, boolean targetBoundOnly) {
         TabSession boundTab = mAgentBoundTabId > 0 ? getTabById(mAgentBoundTabId) : null;
-        boolean isolateToBound = targetBoundOnly && boundTab != null && boundTab != mActiveTab;
-        int activeId = (mActiveTab != null) ? mActiveTab.id : -1;
-        int reloadTabId = AcidWebView.resolveModeReloadTabId(
-            activeId, boundTab != null ? boundTab.id : -1, isolateToBound
-        );
-
-        mAutomationDriver.clearAllScreenshotFrames();
-        if (isolateToBound) {
+        if (targetBoundOnly && boundTab != null) {
+            mAutomationDriver.clearAllScreenshotFrames();
             applyDesktopModeToTab(boundTab, desktop);
             if (reloadTarget && boundTab.webView != null) {
                 boundTab.webView.reload();
             }
+            if (boundTab == mActiveTab && mListener != null) {
+                mListener.onModeChanged(isDesktopMode(), mOverlayView.getControlMode(), mSomEnabled);
+            }
             return;
         }
 
+        int activeId = (mActiveTab != null) ? mActiveTab.id : -1;
+        int reloadTabId = AcidWebView.resolveModeReloadTabId(
+            activeId, boundTab != null ? boundTab.id : -1, false
+        );
+
+        mAutomationDriver.clearAllScreenshotFrames();
         mIsDesktopMode = desktop;
         for (TabSession t : mTabs) {
+            if (t != mActiveTab && isTabDrivenByAgent(t.id)) {
+                continue;
+            }
             applyDesktopModeToTab(t, desktop);
         }
         if (reloadTarget) {
@@ -2117,13 +2138,13 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
         }
         if (mListener != null) {
-            mListener.onModeChanged(mIsDesktopMode, mOverlayView.getControlMode(), mSomEnabled);
+            mListener.onModeChanged(isDesktopMode(), mOverlayView.getControlMode(), mSomEnabled);
         }
     }
 
     @Override
     public boolean isDesktopMode() {
-        return mIsDesktopMode;
+        return mActiveTab != null ? mActiveTab.isDesktopMode : mIsDesktopMode;
     }
 
     public void setControlMode(int mode, String reason) {
@@ -2131,7 +2152,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mOverlayView.setControlMode(mode);
         syncAllTabWebViewPolicies();
         if (mListener != null) {
-            mListener.onModeChanged(mIsDesktopMode, mode, mSomEnabled);
+            mListener.onModeChanged(isDesktopMode(), mode, mSomEnabled);
         }
     }
 
@@ -2155,7 +2176,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             } catch (Exception ignored) {}
         }
         if (mListener != null) {
-            mListener.onModeChanged(mIsDesktopMode, mOverlayView.getControlMode(), mSomEnabled);
+            mListener.onModeChanged(isDesktopMode(), mOverlayView.getControlMode(), mSomEnabled);
         }
     }
 

@@ -36,6 +36,10 @@ public class WebAutomationDriver {
         void emitLog(String log);
         boolean isSomEnabled();
         boolean isDesktopMode();
+        default boolean isTargetDesktopMode() {
+            BrowserController.TabSession t = getTargetTab();
+            return t != null ? t.isDesktopMode : isDesktopMode();
+        }
         int getBlockedDeepLinksCount();
         String getLastBlockedDeepLink();
         int getTriggeredDownloadsCount();
@@ -468,7 +472,7 @@ public class WebAutomationDriver {
                             BrowserController.TabSession tab = mHost.getTargetTab();
                             if (tab != null && tab.webView != null) {
                                 tab.webView.evaluateJavascript(bridgeJs, null);
-                                if (mHost.isDesktopMode()) {
+                                if (tab.isDesktopMode) {
                                     tab.webView.evaluateJavascript(
                                         "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
                                         null
@@ -484,7 +488,7 @@ public class WebAutomationDriver {
                                         BrowserController.TabSession tab = mHost.getTargetTab();
                                         if (tab != null && tab.webView != null) {
                                             tab.webView.evaluateJavascript(bridgeJs, null);
-                                            if (mHost.isDesktopMode()) {
+                                            if (tab.isDesktopMode) {
                                                 tab.webView.evaluateJavascript(
                                                     "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
                                                     null
@@ -506,7 +510,7 @@ public class WebAutomationDriver {
                         }
                     }
                 }
-            } else if (mHost.isDesktopMode()) {
+            } else if (mHost.isTargetDesktopMode()) {
                 evaluateJsSync("if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}", 500);
             }
         } catch (Exception e) {
@@ -1292,11 +1296,11 @@ public class WebAutomationDriver {
      * reloading the page or clearing form state.
      */
     public void ensureDesktopOverviewIfZoomedSync() {
-        if (mHost == null || !mHost.isDesktopMode() || isMainLooper() || mMainHandler == null) {
+        if (mHost == null || isMainLooper() || mMainHandler == null) {
             return;
         }
         BrowserController.TabSession tab = mHost.getTargetTab();
-        if (tab == null || tab.webView == null || !DesktopViewportManager.isEligibleUrl(tab.url)) {
+        if (tab == null || !tab.isDesktopMode || tab.webView == null || !DesktopViewportManager.isEligibleUrl(tab.url)) {
             return;
         }
 
@@ -1374,7 +1378,7 @@ public class WebAutomationDriver {
     ) {
         final int[] tabIdRef = new int[] { -1 };
         final int[] dimsRef = new int[] { 0, 0 };
-        final boolean[] desktopRef = new boolean[] { mHost != null && mHost.isDesktopMode() };
+        final boolean[] desktopRef = new boolean[] { mHost != null && mHost.isTargetDesktopMode() };
 
         Runnable readTabMeta = new Runnable() {
             @Override
@@ -1382,6 +1386,7 @@ public class WebAutomationDriver {
                 BrowserController.TabSession tab = mHost != null ? mHost.getTargetTab() : null;
                 if (tab != null) {
                     tabIdRef[0] = tab.id;
+                    desktopRef[0] = tab.isDesktopMode;
                     if (tab.webView != null) {
                         dimsRef[0] = tab.webView.getWidth();
                         dimsRef[1] = tab.webView.getHeight();
@@ -1467,7 +1472,7 @@ public class WebAutomationDriver {
                 resRef.set(mScreenshotHelper.captureOnUiThread(
                     targetTab.webView,
                     targetTab.id,
-                    mHost.isDesktopMode(),
+                    targetTab.isDesktopMode,
                     obsJson,
                     drawSomOnBitmap,
                     jpegQuality,

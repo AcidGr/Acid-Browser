@@ -229,6 +229,24 @@ public class AgentLockChromeOverlay extends View {
         );
     }
 
+    private static final class ChromeBgStyleTag {
+        final boolean locked;
+        final boolean dark;
+        final float radius;
+
+        ChromeBgStyleTag(boolean locked, boolean dark, float radius) {
+            this.locked = locked;
+            this.dark = dark;
+            this.radius = radius;
+        }
+
+        boolean matches(boolean locked, boolean dark, float radius) {
+            return this.locked == locked
+                && this.dark == dark
+                && Math.abs(this.radius - radius) < 0.01f;
+        }
+    }
+
     public static void applyIconButtonLockStyle(
         View container,
         AcidIcons.SvgIconView icon,
@@ -239,20 +257,27 @@ public class AgentLockChromeOverlay extends View {
         float bgRadius
     ) {
         if (container == null) return;
-        if (locked) {
-            container.setAlpha(0.38f);
-            container.setBackgroundColor(Color.TRANSPARENT);
-            if (icon != null) {
-                icon.setColor(AcidTheme.iconDisabled(dark));
+        Object rawTag = container.getTag();
+        boolean styleUnchanged = (rawTag instanceof ChromeBgStyleTag)
+            && ((ChromeBgStyleTag) rawTag).matches(locked, dark, bgRadius);
+        if (!styleUnchanged) {
+            if (locked) {
+                container.setAlpha(0.38f);
+                container.setBackgroundColor(Color.TRANSPARENT);
+            } else {
+                container.setAlpha(1.0f);
+                container.setBackground(AcidTheme.interactiveBg(
+                    container.getContext(), Color.TRANSPARENT, AcidTheme.rowPressed(dark), 0, bgRadius
+                ));
             }
-            return;
+            container.setTag(new ChromeBgStyleTag(locked, dark, bgRadius));
         }
-        container.setAlpha(1.0f);
-        container.setBackground(AcidTheme.interactiveBg(
-            container.getContext(), Color.TRANSPARENT, AcidTheme.rowPressed(dark), 0, bgRadius
-        ));
         if (icon != null) {
-            icon.setColor(unlockedEnabled ? unlockedColor : AcidTheme.iconDisabled(dark));
+            icon.setColor(
+                locked
+                    ? AcidTheme.iconDisabled(dark)
+                    : (unlockedEnabled ? unlockedColor : AcidTheme.iconDisabled(dark))
+            );
         }
     }
 
@@ -265,8 +290,13 @@ public class AgentLockChromeOverlay extends View {
         boolean incognito
     ) {
         if (searchContainer != null) {
-            searchContainer.setAlpha(locked ? 0.42f : 1.0f);
-            searchContainer.setClickable(locked);
+            float targetAlpha = locked ? 0.42f : 1.0f;
+            if (Math.abs(searchContainer.getAlpha() - targetAlpha) > 0.01f) {
+                searchContainer.setAlpha(targetAlpha);
+            }
+            if (searchContainer.isClickable() != locked) {
+                searchContainer.setClickable(locked);
+            }
         }
         if (searchIcon != null) {
             searchIcon.setColor(
@@ -276,10 +306,19 @@ public class AgentLockChromeOverlay extends View {
             );
         }
         if (urlInput != null) {
-            urlInput.setFocusable(!locked);
-            urlInput.setFocusableInTouchMode(!locked);
-            urlInput.setCursorVisible(!locked);
-            urlInput.setLongClickable(!locked);
+            boolean wantEditable = !locked;
+            if (urlInput.isFocusable() != wantEditable) {
+                urlInput.setFocusable(wantEditable);
+            }
+            if (urlInput.isFocusableInTouchMode() != wantEditable) {
+                urlInput.setFocusableInTouchMode(wantEditable);
+            }
+            if (urlInput.isLongClickable() != wantEditable) {
+                urlInput.setLongClickable(wantEditable);
+            }
+            if (urlInput.isCursorVisible() != wantEditable) {
+                urlInput.setCursorVisible(wantEditable);
+            }
         }
     }
 
@@ -298,6 +337,8 @@ public class AgentLockChromeOverlay extends View {
     private View mTabsBtnView;
 
     private boolean mActive = false;
+    private boolean mGeometryDirty = true;
+    private boolean mHasValidPath = false;
     private float mLastAppliedCornerRadius = -1f;
 
     public AgentLockChromeOverlay(Context context) {
@@ -332,12 +373,28 @@ public class AgentLockChromeOverlay extends View {
     }
 
     public void setLockBorderVisible(boolean visible) {
+        if (visible) {
+            mGeometryDirty = true;
+        }
         if (mActive == visible) return;
         mActive = visible;
         setVisibility(visible ? VISIBLE : GONE);
         if (visible) {
             postInvalidateOnAnimation();
         }
+    }
+
+    public void invalidateOutlineGeometry() {
+        mGeometryDirty = true;
+        if (mActive) {
+            postInvalidateOnAnimation();
+        }
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        mGeometryDirty = true;
     }
 
     private float dp(float v) {
@@ -358,15 +415,8 @@ public class AgentLockChromeOverlay extends View {
         }
     }
 
-    @Override
-    protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        if (!mActive) return;
-
-        float strokeW = dp(3.0f);
-        float minStep = dp(6.0f);
-        float desiredCorner = dp(9.0f);
-
+    private void rebuildCachedPath(float strokeW) {
+        mGeometryDirty = false;
         OutlineGeometry geom = computeOutlineGeometry(
             measureBoundsInOverlay(mContainerView),
             measureBoundsInOverlay(mTopBarView),
@@ -377,10 +427,13 @@ public class AgentLockChromeOverlay extends View {
             measureBoundsInOverlay(mBottomBarView),
             measureBoundsInOverlay(mTabsBtnView),
             strokeW,
-            desiredCorner,
-            minStep
+            dp(9.0f),
+            dp(6.0f)
         );
-        if (geom == null || geom.vertexCount() < 4) return;
+        if (geom == null || geom.vertexCount() < 4) {
+            mHasValidPath = false;
+            return;
+        }
 
         mPath.reset();
         mPath.moveTo(geom.points[0], geom.points[1]);
@@ -393,6 +446,19 @@ public class AgentLockChromeOverlay extends View {
             mLastAppliedCornerRadius = geom.cornerRadius;
             mBorderPaint.setPathEffect(new CornerPathEffect(geom.cornerRadius));
         }
+        mHasValidPath = true;
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        if (!mActive) return;
+
+        float strokeW = dp(3.0f);
+        if (mGeometryDirty) {
+            rebuildCachedPath(strokeW);
+        }
+        if (!mHasValidPath) return;
 
         long now = SystemClock.uptimeMillis();
         double phase = (now % 1800) / 1800.0 * Math.PI * 2.0;

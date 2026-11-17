@@ -2955,11 +2955,10 @@ public final class TestRunner {
                         Socket s = usHttpServer.accept();
                         try {
                             InputStream rawIn = s.getInputStream();
-                            BufferedReader r = new BufferedReader(new InputStreamReader(rawIn, StandardCharsets.US_ASCII));
-                            String req = r.readLine();
+                            String req = readHttpAsciiLine(rawIn);
                             String ct = null, cl = null, keep = null;
                             String line;
-                            while ((line = r.readLine()) != null && !line.isEmpty()) {
+                            while ((line = readHttpAsciiLine(rawIn)) != null && !line.isEmpty()) {
                                 int colon = line.indexOf(':');
                                 if (colon > 0) {
                                     String k = line.substring(0, colon).trim().toLowerCase(java.util.Locale.ROOT);
@@ -2971,7 +2970,9 @@ public final class TestRunner {
                             }
                             if (cl != null) {
                                 int bodyLen = Integer.parseInt(cl);
-                                for (int i = 0; i < bodyLen; i++) rawIn.read();
+                                for (int i = 0; i < bodyLen; i++) {
+                                    if (rawIn.read() < 0) break;
+                                }
                             }
                             OutputStream out = s.getOutputStream();
                             if (req != null && req.contains("/r/")) {
@@ -3857,8 +3858,14 @@ public final class TestRunner {
         AcidWebView.IsolationPolicy uiInputFocused = AcidWebView.resolveIsolationPolicy(
             true, AgentOverlayView.MODE_HUMAN, false, true
         );
-        assertTrue(!uiInputFocused.allowFocus && !uiInputFocused.allowIme,
-            "Active WebView cannot steal focus/IME while URL bar or Agent input is focused");
+        assertTrue(uiInputFocused.allowFocus && uiInputFocused.allowIme && uiInputFocused.blockProgrammaticFocus,
+            "Active WebView stays touch-focusable for human taps while blocking programmatic focus steals");
+        assertTrue(!AcidWebView.shouldAllowRequestFocus(
+                uiInputFocused.allowFocus, uiInputFocused.blockProgrammaticFocus, false),
+            "Programmatic/JS requestFocus without recent user touch cannot steal URL/Agent input focus");
+        assertTrue(AcidWebView.shouldAllowRequestFocus(
+                uiInputFocused.allowFocus, uiInputFocused.blockProgrammaticFocus, true),
+            "Direct finger tap on unlocked webpage cleanly reclaims focus from URL/Agent bar");
 
         // 2. Active tab driven by Agent locks both View focus and IME popup (while non-agent active tab stays free)
         AcidWebView.IsolationPolicy foregroundAgent = AcidWebView.resolveIsolationPolicy(
@@ -3866,6 +3873,9 @@ public final class TestRunner {
         );
         assertTrue(!foregroundAgent.allowFocus && !foregroundAgent.allowIme,
             "Foreground Agent-driven tab blocks Android focus and IME popup even when Agent dialog is collapsed");
+        assertTrue(!AcidWebView.shouldAllowRequestFocus(
+                foregroundAgent.allowFocus, foregroundAgent.blockProgrammaticFocus, true),
+            "Locked Agent-driven tab never allows focus even when touched");
 
         AcidWebView.IsolationPolicy freeTabDuringBgAgent = AcidWebView.resolveIsolationPolicy(
             true, AgentOverlayView.MODE_AGENT, false, false
@@ -3894,13 +3904,23 @@ public final class TestRunner {
             }
         }
 
-        // 5. Window creation (onCreateWindow) switches only when triggered by the foreground active tab
+        // 5. Window creation (onCreateWindow) & Agent binding transfer across foreground/background tabs
         assertTrue(AcidWebView.shouldSwitchToNewWindow(true),
             "Active tab window.open switches foreground to new window");
         assertTrue(!AcidWebView.shouldSwitchToNewWindow(false),
             "Background tab window.open must not hijack active foreground tab");
+        assertTrue(AcidWebView.shouldTransferAgentBindingToNewWindow(true, AgentOverlayView.MODE_AGENT, 2, true),
+            "Foreground watched bound tab transfers Agent binding to _blank popup");
+        assertTrue(AcidWebView.shouldTransferAgentBindingToNewWindow(false, AgentOverlayView.MODE_AGENT, -1, true),
+            "Foreground unbound MODE_AGENT tab transfers Agent binding to _blank popup");
+        assertTrue(AcidWebView.shouldTransferAgentBindingToNewWindow(true, AgentOverlayView.MODE_AGENT, 2, false),
+            "Background bound tab transfers Agent binding to popup without foreground switch");
+        assertTrue(!AcidWebView.shouldTransferAgentBindingToNewWindow(false, AgentOverlayView.MODE_AGENT, 2, true),
+            "Human active tab popup does not hijack background Agent binding");
+        assertTrue(!AcidWebView.shouldTransferAgentBindingToNewWindow(false, AgentOverlayView.MODE_HUMAN, -1, true),
+            "Human mode popup never binds Agent");
 
-        // 6. Agent set_mode desktop/mobile reload targets agent-bound tab when isolated
+        // 6. Agent set_mode desktop/mobile reload targets agent-bound tab & TabSession isolates per-tab flag
         assertEquals(Integer.valueOf(7),
             Integer.valueOf(AcidWebView.resolveModeReloadTabId(1, 7, true)),
             "Background Agent mode change reloads only bound tab 7, leaving active tab 1 intact");
@@ -3910,6 +3930,28 @@ public final class TestRunner {
         assertEquals(Integer.valueOf(1),
             Integer.valueOf(AcidWebView.resolveModeReloadTabId(1, 1, true)),
             "Foreground bound tab still reloads tab 1 cleanly");
+
+        BrowserController.TabSession mobileHumanTab = new BrowserController.TabSession(1, null);
+        BrowserController.TabSession desktopAgentTab = new BrowserController.TabSession(2, null);
+        desktopAgentTab.isDesktopMode = true;
+        assertTrue(!mobileHumanTab.isDesktopMode && desktopAgentTab.isDesktopMode,
+            "TabSession isolates per-tab desktop viewport state across human and background Agent tabs");
+    }
+
+    private static String readHttpAsciiLine(InputStream in) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        int prev = -1;
+        int b;
+        while ((b = in.read()) != -1) {
+            if (b == '\n') {
+                byte[] arr = buf.toByteArray();
+                int len = (prev == '\r' && arr.length > 0) ? arr.length - 1 : arr.length;
+                return new String(arr, 0, len, StandardCharsets.US_ASCII);
+            }
+            buf.write(b);
+            prev = b;
+        }
+        return buf.size() == 0 ? null : new String(buf.toByteArray(), StandardCharsets.US_ASCII);
     }
 
     private static void assertStrictlyOrthogonalClosedLoop(AgentLockChromeOverlay.OutlineGeometry geom, String label) {

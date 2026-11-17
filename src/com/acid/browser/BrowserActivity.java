@@ -165,7 +165,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mLockBorderOverlay != null) {
             mLockBorderOverlay.setLockBorderVisible(locked && !overviewOpen);
             if (locked && !overviewOpen) {
-                mLockBorderOverlay.postInvalidateOnAnimation();
+                mLockBorderOverlay.invalidateOutlineGeometry();
             }
         }
 
@@ -1148,15 +1148,20 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mRootContainer.addView(mLockBorderOverlay, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        mMainContentLayout.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+        View.OnLayoutChangeListener lockOutlineSyncListener = new View.OnLayoutChangeListener() {
             @Override
             public void onLayoutChange(View v, int left, int top, int right, int bottom,
                                        int oldLeft, int oldTop, int oldRight, int oldBottom) {
-                if (mLockBorderOverlay != null && mLockBorderOverlay.getVisibility() == View.VISIBLE) {
-                    mLockBorderOverlay.postInvalidateOnAnimation();
+                if (mLockBorderOverlay != null) {
+                    mLockBorderOverlay.invalidateOutlineGeometry();
                 }
             }
-        });
+        };
+        mMainContentLayout.addOnLayoutChangeListener(lockOutlineSyncListener);
+        mTopBar.addOnLayoutChangeListener(lockOutlineSyncListener);
+        mTakeoverBar.addOnLayoutChangeListener(lockOutlineSyncListener);
+        mCenterFrame.addOnLayoutChangeListener(lockOutlineSyncListener);
+        mBottomBar.addOnLayoutChangeListener(lockOutlineSyncListener);
 
         // Video / CustomView Fullscreen layer
         mCustomViewContainer = new FrameLayout(this);
@@ -1321,6 +1326,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             public void onClick(View v) {
                 if (mTabsOverview != null && mTabsOverview.isShowing()) {
                     mTabsOverview.dismiss();
+                    return;
                 }
                 if (blockIfChromeLocked()) return;
                 mController.loadUrl(mController.getHomeUrl());
@@ -1926,8 +1932,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 int desiredVisibility = visible ? View.VISIBLE : View.GONE;
                 if (mTakeoverBar.getVisibility() != desiredVisibility) {
                     mTakeoverBar.setVisibility(desiredVisibility);
-                    if (mLockBorderOverlay != null && mLockBorderOverlay.getVisibility() == View.VISIBLE) {
-                        mLockBorderOverlay.postInvalidateOnAnimation();
+                    if (mLockBorderOverlay != null) {
+                        mLockBorderOverlay.invalidateOutlineGeometry();
                     }
                 }
                 if (!visible) return;
@@ -2007,7 +2013,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                mBtnShield.setColor(AcidTheme.COLOR_AMBER);
+                if (!isChromeLockedByAgent() && mBtnShield != null) {
+                    mBtnShield.setColor(AcidTheme.COLOR_AMBER);
+                }
                 AcidFeedback.info(BrowserActivity.this, "已拦截 App 唤端跳转 (共 " + totalBlocked + " 次)");
             }
         });

@@ -2,6 +2,8 @@ package com.acid.browser;
 
 import android.content.Context;
 import android.graphics.Rect;
+import android.os.SystemClock;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -26,10 +28,16 @@ public class AcidWebView extends WebView {
     public static final class IsolationPolicy {
         public final boolean allowFocus;
         public final boolean allowIme;
+        public final boolean blockProgrammaticFocus;
 
         public IsolationPolicy(boolean allowFocus, boolean allowIme) {
+            this(allowFocus, allowIme, !allowFocus);
+        }
+
+        public IsolationPolicy(boolean allowFocus, boolean allowIme, boolean blockProgrammaticFocus) {
             this.allowFocus = allowFocus;
             this.allowIme = allowIme;
+            this.blockProgrammaticFocus = blockProgrammaticFocus;
         }
 
         @Override
@@ -37,18 +45,20 @@ public class AcidWebView extends WebView {
             if (this == o) return true;
             if (!(o instanceof IsolationPolicy)) return false;
             IsolationPolicy other = (IsolationPolicy) o;
-            return allowFocus == other.allowFocus && allowIme == other.allowIme;
+            return allowFocus == other.allowFocus
+                && allowIme == other.allowIme
+                && blockProgrammaticFocus == other.blockProgrammaticFocus;
         }
 
         @Override
         public int hashCode() {
-            return (allowFocus ? 2 : 0) + (allowIme ? 1 : 0);
+            return (allowFocus ? 4 : 0) + (allowIme ? 2 : 0) + (blockProgrammaticFocus ? 1 : 0);
         }
     }
 
     /**
      * Single source of truth determining whether a tab's {@link WebView} may take Android window
-     * focus or expose an {@link InputConnection} to the soft keyboard.
+     * focus, expose an {@link InputConnection} to the soft keyboard, or steal focus via script.
      */
     public static IsolationPolicy resolveIsolationPolicy(
         boolean isActiveTab,
@@ -56,13 +66,45 @@ public class AcidWebView extends WebView {
         boolean isDrivenByAgent,
         boolean humanUiInputFocused
     ) {
-        if (!isActiveTab || humanUiInputFocused
-                || (controlMode == AgentOverlayView.MODE_AGENT && isDrivenByAgent)) {
+        if (!isActiveTab || (controlMode == AgentOverlayView.MODE_AGENT && isDrivenByAgent)) {
             // Deny both Android Window Focus (which binds IMM mServedView) and IME connections;
             // raw dispatchTouchEvent + DOM JS execution remain functional for Agent automation.
-            return new IsolationPolicy(false, false);
+            return new IsolationPolicy(false, false, true);
         }
-        return new IsolationPolicy(true, true);
+        if (humanUiInputFocused) {
+            // Keep focusableInTouchMode=true so direct human taps reclaim focus from URL/Agent bar,
+            // while blocking non-touch/JS autofocus steals away from active chrome text inputs.
+            return new IsolationPolicy(true, true, true);
+        }
+        return new IsolationPolicy(true, true, false);
+    }
+
+    /**
+     * Decides whether an incoming {@code requestFocus} call on this WebView should be honored.
+     */
+    public static boolean shouldAllowRequestFocus(
+        boolean allowFocus,
+        boolean blockProgrammaticFocus,
+        boolean hasRecentTouch
+    ) {
+        if (!allowFocus) return false;
+        if (blockProgrammaticFocus && !hasRecentTouch) return false;
+        return true;
+    }
+
+    /**
+     * Decides whether a popup tab created in {@code onCreateWindow} should inherit Agent binding.
+     */
+    public static boolean shouldTransferAgentBindingToNewWindow(
+        boolean sourceIsBoundTab,
+        int controlMode,
+        int agentBoundTabId,
+        boolean sourceIsActiveTab
+    ) {
+        if (agentBoundTabId > 0) {
+            return sourceIsBoundTab;
+        }
+        return controlMode == AgentOverlayView.MODE_AGENT && sourceIsActiveTab;
     }
 
     /**
@@ -85,9 +127,13 @@ public class AcidWebView extends WebView {
         return activeTabId;
     }
 
+    private static final long USER_TOUCH_FOCUS_WINDOW_MS = 600L;
+
     private final int mDefaultDescendantFocusability;
     private boolean mAllowFocus = true;
     private boolean mAllowIme = true;
+    private boolean mBlockProgrammaticFocus = false;
+    private long mLastUserTouchUptimeMs = 0L;
 
     public AcidWebView(Context context) {
         super(context);
@@ -98,8 +144,15 @@ public class AcidWebView extends WebView {
         if (policy == null) return;
         boolean prevAllowFocus = mAllowFocus;
         boolean prevAllowIme = mAllowIme;
+        boolean prevBlockProgrammatic = mBlockProgrammaticFocus;
         mAllowFocus = policy.allowFocus;
         mAllowIme = policy.allowIme;
+        mBlockProgrammaticFocus = policy.blockProgrammaticFocus;
+
+        if (!prevBlockProgrammatic && mBlockProgrammaticFocus) {
+            // Invalidate prior touch timestamp when UI bar takes focus so a stale tap cannot hijack it back
+            mLastUserTouchUptimeMs = 0L;
+        }
 
         if (mAllowFocus) {
             if (!prevAllowFocus) {
@@ -139,8 +192,18 @@ public class AcidWebView extends WebView {
     }
 
     @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (ev != null && mAllowFocus && mAllowIme && ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            mLastUserTouchUptimeMs = SystemClock.uptimeMillis();
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    @Override
     public boolean requestFocus(int direction, Rect previouslyFocusedRect) {
-        if (!mAllowFocus) {
+        boolean hasRecentTouch = mLastUserTouchUptimeMs > 0L
+            && (SystemClock.uptimeMillis() - mLastUserTouchUptimeMs) <= USER_TOUCH_FOCUS_WINDOW_MS;
+        if (!shouldAllowRequestFocus(mAllowFocus, mBlockProgrammaticFocus, hasRecentTouch)) {
             return false;
         }
         return super.requestFocus(direction, previouslyFocusedRect);
