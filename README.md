@@ -1,220 +1,139 @@
 # Acid Browser
 
-**Acid Browser** 是一款专为 Android 打造的超轻量、零第三方依赖的智能浏览器。
+**Acid Browser** 是一款基于 Android 系统原生 `WebView` 构建的浏览器，无 AndroidX 或第三方大型 SDK 依赖，内置自主 AI Agent 对话循环、本地沙盒工作区、用户脚本引擎、ABP 广告拦截与本地 MCP 服务网关。
 
 [English](README_EN.md) | [中文说明](README.md)
-
-它基于系统原生 `WebView` 构建，不依赖 AndroidX 或任何外部重量级 SDK，安装包体积仅约 **520 KB**。在提供干净、流畅的日常网页浏览体验的同时，原生内嵌了自主 AI Agent 循环、本地沙盒工作区、油猴用户脚本引擎、ABP 广告拦截器以及标准 MCP 控制网关。
-
-<p align="center">
-  <img src="docs/screenshots/01-home.jpg" width="250" alt="Acid Browser 主页" />
-  <img src="docs/screenshots/02-menu-page1.jpg" width="250" alt="功能菜单 第 1 页" />
-  <img src="docs/screenshots/07-agent-chat.jpg" width="250" alt="Acid Agent 对话窗" />
-</p>
 
 ---
 
 ## 目录
 
-- [界面速览](#界面速览)
-- [快速上手](#快速上手)
-- [模型配置图文教程](#模型配置图文教程)
-- [功能详解](#功能详解)
+- [核心设计思路](#核心设计思路)
+- [浏览器功能列表](#浏览器功能列表)
+- [Agent 工具与动作](#agent-工具与动作)
+- [快速上手与模型配置](#快速上手与模型配置)
 - [沙盒工作区目录结构](#沙盒工作区目录结构)
 - [权限说明](#权限说明)
 - [构建与测试](#构建与测试)
 
 ---
 
-## 界面速览
+## 核心设计思路
 
-底部为五行单手操作栏：**后退 · 前进 · 主页 · 标签页 · 功能菜单**。地址栏左侧的盾牌图标即广告拦截状态指示。
+### 1. 点击与填表不依赖 `screenshot` 视觉模型
 
-点击最右侧「☰」打开**功能面板**，共两页，24 项能力全部在此集中调度：
+与依赖“截图 + 多模态视觉模型猜坐标”的 GUI Agent 不同，Acid Browser 的网页交互主路径建立在页内注入的 `agent_bridge.js` DOM 语义蒸馏之上：
 
-<table>
-  <tr>
-    <td align="center"><b>第 1 页：日常浏览</b></td>
-    <td align="center"><b>第 2 页：AI 与扩展</b></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/02-menu-page1.jpg" width="300" alt="功能菜单第一页" /></td>
-    <td><img src="docs/screenshots/03-menu-page2.jpg" width="300" alt="功能菜单第二页" /></td>
-  </tr>
-</table>
+1. **语义句柄（`[e1..eN]`）而非像素识别**：`observe` 会遍历页面真实可交互节点，过滤不可见元素并做遮挡检测，生成精简的 `[e1..eN]` 句柄表与正文摘录，纯文本大模型即可直接理解页面结构与可点控件。
+2. **原生触摸与 DOM 闭环**：调用 `click` 时由客户端解析目标元素的几何坐标并派发 Android 原生 `MotionEvent`（后台标签页走 DOM 点击），`fill` 直接操作输入节点并兼容 React/Vue 受控组件且带回读校验。
+3. **每步自动回传最新观测**：所有状态变更动作（`navigate`、`click`、`fill`、`select`、`scroll`、`wait`、`upload`、`set_mode`、`back`、`reload`）执行后都会自动附带更新后的页面状态与 `[e1..eN]` 列表，无需额外轮次。
 
-| 第 1 页 | 作用 |
-| :--- | :--- |
-| 夜间模式 | 一键切换 OLED 纯黑深色主题 |
-| 无痕模式 | 不落盘历史、不写缓存、退出即清会话 Cookie |
-| 书签收藏 | 收藏、编辑、搜索、排序当前站点 |
-| 历史浏览 | 全量历史，按时间分桶并支持实时检索 |
-| 电脑 / 手机模式 | 一键切换 1280px 桌面视口 + 桌面 UA |
-| 下载管理 | 分类筛选、进度查看、系统分享与 APK 直装 |
-| Acid Agent | 打开原生 AI Agent 悬浮对话窗 |
-| 设置 | 通用 / AI / 防护 / 隐私四级设置目录 |
+### 2. `screenshot` 是后期按需补上的视觉补充
 
-| 第 2 页 | 作用 |
-| :--- | :--- |
-| 模型配置 | 管理大模型供应商与模型列表（详见下文） |
-| 广告拦截 | 内置规则、在线订阅与自定义 ABP 规则 |
-| 脚本管理 | 用户脚本安装、开关、查看与删除 |
-| 技能管理 | Agent 按需加载的 Markdown 技能库 |
-| MCP | 本地 MCP 控制网关与令牌认证 |
-| 关于 | 版本信息与在线检查更新 |
+`screenshot` 动作并不是主链路，而是在版本演进后期遇到纯 DOM 语义树无法覆盖的场景时才补充的兜底工具，主要用于：
+
+- Canvas 画布、数据图表、图片内容或图形验证码的视觉核对；
+- 纯图标按钮缺失文本/属性、或需要确认页面实际排版与视觉状态时。
+
+调用 `screenshot` 时，坐标空间会自动与当前手机/电脑模式视口对齐；支持开启 `som=true` 仅在返回的截图图像本身绘制 `[e1..eN]` 标注框（不污染网页 DOM），也支持通过 `save_path` 将原分辨率截图保存到沙盒工作区供 `bash` 处理或 `upload` 上传。
+
+### 3. 前台锁定与人工接管
+
+- **防误触锁定**：当 Agent 正在驱动当前前台标签页时，系统会锁定该页的网页触控与地址栏操作，避免人工误触打断执行；此时仍可通过底部「标签页」切换到其他标签页自由浏览，互不干扰。
+- **人工接管（Takeover）**：遇到登录密码、短信验证码、图形验证或支付确认时，Agent 会调用 `request_takeover`（或由用户点击顶部「点此接管」）暂停循环并归还控制权；处理完成后可在对话窗输入补充说明发送恢复，或直接点击「交还AI」继续任务。
 
 ---
 
-## 快速上手
+## 浏览器功能列表
 
-1. 安装 `build/Acid-browser.apk`，首次打开即为内置流光主页。
-2. 在搜索框直接输入关键词或网址；也可提交 `acid://search?q=关键词` 调用默认搜索引擎。
-3. 想用 AI 时，只需两步：**先配一个模型**（见下节），再点「Acid Agent」开始对话。
+### 日常浏览与标签管理
+- **地址栏与搜索**：支持输入网址或关键词搜索（可在设置中切换内置搜索引擎或自定义搜索模板），支持 `acid://search?q=...` 快捷查询。
+- **多标签页概览**：双列缩略图网格概览，支持新建、切换、单页关闭与一键关闭其他空闲标签页；Agent 正在运行的标签页受保护不会被误关。
+- **电脑 / 手机模式切换**：支持一键切换 `1280px` 桌面视口与桌面 User-Agent，电脑模式状态按标签页独立隔离。
+- **书签与历史记录**：支持书签收藏、编辑、搜索与排序；全量浏览历史按「今天 / 昨天 / 最近 7 天 / 更早以前」分组并支持实时检索。
+- **内置流光主页**：支持在 `homepage/index.html` 中使用自定义 HTML/CSS/JS 替换主页。
 
----
+### 界面、排版与隐私
+- **主题与全屏**：支持日间模式与 OLED 纯黑夜间模式；全屏模式适配异形屏挖孔区域并保留右下角退出按钮。
+- **网页全局字号缩放**：支持按百分比调节网页字号并实时预览。
+- **无痕模式**：不记录浏览历史、禁用表单保存与磁盘缓存，退出时自动清理临时会话与 Cookie。
+- **浏览防护**：支持 `Do Not Track (DNT)` 请求头、无图省流模式、长按网页元素上下文菜单，以及三级第三方 App 唤端拦截策略（完全拦截 / 弹窗询问 / 允许；Agent 接管期间强制完全拦截）。
 
-## 模型配置图文教程
+### 广告拦截、脚本与下载
+- **ABP 广告拦截引擎**：支持内置规则库、在线规则订阅更新以及自定义规则编辑（`||domain^`、`@@||whitelist^`、`domain##selector`），保存后热重载生效。
+- **用户脚本（Userscripts）**：原生支持 `==UserScript==` 元数据（`@name`、`@match`、`@exclude`、`@run-at`、`@grant`、`@require` 等），支持导入代码/URL、点击 `.user.js` 链接安装、独立开关与脚本菜单命令；内置防跳 App 与解除复制限制脚本。
+- **下载管理**：内置多线程分块断点续传下载器（也可切换为系统 `DownloadManager`），支持网盘直链请求头/Cookie 适配、按类型筛选（安装包 / 压缩包 / 文档 / 图片 / 视频 / 音频）、系统分享、APK 安装与在线检查更新。
 
-Acid Browser 不预置任何密钥，模型完全由你自己接入。**支持 DeepSeek、Kimi、阿里云百炼（Qwen）、小米 MiMo、MiniMax、硅基流动等主流厂商，也支持任意 OpenAI 兼容接口**（中转网关、Ollama、vLLM 等）。
-
-### 第一步：打开模型配置
-
-`☰ 功能菜单` → 第 2 页 → **「模型配置」**
-
-<img src="docs/screenshots/04-model-providers.jpg" width="330" alt="模型配置供应商列表" />
-
-列表中每个供应商卡片会显示 **密钥状态**（`● 密钥已就绪` / `● 待填密钥`）、接口地址与已装载模型，并提供：
-
-- **测试连通性** —— 实时向 `/models` 探测，验证 Key 与网络是否可用；
-- **配置与模型** —— 编辑密钥、接口与模型列表；
-- **删除** —— 仅自定义供应商可删除。
-
-### 第二步：添加供应商
-
-点击右上角 **「+ 添加供应商」**，有两种接入方式：
-
-<img src="docs/screenshots/05-model-catalog.jpg" width="330" alt="添加模型供应商" />
-
-- **默认供应商目录**：内置 6 家主流厂商，选好后填入 API Key 即可一键装载官方推荐模型，无需手动抄写模型 ID；
-- **自定义供应商 API**：适用于第三方聚合网关、本地 Ollama / vLLM，或任何兼容 OpenAI Chat Completions 协议的服务。
-
-### 第三步：填写密钥与模型
-
-以 Kimi 为例，进入配置页后：
-
-<img src="docs/screenshots/06-model-editor.jpg" width="330" alt="供应商配置页" />
-
-1. **API 密钥**：输入框默认掩码显示，点击右上角「显示密钥」可临时查看，保存后不会在列表中明文回显；
-2. **API 接口地址**：内置厂商已自动填好，自定义服务填到 `/v1` 为止；
-3. **装载的模型列表**：可三种方式调整
-   - **同步接口模型 (`/models`)** —— 自动拉取服务端真实可用的模型 ID；
-   - **手动添加** —— 填入自定义模型 ID 与显示名；
-   - **恢复默认模型** —— 还原该厂商的推荐清单；
-4. 点击底部 **「保存供应商配置」** 完成装载。
-
-> 本地免鉴权服务（如 `http://127.0.0.1:11434/v1`）可以留空 API Key，Agent 会自动跳过鉴权要求。
-
-### 第四步：在对话里选择模型与思考深度
-
-打开 **「Acid Agent」**，点击卡片右上角的模型按钮即可进入**选择模型**面板：
-
-<img src="docs/screenshots/08-agent-model-select.jpg" width="330" alt="选择模型与思考深度" />
-
-- 顶部搜索框可按供应商或模型名**实时过滤**；
-- 点任意模型行的「选择」即可立即切换，无需重启；
-- **思考深度 (Reasoning Effort)** 提供 默认 / 关闭 / 低 / 中 / 高 / 极高 六档：简单任务用「关闭」或「低」响应更快，复杂调研用「高」以上；
-- 右上角「模型配置」可直达上一步的供应商管理页。
+### AI 对话窗、技能与 MCP 网关
+- **原生 Agent 悬浮对话窗**：支持多会话管理与持久化恢复、按会话切换模型及思考深度（Reasoning Effort：默认 / 关闭 / 低 / 中 / 高 / 极高）、运行中随时发消息重引导、接管暂停期间带文字指令恢复。
+- **多模型接入**：内置主流模型厂商目录并支持自定义 OpenAI 兼容接口（含本地无鉴权服务如 Ollama / vLLM），支持接口 `/models` 列表拉取与连通性测试。
+- **对话附件上传**：单次支持选取最多 5 个本地文件（图片支持多模态识图输入，文本/代码/其他文件暂存至工作区 `uploads/` 供工具读取或上传至网页）。
+- **技能库（Skills）**：支持 Markdown 编写的按需加载技能包，内置主页定制（`homepage_dev.md`）、用户脚本编写（`userscript_dev.md`）与网盘下载（`cloud_drive_download.md`）三份技能，也支持导入自定义技能。
+- **本地 MCP 控制网关**：遵循 Model Context Protocol（JSON-RPC 2.0，提供 `GET /sse` 与 `POST /mcp`），默认绑定 `127.0.0.1:3090` 并强制 Bearer Token 鉴权（可手动开启局域网访问与重置令牌），仓库附带 `scripts/acid-mcp-stdio-bridge.py` 用于桥接 stdio 客户端。
 
 ---
 
-## 功能详解
+## Agent 工具与动作
 
-### 1. 原生 AI Agent
+Agent 与本地 MCP 网关共用同一套工具声明（`AcidSandboxTools`），共注册 5 个工具：
 
-点「Acid Agent」打开悬浮对话窗，新会话自带示例指令：
-
-<img src="docs/screenshots/07-agent-chat.jpg" width="330" alt="Acid Agent 对话窗" />
-
-Agent 内建 5 个本地沙盒工具，无需任何插件即可完成闭环任务：
-
-| 工具 | 能力 |
+| 工具名 | 说明 |
 | :--- | :--- |
-| `browser` | 网页感知与操控：`observe` / `navigate` / `click` / `fill` / `select` / `scroll` / `wait` / `eval` / `set_mode` / `tabs` / `back` / `reload` / `request_takeover` |
-| `read` | 读取工作区文件（带行号） |
-| `write` | 新建或覆写文件，写入 `userscripts/*.user.js` 会自动校验并安装脚本 |
-| `edit` | 精确字符串替换 |
-| `bash` | 在工作区目录执行 shell 命令 |
+| `browser` | 网页感知与自动化控制入口，通过 `action` 参数调度具体动作 |
+| `read` | 按行读取沙盒工作区内的 UTF-8 文本文件（`file_path`、`offset`、`limit`） |
+| `write` | 创建或覆写工作区文本文件；写入 `userscripts/<name>.user.js` 时会自动校验 `==UserScript==` 头并安装 |
+| `edit` | 对工作区已有文本文件做精确字符串替换（支持 `replace_all`） |
+| `bash` | 在沙盒工作区目录通过 `/system/bin/sh` 执行命令（`command`、`timeout_ms`；出于安全限制仅应用内 Agent 可用，MCP 网关禁止调用） |
 
-关键机制：**闭环保留** —— 每次点击/填表/滚动后都会自动回传最新页面快照与 `[e1..eN]` 语义句柄，Agent 不必盲目重试；遇到登录、验证码、支付确认时会主动 `request_takeover` 暂停，交还给你手动处理。
+### `browser` 工具支持的 `action` 列表
 
-### 2. 广告拦截与唤端防护
+| `action` | 功能说明 | 关键参数 |
+| :--- | :--- | :--- |
+| `observe` | 蒸馏当前页面 `[e1..eN]` 交互元素与正文摘录 | `selector`、`offset`、`limit`、`text_offset`、`text_limit`、`viewport_only` |
+| `navigate` | 在目标标签页加载指定网页或工作区文件 | `url` |
+| `click` | 点击页面元素（前景派发原生触摸，后台走 DOM 点击，含重定位自愈） | `ref` / `text`（可配 `exact`） / `selector` / `x`、`y`、`coord_space` |
+| `fill` | 向输入框或富文本区域填值并回读校验（兼容 React/Vue） | `ref` / `selector`、`text`、`clear`、`submit` |
+| `select` | 在 `<select>` 下拉框中选择指定选项 | `ref`、`text` |
+| `scroll` | 滚动视口或指定容器 | `direction`（`down`/`up`/`left`/`right`/`top`/`bottom`）、`amount`、`ref` |
+| `wait` | 等待页面稳定、元素出现/消失、文本出现、网络空闲或固定时长 | `condition`（`stable`/`selector`/`text`/`gone`/`networkidle`/`ms`）、`selector`、`text`、`quiet_ms`、`ms`、`timeout_ms` |
+| `eval` | 在页面执行 JavaScript 并自动等待 Promise 返回结果 | `code` |
+| `upload` | 将工作区文件传入网页 `<input type="file">`（拒绝受保护的系统配置文件） | 点击目标（`ref`/`text`/`selector`/`x`/`y`）+ `file_path` 或 `file_paths` |
+| `download` | 拉起内置多线程下载确认页（支持常见网盘 UA/Cookie 自动补全） | `url`、`file_name`、`user_agent` |
+| `set_mode` | 切换桌面/移动模式或开关 SoM 标注 | `mode`（`desktop`/`mobile`）、`som` |
+| `tabs` | 列出、新建、切换或关闭标签页 | `tab_action`（`list`/`new`/`switch`/`close`）、`tab_id`、`url` |
+| `back` | 当前标签页后退 | — |
+| `reload` | 刷新当前标签页 | — |
+| `screenshot` | 截取当前可见视口图像（仅在需要纯视觉判断时使用） | `som`（仅在图像上绘制标号）、`save_path` |
+| `request_takeover` | 暂停自动流程请求人工接管（仅应用内 Agent 可用，MCP 网关禁用） | `reason` |
 
-<img src="docs/screenshots/09-adblock.jpg" width="330" alt="广告拦截面板" />
+---
 
-- 顶部总开关，开启后自动拦截广告请求、弹窗贴片与恶意唤端跳转；
-- 内置规则库（示例设备已加载 3132 条）与**在线 ABP / EasyList 订阅**一键拉取更新；
-- **自定义规则**支持标准语法：
-  - `||ad-domain.com^` —— 按域名拦截
-  - `@@||safe.com^` —— 白名单放行
-  - `example.com##.banner` —— 隐藏指定元素
-- 修改规则后无需重启，保存即热重载生效。
+## 快速上手与模型配置
 
-### 3. 用户脚本（Userscripts）
-
-<img src="docs/screenshots/10-userscripts.jpg" width="330" alt="脚本管理" />
-
-原生支持 `==UserScript==` 元数据（`@name` / `@match` / `@exclude` / `@run-at` / `@version`），每个脚本独立开关。三种安装方式：
-
-1. 点「导入脚本」粘贴代码或 URL；
-2. 网页中点击 `.user.js` 链接，自动呼出安装器；
-3. 直接让 Agent 用 `write` 写进 `userscripts/`。
-
-### 4. 技能（Skills）
-
-<img src="docs/screenshots/11-skills.jpg" width="330" alt="技能管理" />
-
-技能是给 Agent 的**专业作业手册**，用 Markdown 编写、按需加载，平时零 Token 消耗。内置两份官方技能：
-
-- **Custom Homepage Design & Authoring** —— 主页定制向导与免 Key 接口库；
-- **Browser Feature & Userscript Authoring** —— 用户脚本编写规范与运行时边界。
-
-你也可以点「添加技能」导入自己的 Markdown 流程，Agent 会自动编目并在此后的任务中优先遵循。
-
-### 5. 本地 MCP 控制网关
-
-<img src="docs/screenshots/12-mcp.jpg" width="330" alt="MCP 服务面板" />
-
-开启后，电脑端的 Cursor、Claude Desktop 等工具可远程操控这台手机上的浏览器：
-
-- 遵循 Model Context Protocol（JSON-RPC 2.0），支持 `GET /sse` 流式传输与 `POST /mcp` 直接调用；
-- 默认**仅监听 `127.0.0.1`** 并强制 Bearer Token 鉴权，令牌支持查看、复制与重新生成（重置后旧令牌立即失效）；
-- 仅在手动打开「允许局域网设备连接」后才绑定 `0.0.0.0`，建议只在可信 Wi-Fi 下使用；
-- 仓库附带 `scripts/acid-mcp-stdio-bridge.py`，用于桥接只支持 stdio 的客户端。
-
-### 6. 其他日常能力
-
-- **极简流光主页**：渐变时钟、日期胶囊、书签磁贴；可完全用 `homepage/index.html` 自定义；
-- **多标签管理**：网格缩略图概览，支持单卡滑动关闭与一键全关；
-- **完整历史**：不限条数，按今天 / 昨天 / 过去 7 天 / 更早分组，支持实时搜索；
-- **分类下载**：按安装包 / 压缩包 / 文档 / 图片 / 视频 / 音频筛选，支持系统分享与 APK 一键安装；
-- **阅读与隐私**：OLED 夜间模式、无痕浏览、无图省流、DNT 请求头、长按网页上下文菜单。
+1. 安装构建输出的 `build/Acid-browser.apk`。
+2. 在底部菜单「☰」第 2 页进入 **「模型配置」**：
+   - 可从内置厂商目录选择（填入 API Key 后即可装载模型），或添加自定义 OpenAI 兼容服务（接口地址填到 `/v1` 为止，本地免鉴权接口如 `http://127.0.0.1:11434/v1` 可留空密钥）；
+   - 支持「同步接口模型 (`/models`)」、手动添加模型 ID 及测试连通性。
+3. 点击顶部右上角 Agent 图标打开悬浮对话窗，点击模型按钮即可切换当前模型与思考深度，输入任务即可开始执行。
 
 ---
 
 ## 沙盒工作区目录结构
 
-浏览器的配置、书签、历史、主页、脚本与规则均以直观的文本或 JSON 文件存放在应用私有工作区中，支持通过内置 UI 或外部文件编辑实时热重载：
+配置、书签、历史、主页、技能、用户脚本与广告规则均存放在应用私有工作区中，核心 JSON 配置与规则文件支持热重载：
 
 ```text
 /data/user/0/com.acid.browser/files/acid_workspace/
 ├── settings.json               # 全局浏览器设置
 ├── bookmarks.json              # 书签收藏列表
 ├── history.json                # 浏览历史记录（含时间戳）
+├── uploads/                    # 对话上传的附件暂存目录
 ├── homepage/
-│   └── index.html              # 本地自定义主页入口（同目录可放 CSS/JS/图片）
+│   └── index.html              # 本地自定义主页入口
 ├── skills/
-│   ├── homepage_dev.md         # 内置主页设计与定制技能
-│   └── userscript_dev.md       # 内置用户脚本编写技能
+│   ├── homepage_dev.md         # 主页定制技能
+│   ├── userscript_dev.md       # 用户脚本编写技能
+│   └── cloud_drive_download.md # 网盘直链下载技能
 ├── userscripts/
 │   └── anti_app_hijack.user.js # 内置防跳 App 与解除复制限制脚本
 └── adblock/
@@ -226,15 +145,15 @@ Agent 内建 5 个本地沙盒工具，无需任何插件即可完成闭环任�
 
 ## 权限说明
 
-遵循最小必要权限原则，仅申请以下 5 项基础权限，无需 Root、无需无障碍服务、无需悬浮窗权限：
+仅申请以下 5 项基础权限，不需要 Root、无障碍服务或系统悬浮窗权限：
 
 | 权限名称 | 用途说明 |
 | :--- | :--- |
-| `INTERNET` | 网页浏览、在线模型 API 请求、应用更新检查 |
-| `ACCESS_NETWORK_STATE` | 检测当前网络连接状态与局域网地址 |
-| `READ_EXTERNAL_STORAGE` | 在下载管理中读取系统 `Download` 目录已下载文件 |
-| `WRITE_EXTERNAL_STORAGE` | 将网页下载的文件保存至本地存储 |
-| `REQUEST_INSTALL_PACKAGES` | 在下载管理或更新弹窗中拉起安装 APK 文件 |
+| `INTERNET` | 网页浏览、模型 API 请求、规则订阅与更新检查 |
+| `ACCESS_NETWORK_STATE` | 检测网络连接状态与局域网 IP |
+| `READ_EXTERNAL_STORAGE` | 读取本地已下载文件 |
+| `WRITE_EXTERNAL_STORAGE` | 保存下载文件到系统存储 |
+| `REQUEST_INSTALL_PACKAGES` | 在下载管理或更新弹窗中安装 APK |
 
 ---
 
@@ -243,15 +162,14 @@ Agent 内建 5 个本地沙盒工具，无需任何插件即可完成闭环任�
 ### 环境要求
 - Linux / macOS
 - JDK 8+（`javac`、`java`）
-- Android SDK Build Tools（`aapt`、`dx`、`zipalign`、`apksigner`）及 `android.jar`（API 23+，`minSdkVersion` 为 24）
+- Node.js（用于运行 JS Bridge 回归测试）
+- Android SDK Build Tools（`aapt`、`dx`、`zipalign`、`apksigner`）及 `android.jar`（`minSdkVersion` 为 24）
 
 ### 常用命令
 ```bash
-# 运行纯 JVM 回归测试并打包签名 APK
+# 运行全部回归测试并编译打包签名 APK（输出 build/Acid-browser.apk）
 ./build.sh
 
-# 仅运行纯 JVM 回归测试套件（12 项核心模块测试）
+# 仅运行 JVM 回归测试与 JS Bridge 回归测试
 ./test.sh
 ```
-
-构建完成后，签名安装包输出在 `build/Acid-browser.apk`。
