@@ -399,9 +399,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mTabHistory.add(tabId);
 
         if (mOverlayView != null) {
-            if (!mOverviewShowing) {
-                mOverlayView.bringToFront();
-            }
+            // mOverlayView sits permanently right above mWebViewContainer and below Tier-0
+            // overlays (TabsOverviewView, AgentFloatingView) in mCenterFrame; never bringToFront()
+            // here or tab switches will hoist the lock overlay on top of the open Agent drawer.
             mOverlayView.postInvalidateOnAnimation();
         }
 

@@ -187,6 +187,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testChromeLockPolicyAndOutlineGeometry(); }
         });
 
+        // 27. Takeover Resume Custom Message & Running Steering Input State
+        run("27. Takeover & Running Steering: Custom Resume Prompt, Bound Tab Preservation & Action Button Mode", new TestCase() {
+            @Override public void execute() throws Exception { testTakeoverResumeAndRunningSteering(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -4058,5 +4063,76 @@ public final class TestRunner {
         assertStrictlyOrthogonalClosedLoop(narrow, "Ultra-narrow split");
         assertTrue(narrow.cornerRadius < 24f && narrow.cornerRadius >= 1f,
             "Clamps corner radius safely for narrow segments (" + narrow.cornerRadius + ")");
+    }
+
+    static void testTakeoverResumeAndRunningSteering() {
+        String fallback = "我已完成手动操作，请观察当前最新页面并继续完成任务。";
+
+        // 1. Takeover resume must preserve custom user instructions instead of forcing fallback prompt
+        assertEquals("已登录，帮我点第二个标签",
+            AcidAgentLoop.resolveTakeoverResumePrompt("  已登录，帮我点第二个标签  ", false, fallback),
+            "Takeover resume with typed text forwards trimmed user instruction");
+        assertEquals(fallback,
+            AcidAgentLoop.resolveTakeoverResumePrompt("   \n\t ", false, fallback),
+            "Takeover resume with empty/whitespace text falls back to default continuation prompt");
+        assertEquals(fallback,
+            AcidAgentLoop.resolveTakeoverResumePrompt(null, false, fallback),
+            "Takeover resume with null prompt falls back to default continuation prompt");
+        assertEquals("",
+            AcidAgentLoop.resolveTakeoverResumePrompt("  ", true, fallback),
+            "Takeover resume with attachments and empty text lets attachment prompt apply");
+
+        // 2. Bound tab preservation during steering / takeover resume
+        assertEquals(Integer.valueOf(3),
+            Integer.valueOf(AcidAgentLoop.resolveSubmitBindTabId(3, true, true, 7)),
+            "Preserves live agent-bound tab 3 even if user is currently browsing tab 7");
+        assertEquals(Integer.valueOf(7),
+            Integer.valueOf(AcidAgentLoop.resolveSubmitBindTabId(3, false, true, 7)),
+            "Falls back to active tab 7 if previous bound tab was closed");
+        assertEquals(Integer.valueOf(7),
+            Integer.valueOf(AcidAgentLoop.resolveSubmitBindTabId(-1, false, true, 7)),
+            "Binds active tab 7 when no tab was previously bound");
+        assertEquals(Integer.valueOf(7),
+            Integer.valueOf(AcidAgentLoop.resolveSubmitBindTabId(3, true, false, 7)),
+            "Normal idle submit binds active tab 7");
+
+        // 3. AgentFloatingView primary action button transitions across (running, paused, hasInput)
+        assertEquals(Integer.valueOf(AgentFloatingView.BTN_MODE_STOP),
+            Integer.valueOf(AgentFloatingView.resolveSendStopButtonMode(true, false, false)),
+            "Running with empty input shows Stop");
+        assertEquals(Integer.valueOf(AgentFloatingView.BTN_MODE_SEND),
+            Integer.valueOf(AgentFloatingView.resolveSendStopButtonMode(true, false, true)),
+            "Running with typed input switches button to Send so follow-up can be delivered");
+        assertEquals(Integer.valueOf(AgentFloatingView.BTN_MODE_RESUME),
+            Integer.valueOf(AgentFloatingView.resolveSendStopButtonMode(false, true, false)),
+            "Paused for takeover with empty input shows Resume");
+        assertEquals(Integer.valueOf(AgentFloatingView.BTN_MODE_SEND),
+            Integer.valueOf(AgentFloatingView.resolveSendStopButtonMode(false, true, true)),
+            "Paused for takeover with typed input switches button to Send");
+        assertEquals(Integer.valueOf(AgentFloatingView.BTN_MODE_SEND),
+            Integer.valueOf(AgentFloatingView.resolveSendStopButtonMode(false, false, false)),
+            "Idle with empty input shows Send");
+        assertEquals(Integer.valueOf(AgentFloatingView.BTN_MODE_SEND),
+            Integer.valueOf(AgentFloatingView.resolveSendStopButtonMode(false, false, true)),
+            "Idle with typed input shows Send");
+
+        // 4. In-app toast eligibility & non-IME-blocking placement policy
+        assertTrue(AcidFeedback.isInAppHostEligible(false, false, true),
+            "Focused active Activity uses non-blocking in-app toast instead of system Toast");
+        assertTrue(!AcidFeedback.isInAppHostEligible(false, false, false),
+            "Dialog / background window falls back to system Toast when Activity lacks window focus");
+        assertTrue(!AcidFeedback.isInAppHostEligible(true, false, true),
+            "Finishing Activity skips in-app toast");
+        assertTrue(!AcidFeedback.isInAppHostEligible(false, true, true),
+            "Destroyed Activity skips in-app toast");
+
+        assertTrue(!BrowserActivity.shouldPlaceInAppToastAtTop(false, false, false),
+            "Normal browsing places in-app toast at bottom above toolbar");
+        assertTrue(BrowserActivity.shouldPlaceInAppToastAtTop(true, false, false),
+            "Open Agent floating drawer moves in-app toast to top clear of drawer input");
+        assertTrue(BrowserActivity.shouldPlaceInAppToastAtTop(false, true, false),
+            "Focused Agent input moves in-app toast to top clear of IME");
+        assertTrue(BrowserActivity.shouldPlaceInAppToastAtTop(false, false, true),
+            "Focused URL bar moves in-app toast to top clear of IME");
     }
 }

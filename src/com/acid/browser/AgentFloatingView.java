@@ -8,7 +8,9 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
+import android.text.Editable;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -37,6 +39,27 @@ import java.util.Map;
  * tool call cards, markdown responses, session management, and vertical drag repositioning.
  */
 public class AgentFloatingView extends FrameLayout implements AcidOverlay {
+
+    public static final int BTN_MODE_SEND = 0;
+    public static final int BTN_MODE_STOP = 1;
+    public static final int BTN_MODE_RESUME = 2;
+
+    /**
+     * Pure decision helper mapping (running, pausedForTakeover, hasInput) to the primary
+     * action button state so typed follow-up instructions always display and act as "发送".
+     */
+    public static int resolveSendStopButtonMode(boolean running, boolean pausedForTakeover, boolean hasInput) {
+        if (hasInput) {
+            return BTN_MODE_SEND;
+        }
+        if (running) {
+            return BTN_MODE_STOP;
+        }
+        if (pausedForTakeover) {
+            return BTN_MODE_RESUME;
+        }
+        return BTN_MODE_SEND;
+    }
 
     private static final String TAG = "AgentFloatingView";
 
@@ -506,10 +529,25 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
                 }
             }
         });
+        mEtAgentTaskInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                updateSendStopButtonState();
+            }
+        });
         mEtAgentTaskInput.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
                 if (actionId == EditorInfo.IME_ACTION_SEND || actionId == EditorInfo.IME_ACTION_DONE) {
+                    if (mAgentLoop != null && mAgentLoop.isRunning() && !hasPendingTextOrAttachments()) {
+                        return true; // Avoid killing an active task on accidental empty Enter
+                    }
                     triggerAgentSubmitOrStop();
                     return true;
                 }
@@ -1336,6 +1374,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             if ("正在执行...".equals(resText)
                 || "[任务已由用户手动停止]".equals(resText)
                 || "[用户接管，任务等待]".equals(resText)
+                || "[已收到新指令]".equals(resText)
                 || "[执行结束]".equals(resText)) {
                 resText = AcidLocale.tr(resText);
             }
@@ -1411,15 +1450,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         if (mTvAgentSessionTitle != null && mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
             mTvAgentSessionTitle.setText(formatSessionTitle(mAgentLoop.getActiveSession().title));
         }
-        if (mBtnAgentSendStop != null) {
-            if (running) {
-                mBtnAgentSendStop.update(AcidIcons.ICON_CLOSE, "停止", AcidTheme.COLOR_RED);
-            } else if (pausedForTakeover) {
-                mBtnAgentSendStop.update(AcidIcons.ICON_AGENT, "继续", accent);
-            } else {
-                mBtnAgentSendStop.update(AcidIcons.ICON_SEND, "发送", accent);
-            }
-        }
+        updateSendStopButtonState();
 
         boolean isWorking = running || pausedForTakeover;
         updateAttachButtonAppearance();
@@ -1617,6 +1648,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
 
     private void renderPendingAttachmentsBar() {
         updateAttachButtonAppearance();
+        updateSendStopButtonState();
         if (mPendingAttachmentsScroll == null || mPendingAttachmentsRow == null) return;
         mPendingAttachmentsRow.removeAllViews();
         if (mPendingAttachments.isEmpty() && !mIsImportingAttachments) {
@@ -1720,25 +1752,78 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         }
     }
 
+    private boolean hasPendingTextOrAttachments() {
+        String text = mEtAgentTaskInput != null ? mEtAgentTaskInput.getText().toString().trim() : "";
+        return !text.isEmpty() || !mPendingAttachments.isEmpty();
+    }
+
+    private void updateSendStopButtonState() {
+        if (mBtnAgentSendStop == null) return;
+        boolean running = mAgentLoop != null && mAgentLoop.isRunning();
+        boolean paused = mAgentLoop != null && mAgentLoop.isPausedForTakeover();
+        int mode = resolveSendStopButtonMode(running, paused, hasPendingTextOrAttachments());
+        int accent = AcidTheme.accent(mIsDarkMode);
+        if (mode == BTN_MODE_STOP) {
+            mBtnAgentSendStop.update(AcidIcons.ICON_CLOSE, "停止", AcidTheme.COLOR_RED);
+        } else if (mode == BTN_MODE_RESUME) {
+            mBtnAgentSendStop.update(AcidIcons.ICON_AGENT, "继续", accent);
+        } else {
+            mBtnAgentSendStop.update(AcidIcons.ICON_SEND, "发送", accent);
+        }
+    }
+
     public void triggerAgentSubmitOrStop() {
         if (mAgentLoop == null) return;
+        String task = mEtAgentTaskInput != null ? mEtAgentTaskInput.getText().toString().trim() : "";
+        boolean hasInput = !task.isEmpty() || !mPendingAttachments.isEmpty();
+
         if (mAgentLoop.isRunning()) {
-            mAgentLoop.stopLoop();
+            if (!hasInput) {
+                mAgentLoop.stopLoop();
+                setHasUnread(false);
+                AcidFeedback.info(getContext(), "已停止当前 Agent 任务");
+                return;
+            }
+            if (mIsImportingAttachments) {
+                AcidFeedback.info(getContext(), "正在导入所选附件，请稍候...");
+                return;
+            }
+            List<AgentAttachmentHelper.AttachmentItem> toSend =
+                new ArrayList<AgentAttachmentHelper.AttachmentItem>(mPendingAttachments);
+            mPendingAttachments.clear();
+            renderPendingAttachmentsBar();
+            mEtAgentTaskInput.setText("");
             setHasUnread(false);
-            AcidFeedback.info(getContext(), "已停止当前 Agent 任务");
+            hideKeyboard();
+            mAgentLoop.steerOrSubmitUserTask(task, toSend);
             return;
         }
         if (mAgentLoop.isPausedForTakeover()) {
+            if (!hasInput) {
+                setHasUnread(false);
+                hideKeyboard();
+                mAgentLoop.resumeFromTakeover();
+                return;
+            }
+            if (mIsImportingAttachments) {
+                AcidFeedback.info(getContext(), "正在导入所选附件，请稍候...");
+                return;
+            }
+            List<AgentAttachmentHelper.AttachmentItem> toSend =
+                new ArrayList<AgentAttachmentHelper.AttachmentItem>(mPendingAttachments);
+            mPendingAttachments.clear();
+            renderPendingAttachmentsBar();
+            mEtAgentTaskInput.setText("");
             setHasUnread(false);
-            mAgentLoop.resumeFromTakeover();
+            hideKeyboard();
+            mAgentLoop.resumeFromTakeover(task, toSend);
             return;
         }
         if (mIsImportingAttachments) {
             AcidFeedback.info(getContext(), "正在导入所选附件，请稍候...");
             return;
         }
-        String task = mEtAgentTaskInput.getText().toString().trim();
-        if (task.isEmpty() && mPendingAttachments.isEmpty()) {
+        if (!hasInput) {
             AcidFeedback.warn(getContext(), "请输入要让 Agent 执行的任务指令，或点击左侧 + 上传附件");
             return;
         }

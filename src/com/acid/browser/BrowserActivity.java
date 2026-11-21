@@ -122,6 +122,37 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private volatile String mLastAgentActivitySummary = "";
     private boolean mUrlBarFocused = false;
     private boolean mAgentInputFocused = false;
+    private TextView mInAppToastView;
+    private int mInAppToastLevel = AcidFeedback.LEVEL_INFO;
+    private final Runnable mHideInAppToastRunnable = new Runnable() {
+        @Override
+        public void run() {
+            hideInAppToastAnimated();
+        }
+    };
+    private final AcidFeedback.InAppToastHost mInAppToastHost = new AcidFeedback.InAppToastHost() {
+        @Override
+        public boolean showInAppToast(String translatedMessage, int level, long durationMs) {
+            return renderInAppToast(translatedMessage, level, durationMs);
+        }
+
+        @Override
+        public void dismissInAppToast() {
+            hideInAppToastImmediately();
+        }
+    };
+
+    /**
+     * Pure placement policy: keep in-app notifications at the top whenever the floating Agent
+     * drawer or a text input bar is active so the pill stays well clear of the IME &amp; input bar.
+     */
+    public static boolean shouldPlaceInAppToastAtTop(
+        boolean floatingShowing,
+        boolean agentInputFocused,
+        boolean urlBarFocused
+    ) {
+        return floatingShowing || agentInputFocused || urlBarFocused;
+    }
 
     private void syncHumanUiInputFocus() {
         if (mController != null) {
@@ -384,6 +415,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onFloatingShown() {
                 mOverlayStack.notifyViewportShown(mAgentFloatingView);
+                hideInAppToastImmediately();
             }
 
             @Override
@@ -413,6 +445,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onAgentInputFocusChanged(boolean focused) {
                 mAgentInputFocused = focused;
+                if (focused) {
+                    hideInAppToastImmediately();
+                }
                 syncHumanUiInputFocus();
             }
         });
@@ -970,6 +1005,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onFocusChange(View v, boolean hasFocus) {
                 mUrlBarFocused = hasFocus;
+                if (hasFocus) {
+                    hideInAppToastImmediately();
+                }
                 syncHumanUiInputFocus();
             }
         });
@@ -1181,6 +1219,17 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         exitLp.bottomMargin = dp(24);
         mRootContainer.addView(mBtnExitFullscreen, exitLp);
 
+        mInAppToastView = buildInAppToastView();
+        mInAppToastView.setVisibility(View.GONE);
+        FrameLayout.LayoutParams toastLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL
+        );
+        toastLp.leftMargin = dp(20);
+        toastLp.rightMargin = dp(20);
+        toastLp.bottomMargin = dp(60);
+        mRootContainer.addView(mInAppToastView, toastLp);
+
         if (Build.VERSION.SDK_INT >= 30) {
             mRootContainer.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
                 @Override
@@ -1216,6 +1265,109 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
         });
         return btn;
+    }
+
+    private TextView buildInAppToastView() {
+        TextView tv = new TextView(this) {
+            @Override
+            public boolean onTouchEvent(android.view.MotionEvent event) {
+                return false; // Strictly touch-transparent so underlying controls/inputs are never blocked
+            }
+        };
+        tv.setClickable(false);
+        tv.setFocusable(false);
+        tv.setFocusableInTouchMode(false);
+        tv.setGravity(Gravity.CENTER);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setMaxLines(4);
+        tv.setEllipsize(TextUtils.TruncateAt.END);
+        tv.setPadding(dp(14), dp(9), dp(14), dp(9));
+        if (Build.VERSION.SDK_INT >= 21) {
+            tv.setElevation(dp(8));
+        }
+        styleInAppToastView(tv, AcidFeedback.LEVEL_INFO);
+        return tv;
+    }
+
+    private void styleInAppToastView(TextView tv, int level) {
+        if (tv == null) return;
+        int bg = mIsDarkMode ? Color.parseColor("#EE16161C") : Color.parseColor("#F01E293B");
+        int stroke;
+        if (level == AcidFeedback.LEVEL_OK) {
+            stroke = AcidTheme.COLOR_GREEN;
+        } else if (level == AcidFeedback.LEVEL_WARN) {
+            stroke = AcidTheme.COLOR_AMBER;
+        } else if (level == AcidFeedback.LEVEL_ERROR) {
+            stroke = AcidTheme.COLOR_RED;
+        } else {
+            stroke = mIsDarkMode ? Color.parseColor("#334155") : Color.parseColor("#475569");
+        }
+        tv.setBackground(AcidTheme.cardBorderBg(this, bg, stroke, 1, AcidTheme.RADIUS_CARD));
+        tv.setTextColor(Color.parseColor("#F8FAFC"));
+    }
+
+    private boolean renderInAppToast(String translatedMessage, int level, long durationMs) {
+        if (mInAppToastView == null || mRootContainer == null) return false;
+        boolean destroyed = Build.VERSION.SDK_INT >= 17 && isDestroyed();
+        if (!AcidFeedback.isInAppHostEligible(isFinishing(), destroyed, hasWindowFocus())) {
+            return false;
+        }
+        mInAppToastLevel = level;
+        styleInAppToastView(mInAppToastView, level);
+        mInAppToastView.setText(translatedMessage);
+
+        boolean placeAtTop = shouldPlaceInAppToastAtTop(
+            mAgentFloatingView != null && mAgentFloatingView.isShowing(),
+            mAgentInputFocused,
+            mUrlBarFocused
+        );
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) mInAppToastView.getLayoutParams();
+        if (lp != null) {
+            int desiredGravity = (placeAtTop ? Gravity.TOP : Gravity.BOTTOM) | Gravity.CENTER_HORIZONTAL;
+            int desiredTop = placeAtTop ? dp(56) : 0;
+            int desiredBottom = placeAtTop ? 0 : dp(60);
+            if (lp.gravity != desiredGravity || lp.topMargin != desiredTop || lp.bottomMargin != desiredBottom) {
+                lp.gravity = desiredGravity;
+                lp.topMargin = desiredTop;
+                lp.bottomMargin = desiredBottom;
+                mInAppToastView.setLayoutParams(lp);
+            }
+        }
+
+        mInAppToastView.removeCallbacks(mHideInAppToastRunnable);
+        mInAppToastView.animate().cancel();
+        mInAppToastView.setAlpha(0f);
+        mInAppToastView.setVisibility(View.VISIBLE);
+        mInAppToastView.bringToFront();
+        mInAppToastView.animate().alpha(1f).setDuration(120L).start();
+        mInAppToastView.postDelayed(mHideInAppToastRunnable, Math.max(800L, durationMs));
+        return true;
+    }
+
+    private void hideInAppToastAnimated() {
+        if (mInAppToastView == null || mInAppToastView.getVisibility() != View.VISIBLE) return;
+        mInAppToastView.animate().cancel();
+        mInAppToastView.animate()
+            .alpha(0f)
+            .setDuration(120L)
+            .withEndAction(new Runnable() {
+                @Override
+                public void run() {
+                    if (mInAppToastView != null) {
+                        mInAppToastView.setVisibility(View.GONE);
+                    }
+                }
+            })
+            .start();
+    }
+
+    private void hideInAppToastImmediately() {
+        if (mInAppToastView == null) return;
+        mInAppToastView.removeCallbacks(mHideInAppToastRunnable);
+        mInAppToastView.animate().cancel();
+        mInAppToastView.setAlpha(1f);
+        mInAppToastView.setVisibility(View.GONE);
     }
 
     private LinearLayout buildTakeoverBanner() {
@@ -1789,6 +1941,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         );
 
         mOverlayStack.applyTheme(dark);
+        if (mInAppToastView != null && mInAppToastView.getVisibility() == View.VISIBLE) {
+            styleInAppToastView(mInAppToastView, mInAppToastLevel);
+        }
 
         if (mIsFullscreenMode || (mController != null && mController.isCustomViewShowing())) {
             applyFullscreenWindowFlags(true);
@@ -2223,6 +2378,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     @Override
     protected void onResume() {
         super.onResume();
+        AcidFeedback.registerHost(mInAppToastHost);
         if (mController != null) {
             mController.onResume();
         }
@@ -2258,6 +2414,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     @Override
     protected void onPause() {
         super.onPause();
+        hideInAppToastImmediately();
+        AcidFeedback.unregisterHost(mInAppToastHost);
         if (mController != null) {
             mController.onPause();
         }
@@ -2283,6 +2441,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     @Override
     protected void onDestroy() {
+        hideInAppToastImmediately();
+        AcidFeedback.unregisterHost(mInAppToastHost);
         if (mController != null && mController.getUserscriptManager() != null) {
             try {
                 mController.getUserscriptManager().getStorage().flushSync();

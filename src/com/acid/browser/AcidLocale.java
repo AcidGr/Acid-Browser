@@ -856,6 +856,7 @@ public final class AcidLocale {
         EN_MAP.put("正在执行...", "Running...");
         EN_MAP.put("[任务已由用户手动停止]", "[Task stopped by user]");
         EN_MAP.put("[用户接管，任务等待]", "[Paused for user takeover]");
+        EN_MAP.put("[已收到新指令]", "[New instruction received]");
         EN_MAP.put("[执行结束]", "[Execution finished]");
         EN_MAP.put("[思考结束]", "[Thinking finished]");
         EN_MAP.put("[回答结束]", "[Reply finished]");

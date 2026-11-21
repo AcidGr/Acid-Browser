@@ -386,7 +386,44 @@ public class AcidAgentLoop {
     }
 
     /**
-     * Starts a new user task turn or resumes after human takeover.
+     * Resolves the user prompt sent when resuming after a human takeover pause.
+     * Custom user text always takes precedence; only an empty input (with no attachments)
+     * falls back to the default continuation prompt.
+     */
+    public static String resolveTakeoverResumePrompt(
+        String customPrompt,
+        boolean hasAttachments,
+        String fallbackPrompt
+    ) {
+        String trimmed = customPrompt != null ? customPrompt.trim() : "";
+        if (!trimmed.isEmpty()) {
+            return trimmed;
+        }
+        if (hasAttachments) {
+            return "";
+        }
+        return fallbackPrompt != null ? fallbackPrompt : "";
+    }
+
+    /**
+     * Resolves which tab ID should own the Agent binding on task submit / steer / takeover resume.
+     * Preserves an existing valid bound tab when steering a running loop or resuming from takeover
+     * so background Agent tasks never hijack the tab the human is currently viewing.
+     */
+    public static int resolveSubmitBindTabId(
+        int existingBoundTabId,
+        boolean existingBoundTabExists,
+        boolean preserveExistingBinding,
+        int activeTabId
+    ) {
+        if (preserveExistingBinding && existingBoundTabId > 0 && existingBoundTabExists) {
+            return existingBoundTabId;
+        }
+        return activeTabId;
+    }
+
+    /**
+     * Starts a new user task turn, rejecting if a loop is already running.
      */
     public void submitUserTask(final String userPrompt) {
         submitUserTask(userPrompt, null);
@@ -396,7 +433,28 @@ public class AcidAgentLoop {
         final String rawUserPrompt,
         final List<AgentAttachmentHelper.AttachmentItem> rawAttachments
     ) {
-        if (mRunning) {
+        submitUserTaskInternal(rawUserPrompt, rawAttachments, false);
+    }
+
+    /**
+     * Starts a user task turn, or interrupts an actively running loop to steer it with the
+     * user's new follow-up instruction.
+     */
+    public void steerOrSubmitUserTask(
+        final String rawUserPrompt,
+        final List<AgentAttachmentHelper.AttachmentItem> rawAttachments
+    ) {
+        submitUserTaskInternal(rawUserPrompt, rawAttachments, true);
+    }
+
+    private void submitUserTaskInternal(
+        final String rawUserPrompt,
+        final List<AgentAttachmentHelper.AttachmentItem> rawAttachments,
+        final boolean interruptIfRunning
+    ) {
+        final boolean wasRunning = mRunning;
+        final boolean wasPausedForTakeover = mPausedForTakeover;
+        if (wasRunning && !interruptIfRunning) {
             addErrorItem("Agent 正在运行中，请先点击停止按钮中断当前任务。");
             return;
         }
@@ -415,8 +473,6 @@ public class AcidAgentLoop {
         final String titleSeed = !trimmedPrompt.isEmpty()
             ? trimmedPrompt
             : ("附件: " + attachments.get(0).displayName);
-
-        final Thread prevWorker = mWorkerThread;
 
         AcidModelStore.ConfiguredProvider activeProvider = mModelStore.getActiveProvider();
         AcidModelStore.ModelEntry activeModel = mModelStore.getActiveModel();
@@ -437,12 +493,34 @@ public class AcidAgentLoop {
             return;
         }
         final BrowserController.TabSession activeTab = mController.getActiveTab();
-        final int bindTabId = activeTab != null ? activeTab.id : -1;
+        final int activeTabId = activeTab != null ? activeTab.id : -1;
+        final int existingBoundId = mController.getAgentBoundTabId();
+        final boolean existingBoundExists = existingBoundId > 0 && mController.getTabById(existingBoundId) != null;
+        final int bindTabId = resolveSubmitBindTabId(
+            existingBoundId,
+            existingBoundExists,
+            wasRunning || wasPausedForTakeover,
+            activeTabId
+        );
 
+        final Thread prevWorker = mWorkerThread;
         mStopRequested = false;
         mPausedForTakeover = false;
         mRunning = true;
         final int runGen = mRunGeneration.incrementAndGet();
+
+        if (wasRunning) {
+            final HttpURLConnection conn = mActiveConnection;
+            mActiveConnection = null;
+            disconnectQuietly(conn);
+            if (prevWorker != null) {
+                try {
+                    prevWorker.interrupt();
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to interrupt the agent worker thread for steering", e);
+                }
+            }
+        }
 
         final Thread worker = new Thread(new Runnable() {
             @Override
@@ -489,7 +567,11 @@ public class AcidAgentLoop {
                     return;
                 }
 
-                if (bindTabId > 0) {
+                if (wasRunning) {
+                    closePendingRunningUiItems(session, "[已收到新指令]");
+                }
+
+                if (bindTabId > 0 && mController.getAgentBoundTabId() != bindTabId) {
                     mController.setAgentBoundTabId(bindTabId);
                 }
 
@@ -526,6 +608,13 @@ public class AcidAgentLoop {
     }
 
     public void resumeFromTakeover() {
+        resumeFromTakeover(null, null);
+    }
+
+    public void resumeFromTakeover(
+        final String customPrompt,
+        final List<AgentAttachmentHelper.AttachmentItem> attachments
+    ) {
         if (!mPausedForTakeover || mRunning) return;
         if (mController.getAgentBoundTabId() <= 0) {
             BrowserController.TabSession activeTab = mController.getActiveTab();
@@ -533,11 +622,14 @@ public class AcidAgentLoop {
                 mController.setAgentBoundTabId(activeTab.id);
             }
         }
-        submitUserTask(AcidLocale.getString(
+        String fallback = AcidLocale.getString(
             R.string.takeover_resume_prompt,
             "我已完成手动操作，请观察当前最新页面并继续完成任务。",
             "I have completed the manual action. Please observe the current page and continue the task."
-        ));
+        );
+        boolean hasAttachments = attachments != null && !attachments.isEmpty();
+        String effectivePrompt = resolveTakeoverResumePrompt(customPrompt, hasAttachments, fallback);
+        submitUserTaskInternal(effectivePrompt, attachments, false);
     }
 
     private String buildSystemPrompt() {
@@ -669,7 +761,7 @@ public class AcidAgentLoop {
                     addErrorItem(session, "已达到单次任务最大自主执行步数上限 (" + mMaxLoopSteps + " 步)，智能体已暂停以防止死循环。如需继续，请发送新指令。");
                     break;
                 }
-                notifyState(true, false, step);
+                notifyState(true, false, step, runGen);
 
                 JSONArray payloadMessages = buildPrunedMessagesForRequest(session);
                 JSONObject responseMsg = callChatCompletionsStream(session, payloadMessages, step, runGen);
@@ -1895,11 +1987,12 @@ public class AcidAgentLoop {
         return args.toString();
     }
 
-    private void notifyState(final boolean running, final boolean paused, final int step) {
+    private void notifyState(final boolean running, final boolean paused, final int step, final int runGen) {
         if (mListener == null) return;
         mMainHandler.post(new Runnable() {
             @Override
             public void run() {
+                if (mRunGeneration.get() != runGen) return;
                 mListener.onLoopStateChanged(running, paused, step);
             }
         });
