@@ -157,7 +157,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 // 1. Pinned Search Bar
                 final EditText etSearch = new EditText(ctx);
                 etSearch.setText(mSearchKeyword);
-                LinearLayout searchBox = AcidWidgets.searchBox(ctx, mIsDarkMode, etSearch, "搜索下载文件名...");
+                LinearLayout searchBox = AcidWidgets.searchBox(ctx, mIsDarkMode, etSearch, "搜索下载");
                 LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                 );
@@ -322,7 +322,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 ctx,
                 mIsDarkMode,
                 AcidIcons.ICON_DOWNLOAD,
-                allList == null || allList.isEmpty() ? "暂无下载任务记录" : "未找到匹配的下载任务"
+                allList == null || allList.isEmpty() ? "暂无下载记录" : "未找到匹配任务"
             ));
             return;
         }

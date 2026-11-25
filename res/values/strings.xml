@@ -42,12 +42,12 @@
     <!-- Agent Floating Drawer & Quick Samples -->
     <string name="agent_new_session">新对话</string>
     <string name="agent_sessions">会话</string>
-    <string name="agent_input_hint">向 Acid Agent 发送网页或沙盒任务...</string>
+    <string name="agent_input_hint">输入任务指令...</string>
     <string name="agent_btn_send">发送</string>
     <string name="agent_btn_stop">停止</string>
     <string name="agent_btn_continue">继续</string>
-    <string name="agent_welcome_title">Acid Agent 自主智能体</string>
-    <string name="agent_welcome_desc">内置 browser (网页感知与操控)、read、write、edit、bash 五大沙盒工具。您可以直接发送指令让它跨网页调研、填写表单、编写油猴脚本或生成本地数据报告。</string>
+    <string name="agent_welcome_title">Acid Agent</string>
+    <string name="agent_welcome_desc">支持网页操控、信息检索、编写脚本与处理本地文件。</string>
     <string name="agent_sample_1">帮我下载网盘里的这个文件</string>
     <string name="agent_sample_2">帮我做一个贪吃蛇游戏并直接展示在页面上</string>
     <string name="agent_sample_3">帮我去掉当前页面上的广告</string>

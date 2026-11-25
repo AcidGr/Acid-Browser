@@ -42,6 +42,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 /**
@@ -205,6 +206,11 @@ public final class TestRunner {
         // 30. Multi-Select Batch Operations & Bilingual Localization
         run("30. Multi-Select Batch Ops: Bookmark Batch Move/Delete, History Single/Batch Delete, Download Shared-File Safe Batch Delete & Locale", new TestCase() {
             @Override public void execute() throws Exception { testMultiSelectBatchOperationsAndLocale(); }
+        });
+
+        // 31. WebDAV Cloud Sync, Full Backup ZIP Round-Trip & Security Guards
+        run("31. WebDAV & Backup Center: PROPFIND/MKCOL/PUT/GET Sync, Merge/Overwrite Restore, Zip-Slip Rejection, Secret Isolation & Locale", new TestCase() {
+            @Override public void execute() throws Exception { testWebDavSyncAndFullBackupRestore(); }
         });
 
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
@@ -4870,6 +4876,527 @@ public final class TestRunner {
                 dc.destroy();
             }
             SkillStorageVault.deleteRecursiveSafe(tmpDir);
+        }
+    }
+
+    // =========================================================================
+    // 31. WebDAV Cloud Sync, Full Backup ZIP & Security Guards
+    // =========================================================================
+
+    private static final class LoopbackWebDavServer implements Runnable {
+        private final ServerSocket mServer;
+        private final String mExpectedAuthHeader;
+        private final Set<String> mDirs = Collections.synchronizedSet(new HashSet<String>());
+        private final Map<String, byte[]> mFiles = Collections.synchronizedMap(new HashMap<String, byte[]>());
+        private volatile boolean mRunning = true;
+        private final Thread mThread;
+
+        LoopbackWebDavServer(String user, String pass) throws IOException {
+            mServer = new ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"));
+            mExpectedAuthHeader = "Basic " + WebDavClient.encodeBase64Utf8(user + ":" + pass);
+            mDirs.add("/dav");
+            mThread = new Thread(this, "TestWebDavServer");
+            mThread.setDaemon(true);
+            mThread.start();
+        }
+
+        String getBaseUrl() {
+            return "http://127.0.0.1:" + mServer.getLocalPort() + "/dav";
+        }
+
+        boolean hasDir(String path) {
+            return mDirs.contains(normalizePath(path));
+        }
+
+        byte[] getStoredFile(String path) {
+            return mFiles.get(normalizePath(path));
+        }
+
+        void deleteStoredFile(String path) {
+            mFiles.remove(normalizePath(path));
+        }
+
+        private static String normalizePath(String raw) {
+            String p = raw != null ? raw.trim() : "/";
+            int q = p.indexOf('?');
+            if (q >= 0) p = p.substring(0, q);
+            while (p.length() > 1 && p.endsWith("/")) p = p.substring(0, p.length() - 1);
+            return p;
+        }
+
+        void stop() {
+            mRunning = false;
+            try { mServer.close(); } catch (IOException ignored) {}
+        }
+
+        @Override
+        public void run() {
+            while (mRunning) {
+                try {
+                    Socket sock = mServer.accept();
+                    handleClient(sock);
+                } catch (IOException e) {
+                    if (!mRunning) break;
+                }
+            }
+        }
+
+        private void handleClient(Socket sock) {
+            try {
+                sock.setSoTimeout(5000);
+                InputStream in = sock.getInputStream();
+                ByteArrayOutputStream hdrBuf = new ByteArrayOutputStream();
+                int st = 0;
+                int b;
+                while ((b = in.read()) != -1) {
+                    hdrBuf.write(b);
+                    if (st == 0 && b == '\r') st = 1;
+                    else if (st == 1 && b == '\n') st = 2;
+                    else if (st == 2 && b == '\r') st = 3;
+                    else if (st == 3 && b == '\n') break;
+                    else st = (b == '\r') ? 1 : 0;
+                }
+                String rawHdrs = new String(hdrBuf.toByteArray(), StandardCharsets.ISO_8859_1);
+                if (rawHdrs.isEmpty()) return;
+                String[] lines = rawHdrs.split("\r\n");
+                String[] reqLine = lines[0].split(" ");
+                String method = reqLine.length > 0 ? reqLine[0] : "GET";
+                String path = normalizePath(reqLine.length > 1 ? reqLine[1] : "/");
+
+                String auth = "";
+                int contentLength = 0;
+                for (int i = 1; i < lines.length; i++) {
+                    int c = lines[i].indexOf(':');
+                    if (c <= 0) continue;
+                    String k = lines[i].substring(0, c).trim().toLowerCase();
+                    String v = lines[i].substring(c + 1).trim();
+                    if ("authorization".equals(k)) auth = v;
+                    else if ("content-length".equals(k)) {
+                        try { contentLength = Integer.parseInt(v); } catch (NumberFormatException ignored) {}
+                    }
+                }
+
+                // Always drain exact request body before sending any HTTP status (avoids TCP RST race on 401/PUT)
+                byte[] body = new byte[contentLength > 0 ? contentLength : 0];
+                int off = 0;
+                while (off < body.length) {
+                    int n = in.read(body, off, body.length - off);
+                    if (n == -1) break;
+                    off += n;
+                }
+
+                OutputStream out = sock.getOutputStream();
+                if (!mExpectedAuthHeader.equals(auth)) {
+                    writeResp(out, 401, "Unauthorized", "WWW-Authenticate: Basic realm=\"AcidTest\"\r\n", new byte[0]);
+                    return;
+                }
+
+                if ("PROPFIND".equalsIgnoreCase(method)) {
+                    if (mDirs.contains(path)) {
+                        byte[] xml = ("<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                            + "<D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>" + path
+                            + "</D:href><D:propstat><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>")
+                            .getBytes(StandardCharsets.UTF_8);
+                        writeResp(out, 207, "Multi-Status", "Content-Type: application/xml\r\n", xml);
+                    } else if (mFiles.containsKey(path)) {
+                        byte[] xml = ("<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                            + "<D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>" + path
+                            + "</D:href></D:response></D:multistatus>").getBytes(StandardCharsets.UTF_8);
+                        writeResp(out, 207, "Multi-Status", "Content-Type: application/xml\r\n", xml);
+                    } else {
+                        writeResp(out, 404, "Not Found", "", new byte[0]);
+                    }
+                } else if ("MKCOL".equalsIgnoreCase(method)) {
+                    if (mDirs.contains(path)) {
+                        writeResp(out, 405, "Method Not Allowed", "", new byte[0]);
+                    } else {
+                        int lastSlash = path.lastIndexOf('/');
+                        String parent = lastSlash > 0 ? path.substring(0, lastSlash) : "/";
+                        if (!mDirs.contains(parent)) {
+                            writeResp(out, 409, "Conflict", "", new byte[0]);
+                        } else {
+                            mDirs.add(path);
+                            writeResp(out, 201, "Created", "", new byte[0]);
+                        }
+                    }
+                } else if ("PUT".equalsIgnoreCase(method)) {
+                    int lastSlash = path.lastIndexOf('/');
+                    String parent = lastSlash > 0 ? path.substring(0, lastSlash) : "/";
+                    if (!mDirs.contains(parent)) {
+                        writeResp(out, 409, "Conflict", "", new byte[0]);
+                    } else {
+                        mFiles.put(path, body);
+                        writeResp(out, 201, "Created", "", new byte[0]);
+                    }
+                } else if ("GET".equalsIgnoreCase(method)) {
+                    byte[] payload = mFiles.get(path);
+                    if (payload == null) {
+                        writeResp(out, 404, "Not Found", "", new byte[0]);
+                    } else {
+                        writeResp(out, 200, "OK", "Content-Type: application/octet-stream\r\n", payload);
+                    }
+                } else {
+                    writeResp(out, 405, "Method Not Allowed", "", new byte[0]);
+                }
+            } catch (IOException ignored) {
+            } finally {
+                try { sock.close(); } catch (IOException ignored) {}
+            }
+        }
+
+        private static void writeResp(
+            OutputStream out,
+            int code,
+            String reason,
+            String extraHeaders,
+            byte[] body
+        ) throws IOException {
+            String hdr = "HTTP/1.1 " + code + " " + reason + "\r\n"
+                + "Content-Length: " + body.length + "\r\n"
+                + "Connection: close\r\n"
+                + (extraHeaders != null ? extraHeaders : "")
+                + "\r\n";
+            out.write(hdr.getBytes(StandardCharsets.ISO_8859_1));
+            if (body.length > 0) out.write(body);
+            out.flush();
+        }
+    }
+
+    private static void testWebDavSyncAndFullBackupRestore() throws Exception {
+        File root = File.createTempFile("acid_webdav_test_", "_dir");
+        root.delete();
+        root.mkdirs();
+
+        LoopbackWebDavServer server = new LoopbackWebDavServer("aciduser", "app-pass-9876");
+        try {
+            // 1. Setup populated source workspace
+            File srcWs = new File(root, "src_ws");
+            srcWs.mkdirs();
+            InMemoryPrefs srcPrefs = new InMemoryPrefs();
+            BrowserDataStore srcStore = new BrowserDataStore(
+                srcPrefs, new InMemoryPrefs(),
+                new File(srcWs, "settings.json"),
+                new File(srcWs, "bookmarks.json"),
+                new File(srcWs, "history.json")
+            );
+            srcStore.saveBookmarks(Arrays.asList(
+                new BrowserDataStore.EntryItem("Acid Docs", "https://acid.dev/docs", 1730000000000L, "Work/AI"),
+                new BrowserDataStore.EntryItem("Top Search", "https://duckduckgo.com", 1730000010000L, "")
+            ));
+            srcStore.recordHistory("Secret Browsing Page", "https://private-history.example/secret", false);
+            srcStore.setDarkMode(true);
+            srcStore.set(AcidSettings.WEB_TEXT_ZOOM, Integer.valueOf(125));
+            srcStore.set(AcidSettings.MCP_AUTH_TOKEN, "secret-mcp-token-xyz");
+            srcStore.setAdBlockEnabled(true);
+            srcStore.setAdBlockSubscriptionUrl("https://filters.example/easylist.txt");
+
+            UserscriptManager srcUm = new UserscriptManager(srcWs);
+            File demoJs = new File(srcUm.getUserscriptsDir(), "cloud_demo.user.js");
+            AcidIo.writeFileUtf8Safe(demoJs,
+                "// ==UserScript==\n// @name Cloud Demo\n// @namespace https://acid.test\n// @version 1.0\n// @match *://*/*\n// ==/UserScript==\nconsole.log('cloud-demo');\n");
+            File depsFile = new File(srcUm.getUserscriptsDir(), "deps/helper.js");
+            AcidIo.writeFileUtf8Safe(depsFile, "window.__cloudDep = 1;\n");
+            srcUm.getStorage().setValue("https://acid.test:Cloud Demo", "counter", Integer.valueOf(42));
+            srcUm.getStorage().flushSync();
+
+            File srcCustomAd = new File(srcWs, "adblock/custom_rules.txt");
+            File srcSubAd = new File(srcWs, "adblock/subscriptions.txt");
+            AcidIo.writeFileUtf8Safe(srcCustomAd, "||cloud-ad.example^\n");
+            AcidIo.writeFileUtf8Safe(srcSubAd, "||sub-ad.example^\n");
+            AdBlockManager srcAb = new AdBlockManager(srcCustomAd, srcSubAd, srcStore);
+            srcAb.loadAllRulesSync();
+
+            AcidIo.writeFileUtf8Safe(new File(srcWs, "homepage/index.html"),
+                "<html><body><h1>Custom Acid Home</h1></body></html>");
+
+            SkillManager srcSm = new SkillManager(null, srcWs);
+            AcidIo.writeFileUtf8Safe(new File(srcSm.getSkillsDir(), "cloud_skill/SKILL.md"),
+                "---\nname: cloud_skill\ndescription: Cloud synced skill\n---\nBody\n");
+            srcSm.setSkillEnabled("paused_skill", false);
+
+            BrowserBackupManager.WorkspaceTarget srcTarget =
+                new BrowserBackupManager.WorkspaceTarget(srcWs, srcStore, srcUm, srcAb, srcSm);
+
+            // 2. WebDAV auth check & connection test
+            WebDavClient.WebDavConfig badCfg = new WebDavClient.WebDavConfig(
+                server.getBaseUrl(), "AcidSync/Sub", "aciduser", "wrong-pass"
+            );
+            boolean got401 = false;
+            try {
+                WebDavClient.testConnection(badCfg);
+            } catch (WebDavClient.WebDavException wde) {
+                got401 = (wde.statusCode == 401);
+            }
+            assertTrue(got401, "Wrong WebDAV credentials trigger HTTP 401 WebDavException");
+
+            WebDavClient.WebDavConfig validCfg = new WebDavClient.WebDavConfig(
+                server.getBaseUrl(), "AcidSync/Sub", "aciduser", "app-pass-9876"
+            );
+            String connMsg = WebDavClient.testConnection(validCfg);
+            assertTrue(connMsg.contains("连接成功"), "Valid WebDAV PROPFIND test returns success message");
+
+            // 3. Upload full backup & separate bookmarks.html to WebDAV
+            WebDavClient.SyncSelection fullSel = new WebDavClient.SyncSelection(true, true, true, true, true);
+            BrowserBackupManager.SyncSummary upSummary = BrowserBackupManager.uploadToWebDav(srcTarget, validCfg, fullSel);
+            assertEquals(Integer.valueOf(2), Integer.valueOf(upSummary.bookmarkCount), "Upload reports 2 bookmarks");
+            assertTrue(server.hasDir("/dav/AcidSync"), "MKCOL created parent folder");
+            assertTrue(server.hasDir("/dav/AcidSync/Sub"), "MKCOL created nested target folder");
+
+            byte[] remoteHtmlBytes = server.getStoredFile("/dav/AcidSync/Sub/bookmarks.html");
+            byte[] remoteZipBytes = server.getStoredFile("/dav/AcidSync/Sub/acid_backup.zip");
+            assertTrue(remoteHtmlBytes != null && remoteHtmlBytes.length > 0, "Remote standalone bookmarks.html uploaded");
+            assertTrue(remoteZipBytes != null && remoteZipBytes.length > 0, "Remote acid_backup.zip uploaded");
+            String remoteHtmlStr = new String(remoteHtmlBytes, StandardCharsets.UTF_8);
+            assertTrue(remoteHtmlStr.contains("https://acid.dev/docs") && remoteHtmlStr.contains("Work"),
+                "Remote bookmarks.html uses standard Netscape folder/link format");
+
+            // Inspect ZIP contents for manifest & privacy exclusion of history / MCP token / WebDAV password
+            Set<String> entryNames = new HashSet<String>();
+            String zipSettingsText = "";
+            String zipAdBlockMetaText = "";
+            ZipInputStream inspectZis = new ZipInputStream(new ByteArrayInputStream(remoteZipBytes));
+            try {
+                ZipEntry ze;
+                while ((ze = inspectZis.getNextEntry()) != null) {
+                    entryNames.add(ze.getName());
+                    if ("settings.json".equals(ze.getName()) || "adblock_meta.json".equals(ze.getName())) {
+                        ByteArrayOutputStream sBos = new ByteArrayOutputStream();
+                        byte[] buf = new byte[1024];
+                        int n;
+                        while ((n = inspectZis.read(buf)) != -1) sBos.write(buf, 0, n);
+                        String text = new String(sBos.toByteArray(), StandardCharsets.UTF_8);
+                        if ("settings.json".equals(ze.getName())) {
+                            zipSettingsText = text;
+                        } else {
+                            zipAdBlockMetaText = text;
+                        }
+                    }
+                    inspectZis.closeEntry();
+                }
+            } finally {
+                inspectZis.close();
+            }
+            assertTrue(entryNames.contains("manifest.json"), "Archive includes manifest.json");
+            assertTrue(!entryNames.contains("history.json"), "Archive strictly excludes browsing history.json");
+            assertTrue(!zipSettingsText.contains("secret-mcp-token-xyz"), "Archive settings omit MCP_AUTH_TOKEN");
+            assertTrue(!zipSettingsText.contains("app-pass-9876"), "Archive settings omit WebDAV password");
+            assertTrue(zipAdBlockMetaText.contains("adblock_subscription_url")
+                    && !zipAdBlockMetaText.contains("adblock_enabled"),
+                "adblock_meta.json stores subscription URL without duplicating adblock_enabled");
+
+            // 4. Overwrite restore to clean workspace #1
+            File dstOverWs = new File(root, "dst_overwrite");
+            dstOverWs.mkdirs();
+            InMemoryPrefs overPrefs = new InMemoryPrefs();
+            BrowserDataStore overStore = new BrowserDataStore(
+                overPrefs, new InMemoryPrefs(),
+                new File(dstOverWs, "settings.json"),
+                new File(dstOverWs, "bookmarks.json"),
+                new File(dstOverWs, "history.json")
+            );
+            overStore.set(AcidSettings.MCP_AUTH_TOKEN, "local-mcp-keep");
+            UserscriptManager overUm = new UserscriptManager(dstOverWs);
+            AdBlockManager overAb = new AdBlockManager(
+                new File(dstOverWs, "adblock/custom_rules.txt"),
+                new File(dstOverWs, "adblock/subscriptions.txt"),
+                overStore
+            );
+            SkillManager overSm = new SkillManager(null, dstOverWs);
+            BrowserBackupManager.WorkspaceTarget overTarget =
+                new BrowserBackupManager.WorkspaceTarget(dstOverWs, overStore, overUm, overAb, overSm);
+
+            BrowserBackupManager.SyncSummary overRes =
+                BrowserBackupManager.restoreFromWebDav(overTarget, validCfg, fullSel, true);
+            assertEquals(Integer.valueOf(5), Integer.valueOf(overRes.getRestoredModuleCount()),
+                "Overwrite restore applies all 5 modules");
+            assertEquals(Integer.valueOf(2), Integer.valueOf(overStore.loadBookmarks().size()),
+                "Overwrite restore matches remote bookmark count");
+            String restoredAcidFolder = null;
+            for (BrowserDataStore.EntryItem bi : overStore.loadBookmarks()) {
+                if ("https://acid.dev/docs".equals(bi.url)) {
+                    restoredAcidFolder = bi.folder;
+                }
+            }
+            assertEquals("Work/AI", restoredAcidFolder, "Bookmark folder restored cleanly");
+            assertTrue(overStore.isDarkMode(), "DARK_MODE setting restored");
+            assertEquals(Integer.valueOf(125), overStore.get(AcidSettings.WEB_TEXT_ZOOM), "WEB_TEXT_ZOOM restored");
+            assertEquals("local-mcp-keep", overStore.get(AcidSettings.MCP_AUTH_TOKEN),
+                "Existing local MCP_AUTH_TOKEN preserved across settings restore");
+            assertEquals(Integer.valueOf(1), Integer.valueOf(overUm.getScripts().size()), "Userscript restored");
+            assertEquals(Integer.valueOf(42), overUm.getStorage().getValue("https://acid.test:Cloud Demo", "counter", Integer.valueOf(0)),
+                "Userscript storage value restored cleanly");
+            assertEquals("https://filters.example/easylist.txt", overStore.getAdBlockSubscriptionUrl(),
+                "AdBlock subscription URL restored");
+            assertTrue(overAb.getCustomRulesCount() >= 1 && overAb.getSubscriptionRulesCount() >= 1,
+                "AdBlock custom and subscription rules reloaded");
+            assertTrue(AcidIo.readFileUtf8(new File(dstOverWs, "homepage/index.html")).contains("Custom Acid Home"),
+                "Custom homepage HTML restored");
+            assertTrue(!overSm.isSkillEnabled("paused_skill"), "Disabled skill state restored");
+            boolean foundCloudSkill = false;
+            for (SkillManager.SkillMeta m : overSm.getSkills()) {
+                if ("cloud_skill".equals(m.name)) { foundCloudSkill = true; break; }
+            }
+            assertTrue(foundCloudSkill, "Custom skill restored and visible in SkillManager");
+
+            // 5. Merge restore into populated workspace #2 preserving local-only items
+            File dstMergeWs = new File(root, "dst_merge");
+            dstMergeWs.mkdirs();
+            InMemoryPrefs mergePrefs = new InMemoryPrefs();
+            BrowserDataStore mergeStore = new BrowserDataStore(
+                mergePrefs, new InMemoryPrefs(),
+                new File(dstMergeWs, "settings.json"),
+                new File(dstMergeWs, "bookmarks.json"),
+                new File(dstMergeWs, "history.json")
+            );
+            mergeStore.saveBookmarks(Arrays.asList(
+                new BrowserDataStore.EntryItem("Local Only", "https://local-only.example", 1730000020000L, "Local"),
+                new BrowserDataStore.EntryItem("Dup Cloud", "https://acid.dev/docs", 1730000000000L, "Work/AI")
+            ));
+            UserscriptManager mergeUm = new UserscriptManager(dstMergeWs);
+            AcidIo.writeFileUtf8Safe(new File(mergeUm.getUserscriptsDir(), "local_only.user.js"),
+                "// ==UserScript==\n// @name Local Only\n// @namespace https://local.test\n// @version 1.0\n// @match *://*/*\n// ==/UserScript==\nconsole.log('local');\n");
+            mergeUm.getStorage().setValue("local_only", "k", "keep");
+            mergeUm.getStorage().flushSync();
+            File mergeCustomAd = new File(dstMergeWs, "adblock/custom_rules.txt");
+            AcidIo.writeFileUtf8Safe(mergeCustomAd, "||local-ad.example^\n");
+            AdBlockManager mergeAb = new AdBlockManager(mergeCustomAd, null, mergeStore);
+            SkillManager mergeSm = new SkillManager(null, dstMergeWs);
+            AcidIo.writeFileUtf8Safe(new File(mergeSm.getSkillsDir(), "local_skill/SKILL.md"),
+                "---\nname: local_skill\ndescription: Local skill\n---\nBody\n");
+            BrowserBackupManager.WorkspaceTarget mergeTarget =
+                new BrowserBackupManager.WorkspaceTarget(dstMergeWs, mergeStore, mergeUm, mergeAb, mergeSm);
+
+            BrowserBackupManager.SyncSummary mergeRes =
+                BrowserBackupManager.restoreFromWebDav(mergeTarget, validCfg, fullSel, false);
+            assertEquals(Integer.valueOf(1), Integer.valueOf(mergeRes.bookmarkCount),
+                "Merge deduplicates existing URL and adds 1 new bookmark");
+            assertEquals(Integer.valueOf(3), Integer.valueOf(mergeStore.loadBookmarks().size()),
+                "Merge preserves local-only bookmark + cloud bookmarks");
+            assertEquals(Integer.valueOf(2), Integer.valueOf(mergeUm.getScripts().size()),
+                "Merge preserves both local and cloud userscripts");
+            assertEquals("keep", mergeUm.getStorage().getValue("local_only", "k", ""),
+                "Merge preserves local userscript storage key");
+            String mergedAdRules = AcidIo.readFileUtf8(mergeCustomAd);
+            assertTrue(mergedAdRules.contains("||local-ad.example^") && mergedAdRules.contains("||cloud-ad.example^"),
+                "Merge keeps local and cloud AdBlock rules");
+
+            // 6. Floccus-only WebDAV remote (bookmarks.html only, no acid_backup.zip)
+            server.deleteStoredFile("/dav/AcidSync/Sub/acid_backup.zip");
+            File floccusWs = new File(root, "dst_floccus");
+            floccusWs.mkdirs();
+            BrowserDataStore floccusStore = new BrowserDataStore(
+                new InMemoryPrefs(), new InMemoryPrefs(),
+                new File(floccusWs, "settings.json"),
+                new File(floccusWs, "bookmarks.json"),
+                new File(floccusWs, "history.json")
+            );
+            BrowserBackupManager.WorkspaceTarget floccusTarget =
+                new BrowserBackupManager.WorkspaceTarget(floccusWs, floccusStore, null, null, null);
+            BrowserBackupManager.SyncSummary floccusRes =
+                BrowserBackupManager.restoreFromWebDav(floccusTarget, validCfg, fullSel, true);
+            assertTrue(floccusRes.restoredBookmarks && floccusRes.missingRemoteArchiveNotice,
+                "Floccus-only WebDAV restores bookmarks and reports missing full archive cleanly");
+            assertEquals(Integer.valueOf(2), Integer.valueOf(floccusStore.loadBookmarks().size()),
+                "Floccus-only restore imports standalone bookmarks.html");
+
+            // 6b. Restoring AdBlock alone does not override local adblock_enabled setting
+            File abOnlyWs = new File(root, "dst_adblock_only");
+            abOnlyWs.mkdirs();
+            BrowserDataStore abOnlyStore = new BrowserDataStore(
+                new InMemoryPrefs(), new InMemoryPrefs(),
+                new File(abOnlyWs, "settings.json"),
+                new File(abOnlyWs, "bookmarks.json"),
+                new File(abOnlyWs, "history.json")
+            );
+            abOnlyStore.setAdBlockEnabled(false);
+            AdBlockManager abOnlyMgr = new AdBlockManager(
+                new File(abOnlyWs, "adblock/custom_rules.txt"),
+                new File(abOnlyWs, "adblock/subscriptions.txt"),
+                abOnlyStore
+            );
+            BrowserBackupManager.WorkspaceTarget abOnlyTarget =
+                new BrowserBackupManager.WorkspaceTarget(abOnlyWs, abOnlyStore, null, abOnlyMgr, null);
+            WebDavClient.SyncSelection adBlockOnlySel = new WebDavClient.SyncSelection(false, false, false, true, false);
+            BrowserBackupManager.restoreFromZipBytes(abOnlyTarget, remoteZipBytes, adBlockOnlySel, true);
+            assertTrue(!abOnlyStore.isAdBlockEnabled(), "AdBlock-only restore keeps existing adblock_enabled=false");
+            assertEquals("https://filters.example/easylist.txt", abOnlyStore.getAdBlockSubscriptionUrl(),
+                "AdBlock-only restore updates subscription URL");
+            assertTrue(abOnlyMgr.getCustomRulesCount() >= 1 && abOnlyMgr.getSubscriptionRulesCount() >= 1,
+                "AdBlock-only restore reloads custom & subscription rules");
+
+            // 6c. WebDAV preset detection checks
+            assertEquals(Integer.valueOf(0), Integer.valueOf(SyncBackupPageBuilder.detectPresetIndex("https://dav.jianguoyun.com/dav")),
+                "Jianguoyun preset detected");
+            assertEquals(Integer.valueOf(1), Integer.valueOf(SyncBackupPageBuilder.detectPresetIndex("https://cloud.example.com/remote.php/dav/files/u")),
+                "Nextcloud preset detected");
+            assertEquals(Integer.valueOf(2), Integer.valueOf(SyncBackupPageBuilder.detectPresetIndex("http://192.168.1.5:5244/dav")),
+                "Alist preset detected");
+            assertEquals(Integer.valueOf(3), Integer.valueOf(SyncBackupPageBuilder.detectPresetIndex("http://192.168.1.5:5005/dav")),
+                "Custom /dav server must not misdetect as Alist");
+            assertEquals(Integer.valueOf(3), Integer.valueOf(SyncBackupPageBuilder.detectPresetIndex("")),
+                "Empty URL defaults to Custom preset");
+
+            // 7. ZIP security boundary rejections (Zip-Slip, unauthorized path, missing manifest)
+            String[] badEntries = new String[]{"../evil.txt", "history.json", "only_random.txt"};
+            for (int i = 0; i < badEntries.length; i++) {
+                ByteArrayOutputStream badBos = new ByteArrayOutputStream();
+                ZipOutputStream badZos = new ZipOutputStream(badBos);
+                if (!"only_random.txt".equals(badEntries[i])) {
+                    badZos.putNextEntry(new ZipEntry("manifest.json"));
+                    badZos.write("{\"formatVersion\":1}".getBytes(StandardCharsets.UTF_8));
+                    badZos.closeEntry();
+                }
+                badZos.putNextEntry(new ZipEntry(badEntries[i]));
+                badZos.write("payload".getBytes(StandardCharsets.UTF_8));
+                badZos.closeEntry();
+                badZos.close();
+
+                boolean rejected = false;
+                try {
+                    BrowserBackupManager.restoreFromZipBytes(floccusTarget, badBos.toByteArray(), fullSel, false);
+                } catch (IOException ioe) {
+                    rejected = true;
+                }
+                assertTrue(rejected, "Malicious/invalid ZIP rejected for entry: " + badEntries[i]);
+            }
+            assertTrue(!new File(root, "evil.txt").exists(), "Zip-Slip file never written outside staging/workspace");
+
+            // 8. Bilingual localization verification
+            AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_EN);
+            try {
+                assertEquals("Sync & Backup", AcidLocale.tr("同步与备份"), "Sync & Backup title EN");
+                assertEquals("WebDAV Cloud Sync", AcidLocale.tr("WebDAV 云同步"), "WebDAV section EN");
+                assertEquals("Cloud upload complete (5 bookmarks)", AcidLocale.tr("云端上传完成（5 条书签）"),
+                    "Upload summary dynamic EN");
+                assertEquals("Restored 5 modules · 3 new bookmarks", AcidLocale.tr("已恢复 5 项模块数据 · 新增书签 3"),
+                    "Restore summary dynamic EN");
+                assertEquals("Authentication failed (HTTP 401). Check username or app password.",
+                    AcidLocale.tr("认证失败（HTTP 401），请检查用户名或应用专用密码"),
+                    "401 error dynamic EN");
+                assertEquals("Reasoning Effort", AcidLocale.tr("思考深度"), "Concise effort EN");
+                assertEquals("Export Backup", AcidLocale.tr("导出备份包"), "Concise Export Backup EN");
+                assertEquals("Import Bookmarks", AcidLocale.tr("导入书签"), "Concise Import Bookmarks EN");
+                assertEquals("Allow", AcidLocale.tr("允许唤起"), "Concise App Launch Allow EN");
+                assertEquals("Do Not Track (DNT)", AcidLocale.tr("不跟踪 (DNT)"), "Preserved DNT EN");
+                assertEquals("Skills", AcidLocale.tr("技能管理 (Skills)"), "Preserved Skills EN");
+                assertEquals("Base URL", AcidLocale.tr("Base URL"), "Preserved Base URL EN");
+                assertEquals("Access Token", AcidLocale.tr("访问 Token"), "Preserved Access Token EN");
+                assertEquals("Fetch /models", AcidLocale.tr("拉取 /models"), "Preserved Fetch /models EN");
+                assertEquals("Preset Providers (6)", AcidLocale.tr("预设供应商 (6)"), "Concise Preset Providers header EN");
+                assertEquals("2 models: A, B", AcidLocale.tr("2 个模型: A, B"), "Concise provider model summary EN");
+                assertEquals("Dissolving \"Tech\" moves its bookmarks to Uncategorized.",
+                    AcidLocale.tr("解散「Tech」后，书签将移至未分类。"), "Concise dissolve folder prompt EN");
+                assertEquals("Allow LAN Connections", AcidLocale.tr("允许局域网连接"), "LAN toggle EN");
+                assertEquals("Remote folder missing or insufficient permissions (HTTP 405)",
+                    AcidLocale.tr(WebDavClient.formatHttpError(405, "test")), "405 error dynamic EN");
+                assertEquals("Insufficient cloud storage or file too large (HTTP 507)",
+                    AcidLocale.tr(WebDavClient.formatHttpError(507, "test")), "507 error dynamic EN");
+            } finally {
+                AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_ZH);
+            }
+        } finally {
+            server.stop();
+            SkillStorageVault.deleteRecursiveSafe(root);
         }
     }
 }

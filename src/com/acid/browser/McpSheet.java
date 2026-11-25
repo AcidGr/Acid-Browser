@@ -115,7 +115,7 @@ public class McpSheet extends AcidBottomSheetView {
                 titleCol.addView(tvTitle);
 
                 TextView tvDesc = new TextView(ctx);
-                tvDesc.setText(AcidLocale.tr("允许外部 AI 工具连接并协同遥控浏览器。请开启时确保你知道 MCP 是什么。"));
+                tvDesc.setText(AcidLocale.tr("允许外部 AI 客户端控制浏览器"));
                 tvDesc.setTextColor(mutedColor);
                 tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvDesc.setPadding(0, AcidTheme.dp(ctx, 3), 0, 0);
@@ -152,44 +152,35 @@ public class McpSheet extends AcidBottomSheetView {
                 final String localUrl = "http://127.0.0.1:" + port + "/mcp";
                 final String lanUrl = (lanIp != null) ? ("http://" + lanIp + ":" + port + "/mcp") : null;
 
-                String localSub = isRunning ? "点击复制本机地址" : "服务未启动";
-                String lanSub;
-                if (!isRunning) {
-                    lanSub = "服务未启动";
-                } else if (!lanEnabled) {
-                    lanSub = "局域网监听未开启 (仅本机可连)";
-                } else if (lanIp != null) {
-                    lanSub = "点击复制局域网地址";
-                } else {
-                    lanSub = "未连接 Wi-Fi / 无局域网 IP";
-                }
+                String lanSub = (isRunning && lanEnabled && lanIp == null) ? "未连接 Wi-Fi" : null;
 
                 container.addView(AcidWidgets.groupCard(
                     ctx, mIsDarkMode,
                     AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_MOBILE, accentColor,
-                        "本机地址", localSub, isRunning ? localUrl : "未启动", false,
+                        "本机地址", null, isRunning ? localUrl : "未启动", false,
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 if (isRunning) {
                                     copyToClipboard(ctx, localUrl, "本机地址");
                                 } else {
-                                    AcidFeedback.info(ctx, "MCP 服务未启动，请先在上方启动服务");
+                                    AcidFeedback.info(ctx, "请先启动 MCP 服务");
                                 }
                             }
                         }
                     ),
                     AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_GLOBE, lanEnabled ? accentColor : mutedColor,
-                        "局域网地址", lanSub, (isRunning && lanEnabled && lanUrl != null) ? lanUrl : "未就绪", false,
+                        "局域网地址", lanSub,
+                        (isRunning && lanEnabled && lanUrl != null) ? lanUrl : (lanEnabled ? "未就绪" : "未开启"), false,
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 if (!isRunning) {
-                                    AcidFeedback.info(ctx, "MCP 服务未启动，请先在上方启动服务");
+                                    AcidFeedback.info(ctx, "请先启动 MCP 服务");
                                 } else if (!lanEnabled) {
-                                    AcidFeedback.info(ctx, "请先在下方开启「允许局域网设备连接」");
+                                    AcidFeedback.info(ctx, "请先开启局域网访问");
                                 } else if (lanUrl != null) {
                                     copyToClipboard(ctx, lanUrl, "局域网地址");
                                 } else {
@@ -205,7 +196,7 @@ public class McpSheet extends AcidBottomSheetView {
                 ));
 
                 // 3. Security & Bearer Token Authentication Section
-                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "安全认证 (Bearer Token)"));
+                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "Token 认证"));
 
                 String maskedToken = (token.length() > 16)
                     ? (token.substring(0, 8) + "••••••••" + token.substring(token.length() - 8))
@@ -215,8 +206,8 @@ public class McpSheet extends AcidBottomSheetView {
                     ctx, mIsDarkMode,
                     AcidWidgets.switchRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_SHIELD, accentColor,
-                        "启用 Bearer 令牌认证",
-                        "外部客户端必须携带令牌才能访问，防止恶意网页与未授权调用",
+                        "启用 Token 认证",
+                        null,
                         authEnabled,
                         new AcidWidgets.OnToggleListener() {
                             @Override
@@ -224,38 +215,38 @@ public class McpSheet extends AcidBottomSheetView {
                                 if (mDataStore != null) {
                                     mDataStore.setMcpAuthEnabled(isChecked);
                                 }
-                                AcidFeedback.info(ctx, isChecked ? "已启用 MCP 令牌认证" : "已停用令牌认证 (允许匿名访问)");
+                                AcidFeedback.info(ctx, isChecked ? "已启用 MCP Token 认证" : "已停用 Token 认证");
                                 refreshActivePage();
                             }
                         }
                     ),
                     AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_EDIT, accentColor,
-                        "访问令牌 (Token)", "点击查看与复制完整令牌", maskedToken, true,
+                        "访问 Token", null, maskedToken, true,
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
-                                copyToClipboard(ctx, token, "访问令牌");
+                                copyToClipboard(ctx, token, "Token");
                                 showTokenDetailDialog(ctx, token);
                             }
                         }
                     ),
                     AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_RELOAD, mutedColor,
-                        "重新生成访问令牌", "原有令牌将立即失效，需在客户端更新", null, true,
+                        "重置 Token", null, null, true,
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 AcidDialogs.confirm(
-                                    ctx, mIsDarkMode, "重置令牌确认",
-                                    "重新生成后，已连接的外部客户端需要更新为新令牌才能继续调用。确认生成新令牌吗？",
-                                    "确认重置",
+                                    ctx, mIsDarkMode, "重置 Token",
+                                    "重置后旧 Token 立即失效，客户端需更新。",
+                                    "重置",
                                     new Runnable() {
                                         @Override
                                         public void run() {
                                             if (mDataStore != null) {
                                                 String newToken = mDataStore.generateNewMcpToken();
-                                                copyToClipboard(ctx, newToken, "新访问令牌");
+                                                copyToClipboard(ctx, newToken, "Token");
                                                 AcidFeedback.ok(ctx, "新令牌已生成并复制到剪贴板");
                                             }
                                             refreshActivePage();
@@ -274,8 +265,8 @@ public class McpSheet extends AcidBottomSheetView {
                     ctx, mIsDarkMode,
                     AcidWidgets.switchRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_GLOBE, accentColor,
-                        "允许局域网设备连接",
-                        "监听 0.0.0.0，使同一 Wi-Fi 下的电脑等设备能访问 MCP",
+                        "允许局域网连接",
+                        "同一 Wi-Fi 设备可访问",
                         lanEnabled,
                         new AcidWidgets.OnToggleListener() {
                             @Override
@@ -298,7 +289,7 @@ public class McpSheet extends AcidBottomSheetView {
                 ));
 
                 // 5. Instruction & Usage Guidance Card
-                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "连接与使用说明"));
+                container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "使用说明"));
 
                 LinearLayout tipCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
                 TextView tvTip = new TextView(ctx);
@@ -306,15 +297,8 @@ public class McpSheet extends AcidBottomSheetView {
                 tvTip.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvTip.setLineSpacing(AcidTheme.dp(ctx, 3), 1.0f);
                 tvTip.setText(AcidLocale.tr(
-                    "1. 本机/跨机连接：\n"
-                    + "   • 同一手机上的 AI 工具使用「本机地址」。\n"
-                    + "   • 电脑上的 Cursor、Claude Desktop 等请使用「局域网地址」，两台设备需在同一 Wi-Fi 下。\n\n"
-                    + "2. 客户端认证配置：\n"
-                    + "   • 开启认证后，客户端需在请求头中配置：\n"
-                    + "     Authorization: Bearer <访问令牌>\n"
-                    + "   • 或在连接 URL 结尾追加参数：?token=<访问令牌>\n\n"
-                    + "3. 安全注意：\n"
-                    + "   • 认证通信不加密，请在可信任的家庭或公司局域网中使用，切勿在公共开放 Wi-Fi 下开启局域网连接。"
+                    "请求头携带 Authorization: Bearer <Token> 或参数 ?token=<Token>。\n"
+                    + "局域网通信未加密，请仅在可信 Wi-Fi 开启。"
                 ));
                 tipCard.addView(tvTip);
                 container.addView(tipCard);
@@ -324,12 +308,12 @@ public class McpSheet extends AcidBottomSheetView {
 
     private void showTokenDetailDialog(final Context ctx, final String token) {
         new AcidDialog(ctx, mIsDarkMode)
-            .setTitle("访问令牌 (Token)")
+            .setTitle("Access Token")
             .setRawMessage(token)
-            .setPositiveButton("复制令牌", new AcidDialog.OnActionListener() {
+            .setPositiveButton("复制 Token", new AcidDialog.OnActionListener() {
                 @Override
                 public boolean onAction(Dialog dialog) {
-                    copyToClipboard(ctx, token, "访问令牌");
+                    copyToClipboard(ctx, token, "Token");
                     return true;
                 }
             })

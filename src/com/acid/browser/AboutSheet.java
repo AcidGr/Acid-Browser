@@ -175,7 +175,7 @@ public class AboutSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "内核简介"));
                 LinearLayout descCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
                 TextView tvDesc = new TextView(ctx);
-                tvDesc.setText(AcidLocale.tr("Acid Browser 是一款零第三方依赖、原生内嵌自主 Agent Loop、本地 MCP 控制网关、油猴脚本引擎与 ABP 广告拦截器的超轻量现代 AI 浏览器。"));
+                tvDesc.setText(AcidLocale.tr("零第三方依赖的轻量 AI 浏览器，内置自主智能体、油猴脚本、广告拦截与 MCP 服务。"));
                 tvDesc.setTextColor(muted);
                 tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
                 tvDesc.setLineSpacing(AcidTheme.dp(ctx, 3f), 1f);

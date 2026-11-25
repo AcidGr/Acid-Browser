@@ -2022,6 +2022,22 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         });
     }
 
+    /** Reloads any open local homepage tabs so restored custom homepages appear immediately. */
+    public void reloadLocalHomeTabs() {
+        final String targetHome = getHomeUrl();
+        final File wsDir = getWorkspaceDir();
+        mMainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                for (TabSession t : mTabs) {
+                    if (t != null && t.webView != null && isTrustedLocalHomepageFileUrl(t.url, wsDir)) {
+                        t.webView.loadUrl(targetHome);
+                    }
+                }
+            }
+        });
+    }
+
     public String getHomeUrl() {
         if (mDataStore != null) {
             return mDataStore.getEffectiveHomeUrl();

@@ -315,7 +315,7 @@ public final class AcidSettings {
         2,
         "默认搜索引擎",
         new String[]{"google", "baidu", "bing", "duckduckgo", "custom"},
-        new String[]{"Google", "百度 (Baidu)", "必应 (Bing)", "DuckDuckGo", "自定义"},
+        new String[]{"Google", "百度", "必应", "DuckDuckGo", "自定义"},
         new String[]{"ddg", "duckduckgo"}
     ));
 
@@ -334,7 +334,7 @@ public final class AcidSettings {
         0,
         "主页设置",
         new String[]{"acid", "blank", "custom"},
-        new String[]{"Acid 默认首页", "空白页 (about:blank)", "自定义网址"},
+        new String[]{"Acid 默认首页", "空白页", "自定义网址"},
         new String[]{"about:blank", "blank"}
     ));
 
@@ -422,7 +422,7 @@ public final class AcidSettings {
         APP_LAUNCH_ASK,
         "阻止调用第三方 APP",
         new String[]{"block", "ask", "allow"},
-        new String[]{"完全拦截", "弹窗询问", "完全不拦截"},
+        new String[]{"完全拦截", "弹窗询问", "允许唤起"},
         new String[]{"deny", "block", "prompt", "ask", "permit", "allow"}
     ));
 

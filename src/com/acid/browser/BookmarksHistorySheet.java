@@ -296,7 +296,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                     ctx,
                     mIsDarkMode,
                     searchInput,
-                    isBookmarks ? "搜索书签标题或网址..." : "搜索历史标题或网址..."
+                    isBookmarks ? "搜索书签" : "搜索历史"
                 );
                 pinned.addView(searchBox);
 
@@ -790,7 +790,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                 }
             }));
         }
-        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_FILE, "导入书签 (.html / .json)", new Runnable() {
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_FILE, "导入书签", new Runnable() {
             @Override
             public void run() {
                 if (mBookmarkIoListener != null) {
@@ -799,7 +799,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             }
         }));
         if (mCachedTabEntries != null && !mCachedTabEntries.isEmpty()) {
-            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_DOWNLOAD, "导出书签 (.html)", new Runnable() {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_DOWNLOAD, "导出书签", new Runnable() {
                 @Override
                 public void run() {
                     if (mBookmarkIoListener != null) {
@@ -1036,7 +1036,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                     ctx,
                     mIsDarkMode,
                     isBookmarks ? AcidIcons.ICON_BOOKMARK : AcidIcons.ICON_HISTORY,
-                    isBookmarks ? "暂无书签收藏，点击右上角可收藏当前页" : "暂无历史浏览记录"
+                    isBookmarks ? "暂无书签" : "暂无历史记录"
                 ));
             }
             if (mMultiSelectMode) {
@@ -1438,14 +1438,14 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
     ) {
         final boolean isEdit = (editIndex >= 0);
         final Context ctx = getContext();
-        final EditText etTitle = AcidWidgets.inputField(ctx, mIsDarkMode, initTitle, "网站标题", true);
-        final EditText etUrl = AcidWidgets.inputField(ctx, mIsDarkMode, initUrl, "网址 (URL)", true);
+        final EditText etTitle = AcidWidgets.inputField(ctx, mIsDarkMode, initTitle, "选填", true);
+        final EditText etUrl = AcidWidgets.inputField(ctx, mIsDarkMode, initUrl, "https://...", true);
         etUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         final EditText etFolder = AcidWidgets.inputField(
             ctx,
             mIsDarkMode,
             NetscapeBookmarkCodec.normalizeFolderPath(initFolder),
-            "留空为未分类，支持多级如 开发/开源",
+            "选填，多级用 / 分隔",
             true
         );
 
@@ -1453,11 +1453,11 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4));
 
-        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "网站标题"));
+        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "标题"));
         layout.addView(etTitle);
-        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "网址 (URL)"));
+        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "URL"));
         layout.addView(etUrl);
-        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "分类文件夹 (选填)"));
+        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "文件夹"));
         layout.addView(etFolder);
         addFolderQuickPickChips(ctx, layout, etFolder);
 
@@ -1527,7 +1527,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                     "重命名文件夹",
                     "文件夹名称",
                     folder,
-                    "输入新文件夹名称 (支持 A/B)",
+                    "新名称",
                     0,
                     "保存",
                     "文件夹名称不能为空",
@@ -1551,14 +1551,14 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                 );
             }
         }));
-        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RETURN, "解散文件夹 (移至未分类)", new Runnable() {
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RETURN, "解散文件夹", new Runnable() {
             @Override
             public void run() {
                 AcidDialogs.confirm(
                     ctx,
                     mIsDarkMode,
-                    "解散文件夹 (移至未分类)",
-                    "确定解散文件夹「" + folder + "」吗？其中的书签将移至上级或未分类，不会被删除。",
+                    "解散文件夹",
+                    "解散「" + folder + "」后，书签将移至未分类。",
                     "解散",
                     new Runnable() {
                         @Override
@@ -1624,20 +1624,20 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             ctx,
             mIsDarkMode,
             defaultFolderForAdd(),
-            "留空为未分类，支持多级如 开发/开源",
+            "留空为未分类",
             true
         );
 
         LinearLayout layout = new LinearLayout(ctx);
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4));
-        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "分类文件夹 (选填)"));
+        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "文件夹"));
         layout.addView(etFolder);
         addFolderQuickPickChips(ctx, layout, etFolder);
 
         new AcidDialog(ctx, mIsDarkMode)
             .setTitle("批量移至文件夹")
-            .setMessage("将选中的 " + targets.size() + " 条书签移至目标文件夹（留空则移至未分类）：")
+            .setMessage("移至目标文件夹（留空为未分类）：")
             .setCustomView(layout)
             .setPositiveButton("移动", new AcidDialog.OnActionListener() {
                 @Override

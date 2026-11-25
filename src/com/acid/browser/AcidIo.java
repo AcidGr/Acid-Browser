@@ -68,6 +68,33 @@ public final class AcidIo {
         }
     }
 
+    /** Thrown by {@link #readBytesCapped(InputStream, int)} when an input stream exceeds its limit. */
+    public static final class SizeLimitExceededException extends IOException {
+        public SizeLimitExceededException(String message) {
+            super(message);
+        }
+    }
+
+    public static byte[] readBytesCapped(InputStream in, int maxBytes) throws IOException {
+        if (in == null) return new byte[0];
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                if (maxBytes > 0 && bos.size() + n > maxBytes) {
+                    throw new SizeLimitExceededException(
+                        "文件体积超过安全限制（最大 " + (maxBytes / (1024 * 1024)) + " MB）"
+                    );
+                }
+                bos.write(buf, 0, n);
+            }
+            return bos.toByteArray();
+        } finally {
+            closeQuietly(in);
+        }
+    }
+
     public static void writeFileUtf8(File file, String content) throws IOException {
         byte[] bytes = (content != null ? content : "").getBytes(StandardCharsets.UTF_8);
         writeBytes(file, bytes);

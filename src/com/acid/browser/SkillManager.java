@@ -194,6 +194,13 @@ public class SkillManager {
         notifyChanged();
     }
 
+    /** Reloads disabled skill flags and built-in sync state after backup restoration. */
+    public void reloadFromDisk() {
+        loadDisabledState();
+        syncDefaultSkills();
+        notifyChanged();
+    }
+
     private void notifyChanged() {
         List<OnSkillsChangedListener> copy;
         synchronized (mListeners) {

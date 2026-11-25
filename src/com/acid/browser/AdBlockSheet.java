@@ -108,13 +108,6 @@ public class AdBlockSheet extends AcidBottomSheetView {
                 tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
                 titleCol.addView(tvTitle);
 
-                TextView tvSub = new TextView(ctx);
-                tvSub.setText(AcidLocale.tr("自动拦截网页广告请求、弹窗贴片与恶意唤端"));
-                tvSub.setTextColor(mutedColor);
-                tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
-                tvSub.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
-                titleCol.addView(tvSub);
-
                 topRow.addView(titleCol, tLp);
 
                 final Switch sw = new Switch(ctx);
@@ -166,10 +159,9 @@ public class AdBlockSheet extends AcidBottomSheetView {
                 // 1b. 3-Level External App Launch Interception Section (阻止调用第三方 APP)
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "阻止调用第三方 APP"));
                 LinearLayout appLaunchCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
-                appLaunchCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "外部应用唤起拦截等级"));
 
                 final int currentPolicy = mManager.getAppLaunchPolicy();
-                String[] policyLabels = new String[] { "完全拦截", "弹窗询问", "完全不拦截" };
+                String[] policyLabels = AcidSettings.APP_LAUNCH_POLICY.displayLabels;
                 appLaunchCard.addView(AcidWidgets.segmentedTabs(
                     ctx,
                     mIsDarkMode,
@@ -183,11 +175,11 @@ public class AdBlockSheet extends AcidBottomSheetView {
                             mManager.setAppLaunchPolicy(index);
                             String toastText;
                             if (index == AcidSettings.APP_LAUNCH_BLOCK) {
-                                toastText = "已切换为「一级：完全拦截第三方 APP」";
+                                toastText = "已设为完全拦截";
                             } else if (index == AcidSettings.APP_LAUNCH_ASK) {
-                                toastText = "已切换为「二级：唤起第三方 APP 时弹窗询问」";
+                                toastText = "已设为弹窗询问";
                             } else {
-                                toastText = "已切换为「三级：允许直接打开第三方 APP」";
+                                toastText = "已设为允许唤起";
                             }
                             AcidFeedback.info(ctx, toastText);
                             refreshActivePage();
@@ -195,16 +187,7 @@ public class AdBlockSheet extends AcidBottomSheetView {
                     }
                 ));
 
-                String policyDesc;
-                if (currentPolicy == AcidSettings.APP_LAUNCH_BLOCK) {
-                    policyDesc = "当前为「一级：完全拦截」—— 严禁网页自动拉起任何外部应用，强制留在浏览器内浏览。";
-                } else if (currentPolicy == AcidSettings.APP_LAUNCH_ASK) {
-                    policyDesc = "当前为「二级：弹窗询问」—— 当网页试图打开外部应用时，弹出小窗口询问，由您选择「确定」或「取消」。";
-                } else {
-                    policyDesc = "当前为「三级：完全不拦截」—— 允许网页直接唤起手机上已安装的第三方客户端。";
-                }
-                policyDesc += "\n注：当 AI Agent 处于运行接管状态时，将自动临时锁定为「完全拦截」，任务结束后恢复您的设置。";
-                TextView tvPolicyDesc = AcidWidgets.descriptionText(ctx, mIsDarkMode, policyDesc);
+                TextView tvPolicyDesc = AcidWidgets.descriptionText(ctx, mIsDarkMode, "Agent 运行期间自动锁定为完全拦截");
                 tvPolicyDesc.setPadding(0, AcidTheme.dp(ctx, 2), 0, 0);
                 appLaunchCard.addView(tvPolicyDesc);
                 container.addView(appLaunchCard);
@@ -213,12 +196,12 @@ public class AdBlockSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "在线规则订阅"));
                 LinearLayout subCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
 
-                subCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "ABP / EasyList 订阅地址"));
+                subCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "订阅 URL"));
                 String initialSubUrl = mDraftSubUrl != null ? mDraftSubUrl : mManager.getSubscriptionUrl();
                 final EditText etSubUrl = AcidWidgets.inputField(
                     ctx, mIsDarkMode,
                     initialSubUrl,
-                    "https://raw.githubusercontent.com/.../easylist.txt",
+                    "https://...",
                     true
                 );
                 etSubUrl.addTextChangedListener(new TextWatcher() {
@@ -232,7 +215,7 @@ public class AdBlockSheet extends AcidBottomSheetView {
 
                 AcidWidgets.LoadingButton btnDownload = AcidWidgets.LoadingButton.primary(
                     ctx, mIsDarkMode,
-                    "拉取并更新订阅规则", "正在拉取规则...",
+                    "更新订阅", "更新中...",
                     accentColor,
                     new AcidWidgets.LoadingButton.OnAsyncActionListener() {
                         @Override
@@ -268,13 +251,13 @@ public class AdBlockSheet extends AcidBottomSheetView {
                 // 3. Custom Rules Section (preserves draft across toggles & theme switches!)
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "自定义拦截规则"));
                 LinearLayout customCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
-                customCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "规则列表 (支持 ||domain^ 域名拦截与 ##selector 元素隐藏)"));
+                customCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "规则列表（支持 ||domain^ 与 ##selector）"));
 
                 String initialCustom = mDraftCustomRules != null ? mDraftCustomRules : mManager.getCustomRulesText();
                 final EditText etCustom = AcidWidgets.inputField(
                     ctx, mIsDarkMode,
                     initialCustom,
-                    "例如:\n||ads.example.com^\nexample.com##.floating-banner",
+                    "||ads.example.com^\nexample.com##.banner",
                     false
                 );
                 etCustom.setTypeface(Typeface.MONOSPACE);
@@ -290,7 +273,7 @@ public class AdBlockSheet extends AcidBottomSheetView {
                 });
                 customCard.addView(etCustom);
 
-                TextView btnSaveCustom = AcidWidgets.primaryButton(ctx, mIsDarkMode, "保存自定义规则", accentColor, new OnClickListener() {
+                TextView btnSaveCustom = AcidWidgets.primaryButton(ctx, mIsDarkMode, "保存规则", accentColor, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
                         AcidTheme.hideKeyboard(AdBlockSheet.this);

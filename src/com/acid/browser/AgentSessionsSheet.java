@@ -52,7 +52,7 @@ public class AgentSessionsSheet extends AcidBottomSheetView {
 
                 if (sessions.isEmpty()) {
                     container.addView(AcidWidgets.emptyState(
-                        ctx, mIsDarkMode, AcidIcons.ICON_CHAT_LIST, "暂无历史对话，点击右上角「+ 新建对话」开始"
+                        ctx, mIsDarkMode, AcidIcons.ICON_CHAT_LIST, "暂无历史对话"
                     ));
                     return;
                 }

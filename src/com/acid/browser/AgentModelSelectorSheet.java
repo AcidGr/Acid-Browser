@@ -85,14 +85,14 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
 
         // 1. Active Model & Reasoning Effort Hero Card
         LinearLayout topCard = AcidWidgets.heroCard(ctx, mIsDarkMode, accent);
-        topCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "当前使用模型"));
+        topCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "当前模型"));
 
         TextView tvCurVal = new TextView(ctx);
         if (activeProvider != null && activeModel != null) {
             tvCurVal.setText(activeProvider.displayName + " / " + activeModel.name);
             tvCurVal.setTextColor(textCol);
         } else {
-            tvCurVal.setText(AcidLocale.tr("暂无可用模型，请点击右上角「模型配置」添加"));
+            tvCurVal.setText(AcidLocale.tr("暂无可用模型"));
             tvCurVal.setTextColor(AcidTheme.COLOR_AMBER);
         }
         tvCurVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
@@ -104,7 +104,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
             topCard.addView(AcidWidgets.fieldLabelWithAction(
                 ctx,
                 mIsDarkMode,
-                "思考深度 (Reasoning Effort)",
+                "思考深度",
                 AcidWidgets.statusTag(ctx, mIsDarkMode, AcidModelStore.getEffortDisplayName(activeEffort), blue)
             ));
 
@@ -175,7 +175,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
         if (mModelStore.getTotalLoadedModelsCount() > 4) {
             final EditText etSearch = new EditText(ctx);
             etSearch.setText(mFilterQuery);
-            pinned.addView(AcidWidgets.searchBox(ctx, mIsDarkMode, etSearch, "搜索已装载的供应商或模型名称..."));
+            pinned.addView(AcidWidgets.searchBox(ctx, mIsDarkMode, etSearch, "搜索模型"));
 
             etSearch.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -227,7 +227,7 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
                 ctx,
                 mIsDarkMode,
                 p.displayName,
-                hasKey ? "● 密钥已就绪" : "● 待填 API Key",
+                hasKey ? "● Key 已就绪" : "● 待填 API Key",
                 hasKey ? accent : AcidTheme.COLOR_AMBER
             ));
 
@@ -268,8 +268,8 @@ public class AgentModelSelectorSheet extends AcidBottomSheetView {
             container.addView(AcidWidgets.emptyState(
                 ctx, mIsDarkMode, AcidIcons.ICON_MODEL,
                 query.isEmpty()
-                    ? "尚未装载任何模型，请点击右上角「模型配置」添加供应商"
-                    : "未找到匹配的已装载模型"
+                    ? "暂无可用模型"
+                    : "未找到匹配模型"
             ));
         }
     }

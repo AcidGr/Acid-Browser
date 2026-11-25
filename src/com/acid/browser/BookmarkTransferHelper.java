@@ -9,8 +9,8 @@ import android.util.Log;
 
 import com.acid.browser.download.DownloadCoordinator;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
@@ -29,6 +29,10 @@ public final class BookmarkTransferHelper {
     private BookmarkTransferHelper() {}
 
     public static void startImportPicker(Activity activity, int requestCode) {
+        startDocumentPicker(activity, requestCode, "选择书签文件 (.html / .json)");
+    }
+
+    public static void startDocumentPicker(Activity activity, int requestCode, String chooserTitle) {
         if (activity == null) return;
         Intent docIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         docIntent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -42,13 +46,85 @@ public final class BookmarkTransferHelper {
             fallback.setType("*/*");
             try {
                 activity.startActivityForResult(
-                    Intent.createChooser(fallback, AcidLocale.tr("选择书签文件 (.html / .json)")),
+                    Intent.createChooser(fallback, AcidLocale.tr(chooserTitle)),
                     requestCode
                 );
             } catch (Exception e2) {
                 AcidFeedback.warn(activity, "未找到可用的文件选择器");
             }
         }
+    }
+
+    public static Uri validatePickedUri(Activity activity, int resultCode, Intent data) {
+        if (activity == null || resultCode != Activity.RESULT_OK || data == null) {
+            return null;
+        }
+        Uri uri = data.getData();
+        if (uri == null && data.getClipData() != null && data.getClipData().getItemCount() > 0) {
+            uri = data.getClipData().getItemAt(0).getUri();
+        }
+        if (uri == null) return null;
+        if (!AcidFileProvider.isSafeFileChooserUri(activity, uri)) {
+            AcidFeedback.warn(activity, "无法读取不受支持的文件路径");
+            return null;
+        }
+        return uri;
+    }
+
+    public static File resolveExportDir(Activity activity, BrowserController controller) {
+        DownloadCoordinator dc = controller != null ? controller.getDownloadCoordinator() : null;
+        File destDir = dc != null ? dc.getDownloadDestinationDir() : null;
+        if (destDir == null && activity != null) {
+            File pub = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (pub != null && (pub.exists() || pub.mkdirs()) && pub.canWrite()) {
+                destDir = pub;
+            } else {
+                destDir = new File(activity.getFilesDir(), Environment.DIRECTORY_DOWNLOADS);
+            }
+        }
+        if (destDir != null && !destDir.exists()) {
+            destDir.mkdirs();
+        }
+        return destDir;
+    }
+
+    public static void promptExportShare(
+        final Activity activity,
+        final boolean isDarkMode,
+        final String dialogTitle,
+        final String messageBody,
+        final File outFile,
+        final String mimeType,
+        final String shareChooserTitle
+    ) {
+        if (activity == null || outFile == null) return;
+        new AcidDialog(activity, isDarkMode)
+            .setTitle(dialogTitle)
+            .setRawMessage(messageBody)
+            .setPositiveButton("分享文件", new AcidDialog.OnActionListener() {
+                @Override
+                public boolean onAction(Dialog dialog) {
+                    try {
+                        Uri shareUri = AcidFileProvider.getUriForFile(outFile);
+                        Intent share = new Intent(Intent.ACTION_SEND);
+                        share.setType(mimeType);
+                        share.putExtra(Intent.EXTRA_STREAM, shareUri);
+                        share.putExtra(Intent.EXTRA_SUBJECT, outFile.getName());
+                        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        activity.startActivity(
+                            Intent.createChooser(share, AcidLocale.tr(shareChooserTitle))
+                        );
+                    } catch (Exception ex) {
+                        AcidFeedback.warn(
+                            activity,
+                            "无法拉起系统分享: " + ex.getMessage()
+                        );
+                    }
+                    return true;
+                }
+            })
+            .setNegativeButton("完成", null)
+            .show();
     }
 
     public static void handleImportResult(
@@ -58,20 +134,9 @@ public final class BookmarkTransferHelper {
         Intent data,
         final Runnable onImportedUiCallback
     ) {
-        if (activity == null || resultCode != Activity.RESULT_OK || data == null || dataStore == null) {
-            return;
-        }
-        Uri uri = data.getData();
-        if (uri == null && data.getClipData() != null && data.getClipData().getItemCount() > 0) {
-            uri = data.getClipData().getItemAt(0).getUri();
-        }
-        if (uri == null) return;
-        if (!AcidFileProvider.isSafeFileChooserUri(activity, uri)) {
-            AcidFeedback.warn(activity, "无法读取不受支持的文件路径");
-            return;
-        }
-
-        final Uri targetUri = uri;
+        if (dataStore == null) return;
+        final Uri targetUri = validatePickedUri(activity, resultCode, data);
+        if (targetUri == null) return;
         AcidAsync.run(new Runnable() {
             @Override
             public void run() {
@@ -87,24 +152,19 @@ public final class BookmarkTransferHelper {
                         });
                         return;
                     }
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    byte[] buf = new byte[8192];
-                    int total = 0;
-                    int n;
-                    while ((n = is.read(buf)) != -1) {
-                        total += n;
-                        if (total > NetscapeBookmarkCodec.MAX_IMPORT_BYTES) {
-                            runIfAlive(activity, new Runnable() {
-                                @Override
-                                public void run() {
-                                    AcidFeedback.warn(activity, "文件过大（超过 16 MB 上限）");
-                                }
-                            });
-                            return;
-                        }
-                        baos.write(buf, 0, n);
+                    final byte[] rawBytes;
+                    try {
+                        rawBytes = AcidIo.readBytesCapped(is, NetscapeBookmarkCodec.MAX_IMPORT_BYTES);
+                    } catch (AcidIo.SizeLimitExceededException tooLarge) {
+                        runIfAlive(activity, new Runnable() {
+                            @Override
+                            public void run() {
+                                AcidFeedback.warn(activity, "文件过大（超过 16 MB 上限）");
+                            }
+                        });
+                        return;
                     }
-                    String content = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+                    String content = new String(rawBytes, StandardCharsets.UTF_8);
                     final NetscapeBookmarkCodec.ImportParseResult parsed =
                         NetscapeBookmarkCodec.parseImportContent(content);
                     if (!parsed.ok) {
@@ -173,15 +233,9 @@ public final class BookmarkTransferHelper {
             public void run() {
                 try {
                     String html = NetscapeBookmarkCodec.exportToHtml(snapshot);
-                    DownloadCoordinator dc = controller != null ? controller.getDownloadCoordinator() : null;
-                    File destDir = dc != null ? dc.getDownloadDestinationDir() : null;
+                    File destDir = resolveExportDir(activity, controller);
                     if (destDir == null) {
-                        File pub = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                        if (pub != null && (pub.exists() || pub.mkdirs()) && pub.canWrite()) {
-                            destDir = pub;
-                        } else {
-                            destDir = new File(activity.getFilesDir(), Environment.DIRECTORY_DOWNLOADS);
-                        }
+                        throw new IOException("无法定位本地下载目录");
                     }
                     String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
                     String fileName = DownloadCoordinator.resolveUniqueFileName(
@@ -198,33 +252,11 @@ public final class BookmarkTransferHelper {
                                 + snapshot.size()
                                 + AcidLocale.tr(" 条书签至：")
                                 + "\n" + outFile.getAbsolutePath();
-                            new AcidDialog(activity, isDarkMode)
-                                .setTitle("书签导出成功")
-                                .setRawMessage(body)
-                                .setPositiveButton("分享文件", new AcidDialog.OnActionListener() {
-                                    @Override
-                                    public boolean onAction(Dialog dialog) {
-                                        try {
-                                            Uri shareUri = AcidFileProvider.getUriForFile(outFile);
-                                            Intent share = new Intent(Intent.ACTION_SEND);
-                                            share.setType("text/html");
-                                            share.putExtra(Intent.EXTRA_STREAM, shareUri);
-                                            share.putExtra(Intent.EXTRA_SUBJECT, outFile.getName());
-                                            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                                            activity.startActivity(
-                                                Intent.createChooser(share, AcidLocale.tr("分享书签文件"))
-                                            );
-                                        } catch (Exception ex) {
-                                            AcidFeedback.warn(
-                                                activity,
-                                                "无法拉起系统分享: " + ex.getMessage()
-                                            );
-                                        }
-                                        return true;
-                                    }
-                                })
-                                .setNegativeButton("完成", null)
-                                .show();
+                            promptExportShare(
+                                activity, isDarkMode,
+                                "书签导出成功", body,
+                                outFile, "text/html", "分享书签文件"
+                            );
                         }
                     });
                 } catch (final Exception e) {
@@ -243,7 +275,7 @@ public final class BookmarkTransferHelper {
         });
     }
 
-    private static void runIfAlive(final Activity activity, final Runnable action) {
+    public static void runIfAlive(final Activity activity, final Runnable action) {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {

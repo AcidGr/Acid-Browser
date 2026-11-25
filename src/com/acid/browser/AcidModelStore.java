@@ -61,12 +61,12 @@ public class AcidModelStore {
     };
 
     public static String getEffortDisplayName(String effortId) {
-        if (EFFORT_OFF.equals(effortId)) return "关闭 (Off)";
-        if (EFFORT_LOW.equals(effortId)) return "低 (Low)";
-        if (EFFORT_MEDIUM.equals(effortId)) return "中 (Medium)";
-        if (EFFORT_HIGH.equals(effortId)) return "高 (High)";
-        if (EFFORT_MAX.equals(effortId)) return "极高 (Max)";
-        return "默认 (Default)";
+        if (EFFORT_OFF.equals(effortId)) return "关闭";
+        if (EFFORT_LOW.equals(effortId)) return "低";
+        if (EFFORT_MEDIUM.equals(effortId)) return "中";
+        if (EFFORT_HIGH.equals(effortId)) return "高";
+        if (EFFORT_MAX.equals(effortId)) return "极高";
+        return "默认";
     }
 
     public static String getEffortShortLabel(String effortId) {

@@ -40,6 +40,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private static final String TAG = "BrowserActivity";
     public static final int REQUEST_CODE_AGENT_ATTACH = 0x4644;
     public static final int REQUEST_CODE_IMPORT_BOOKMARKS = 0x4645;
+    public static final int REQUEST_CODE_IMPORT_BACKUP_ZIP = 0x4646;
 
     private BrowserDataStore mDataStore;
     private BrowserController mController;
@@ -49,6 +50,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     private boolean mIsDarkMode = false;
     private boolean mIncognitoMode = false;
+    private boolean mPendingZipRestoreOverwrite = false;
 
     // Root Containers
     private WindowPixelCopyCapturer.MaskingFrameLayout mRootContainer;
@@ -769,7 +771,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     }
                     AcidFeedback.info(
                         BrowserActivity.this,
-                        enabled ? "已开启网页远程调试 (Chrome DevTools)" : "已关闭网页远程调试"
+                        enabled ? "已开启网页远程调试" : "已关闭网页远程调试"
                     );
                 }
 
@@ -777,7 +779,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 public void onDoNotTrackChanged(boolean enabled) {
                     AcidFeedback.info(
                         BrowserActivity.this,
-                        enabled ? "已开启「不跟踪 (DNT)」请求" : "已关闭「不跟踪」请求"
+                        enabled ? "已开启 DNT 请求" : "已关闭 DNT 请求"
                     );
                 }
 
@@ -812,6 +814,64 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 @Override
                 public void onExportBookmarksRequested() {
                     exportBookmarksToHtml();
+                }
+
+                @Override
+                public void onTestWebDavRequested(
+                    WebDavClient.WebDavConfig config,
+                    BrowserBackupManager.BackupResultCallback callback
+                ) {
+                    BrowserBackupManager.testConnectionAsync(BrowserActivity.this, config, callback);
+                }
+
+                @Override
+                public void onWebDavUploadRequested(BrowserBackupManager.BackupResultCallback callback) {
+                    BrowserBackupManager.uploadToWebDavAsync(
+                        BrowserActivity.this,
+                        createBackupWorkspaceTarget(),
+                        WebDavClient.loadConfig(BrowserActivity.this),
+                        WebDavClient.loadSyncSelection(BrowserActivity.this),
+                        callback
+                    );
+                }
+
+                @Override
+                public void onWebDavRestoreRequested(
+                    boolean overwriteMode,
+                    BrowserBackupManager.BackupResultCallback callback
+                ) {
+                    BrowserBackupManager.restoreFromWebDavAsync(
+                        BrowserActivity.this,
+                        createBackupWorkspaceTarget(),
+                        WebDavClient.loadConfig(BrowserActivity.this),
+                        WebDavClient.loadSyncSelection(BrowserActivity.this),
+                        overwriteMode,
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                applyFullBackupRestoreUiRefresh();
+                            }
+                        },
+                        callback
+                    );
+                }
+
+                @Override
+                public void onExportLocalBackupZipRequested(BrowserBackupManager.BackupResultCallback callback) {
+                    BrowserBackupManager.exportLocalZipAndShare(
+                        BrowserActivity.this,
+                        mController,
+                        createBackupWorkspaceTarget(),
+                        WebDavClient.loadSyncSelection(BrowserActivity.this),
+                        mIsDarkMode,
+                        callback
+                    );
+                }
+
+                @Override
+                public void onImportLocalBackupZipRequested(boolean overwriteMode) {
+                    mPendingZipRestoreOverwrite = overwriteMode;
+                    BrowserBackupManager.startZipImportPicker(BrowserActivity.this, REQUEST_CODE_IMPORT_BACKUP_ZIP);
                 }
             }
         );
@@ -1571,8 +1631,8 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     // Mode Switches & Theme Propagation
     // =========================================================================
 
-    private void syncFromHotReloadedSettings() {
-        if (mSyncingHotReload) return;
+    private boolean syncFromHotReloadedSettings() {
+        if (mSyncingHotReload) return false;
         mSyncingHotReload = true;
         try {
             boolean langChanged = AcidLocale.syncFromDataStore(this, mDataStore);
@@ -1608,11 +1668,13 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             }
             if (langChanged) {
                 applyLanguageHotSwitch();
+                return true;
             } else {
                 updateMenuSheetCards();
                 if (mSettingsSheet != null) {
                     mSettingsSheet.refresh();
                 }
+                return false;
             }
         } finally {
             mSyncingHotReload = false;
@@ -2298,7 +2360,62 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             handleBookmarkImportResult(resultCode, data);
             return;
         }
+        if (requestCode == REQUEST_CODE_IMPORT_BACKUP_ZIP) {
+            handleBackupZipImportResult(resultCode, data);
+            return;
+        }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private BrowserBackupManager.WorkspaceTarget createBackupWorkspaceTarget() {
+        return BrowserBackupManager.WorkspaceTarget.from(this, mController, mDataStore);
+    }
+
+    private void handleBackupZipImportResult(int resultCode, Intent data) {
+        BrowserBackupManager.handleZipImportResult(
+            this,
+            createBackupWorkspaceTarget(),
+            WebDavClient.loadSyncSelection(this),
+            mPendingZipRestoreOverwrite,
+            resultCode,
+            data,
+            new Runnable() {
+                @Override
+                public void run() {
+                    applyFullBackupRestoreUiRefresh();
+                }
+            },
+            new BrowserBackupManager.BackupResultCallback() {
+                @Override
+                public void onResult(boolean ok, BrowserBackupManager.SyncSummary summary, String message) {
+                    if (ok) {
+                        AcidFeedback.ok(BrowserActivity.this, message);
+                    } else {
+                        AcidFeedback.error(BrowserActivity.this, message);
+                    }
+                }
+            }
+        );
+    }
+
+    private void applyFullBackupRestoreUiRefresh() {
+        boolean allSheetsRefreshed = syncFromHotReloadedSettings();
+        if (!allSheetsRefreshed) {
+            AcidBottomSheetView[] moduleSheets = new AcidBottomSheetView[]{
+                mBookmarksHistorySheet, mUserscriptSheet, mSkillSheet, mAdBlockSheet
+            };
+            for (AcidBottomSheetView s : moduleSheets) {
+                if (s == null) continue;
+                if (s.isShowing()) {
+                    s.refreshActivePage();
+                } else {
+                    s.markNeedsRenderOnShow();
+                }
+            }
+        }
+        if (mController != null) {
+            mController.reloadLocalHomeTabs();
+        }
     }
 
     private void requestBookmarkImportPicker() {

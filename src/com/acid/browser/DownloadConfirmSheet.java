@@ -101,9 +101,9 @@ public class DownloadConfirmSheet extends AcidBottomSheetView {
                 // 1. Task Info Card
                 LinearLayout infoCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
 
-                infoCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "保存文件名 (可修改)"));
+                infoCard.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "文件名"));
                 final EditText etFileName = AcidWidgets.inputField(
-                    ctx, mIsDarkMode, mPendingFileName, "输入保存文件名", true
+                    ctx, mIsDarkMode, mPendingFileName, "文件名", true
                 );
                 etFileName.addTextChangedListener(new TextWatcher() {
                     @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}

@@ -90,7 +90,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 List<UserscriptMeta> scripts = mManager.getScripts();
                 if (scripts.isEmpty()) {
                     container.addView(AcidWidgets.emptyState(
-                        ctx, mIsDarkMode, AcidIcons.ICON_FILE, "尚未安装任何用户脚本，点击右上角可导入"
+                        ctx, mIsDarkMode, AcidIcons.ICON_FILE, "暂无用户脚本"
                     ));
                     return;
                 }
@@ -302,7 +302,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 TextView info = new TextView(ctx);
                 StringBuilder sb = new StringBuilder();
                 sb.append(en ? "Status: " : "状态: ").append(meta.enabled
-                    ? (en ? "Enabled (Auto-runs on matching pages)" : "已启用 (随匹配页面自动执行)")
+                    ? (en ? "Enabled" : "已启用")
                     : (en ? "Disabled" : "已停用")).append("\n");
                 sb.append(en ? "Scope: " : "生效范围: ").append(AcidLocale.tr(meta.describeScope())).append("\n");
                 sb.append(en ? "Run At: " : "注入时机: ").append(meta.runAt).append("\n");
@@ -325,7 +325,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
                 if (!TextUtils.isEmpty(UserscriptManager.updateUrlOf(meta))) {
                     sb.append(en ? "Update URL: " : "更新源: ").append(UserscriptManager.updateUrlOf(meta)).append("\n");
                 }
-                if (meta.unwrap) sb.append(en ? "Execution: @unwrap (Page Scope)\n" : "运行方式: @unwrap (页面作用域)\n");
+                if (meta.unwrap) sb.append(en ? "Execution: @unwrap (Page Scope)\n" : "运行方式: @unwrap（页面作用域）\n");
                 sb.append(en ? "File: " : "文件名: ").append(meta.fileName);
                 info.setText(sb.toString());
                 info.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
@@ -530,11 +530,11 @@ public class UserscriptSheet extends AcidBottomSheetView {
         AcidDialogs.inputMultiLine(
             ctx, mIsDarkMode,
             "导入用户脚本",
-            "在线脚本 URL (.user.js) 或完整脚本源码",
+            "脚本 URL 或源码",
             "",
-            "https://.../script.user.js 或 // ==UserScript==...",
+            "https://.../script.user.js",
             4, 8,
-            "解析并安装",
+            "安装",
             "请输入脚本链接或源码",
             new AcidDialogs.InputSubmitListener() {
                 @Override
@@ -616,7 +616,7 @@ public class UserscriptSheet extends AcidBottomSheetView {
             .append(en ? "\nRun At: " : "\n注入时机: ").append(meta.runAt);
         if (!meta.requires.isEmpty()) {
             scopeSb.append(en ? "\nRequires: " : "\n外部依赖: ").append(meta.requires.size())
-                .append(en ? " libraries (auto-cached in background)" : " 个库 (安装后自动后台缓存)");
+                .append(en ? " libraries" : " 个库");
         }
         if (!meta.grants.isEmpty()) {
             scopeSb.append(en ? "\nGrants: " : "\n权限声明: ");

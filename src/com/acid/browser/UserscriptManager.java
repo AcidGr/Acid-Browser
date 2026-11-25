@@ -83,6 +83,22 @@ public class UserscriptManager {
         loadBridgeAndDefaultUserscripts();
     }
 
+    /** Headless package-private constructor for isolated backup/sync unit tests. */
+    UserscriptManager(File workspaceDir) {
+        mContext = null;
+        mWorkspaceDir = workspaceDir;
+        if (mWorkspaceDir != null && !mWorkspaceDir.exists()) {
+            mWorkspaceDir.mkdirs();
+        }
+        mUserscriptsDir = new File(mWorkspaceDir, "userscripts");
+        if (!mUserscriptsDir.exists()) {
+            mUserscriptsDir.mkdirs();
+        }
+        mStorage = new UserscriptStorage(mWorkspaceDir);
+        mHttpHandler = new UserscriptHttpHandler();
+        mDepResolver = new UserscriptDependencyResolver(mUserscriptsDir);
+    }
+
     public File getWorkspaceDir() {
         return mWorkspaceDir;
     }
@@ -354,6 +370,17 @@ public class UserscriptManager {
         synchronized (mScripts) {
             mCacheLoaded = false;
         }
+    }
+
+    /**
+     * Reloads persistent {@code GM_*} storage and drops the parsed script cache so backup/sync
+     * restorations take effect immediately without restarting the browser.
+     */
+    public void reloadFromDisk() {
+        if (mStorage != null) {
+            mStorage.load();
+        }
+        invalidateCache();
     }
 
     private List<UserscriptMeta> loadedScripts() {

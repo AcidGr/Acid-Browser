@@ -114,7 +114,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             boolean hasKey = p.hasApiKey();
             headRow.addView(AcidWidgets.statusTag(
                 ctx, mIsDarkMode,
-                hasKey ? "● 密钥已就绪" : "● 待填密钥",
+                hasKey ? "● Key 已就绪" : "● 待填 API Key",
                 hasKey ? accent : AcidTheme.COLOR_AMBER
             ));
             card.addView(headRow);
@@ -130,7 +130,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             card.addView(tvUrl);
 
             // Row 3: Loaded Models Summary
-            StringBuilder sb = new StringBuilder("已装载 " + p.models.size() + " 个模型: ");
+            StringBuilder sb = new StringBuilder(p.models.size() + " 个模型: ");
             for (int j = 0; j < p.models.size() && j < 4; j++) {
                 if (j > 0) sb.append(", ");
                 sb.append(p.models.get(j).name);
@@ -144,14 +144,14 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             tvModels.setEllipsize(TextUtils.TruncateAt.END);
             card.addView(tvModels);
 
-            // Row 4: Action Bar [测试连通性] [配置与模型] ... [删除]
+            // Row 4: Action Bar [测试连接] [配置] ... [删除]
             LinearLayout actionsBar = new LinearLayout(ctx);
             actionsBar.setOrientation(LinearLayout.HORIZONTAL);
             actionsBar.setGravity(Gravity.CENTER_VERTICAL);
             actionsBar.setPadding(0, AcidTheme.dp(ctx, 10), 0, 0);
 
             AcidWidgets.LoadingButton btnTest = AcidWidgets.LoadingButton.mini(
-                ctx, mIsDarkMode, "测试连通性", "测试中...", textCol, false,
+                ctx, mIsDarkMode, "测试连接", "测试中...", textCol, false,
                 new AcidWidgets.LoadingButton.OnAsyncActionListener() {
                     @Override
                     public void onTrigger(final AcidWidgets.LoadingButton button) {
@@ -184,7 +184,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             );
             actionsBar.addView(btnTest.view);
 
-            TextView btnEdit = AcidWidgets.miniButton(ctx, mIsDarkMode, "配置与模型", accent, true, new OnClickListener() {
+            TextView btnEdit = AcidWidgets.miniButton(ctx, mIsDarkMode, "配置", accent, true, new OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     pushPage(buildEditProviderPage(p, null));
@@ -248,7 +248,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                 pinned.addView(AcidWidgets.segmentedTabs(
                     ctx,
                     mIsDarkMode,
-                    new String[]{"默认供应商目录 (" + presets.size() + ")", "自定义供应商 API"},
+                    new String[]{"预设供应商 (" + presets.size() + ")", "自定义 API"},
                     mAddTabCustomMode ? 1 : 0,
                     AcidTheme.accent(mIsDarkMode),
                     new AcidWidgets.OnTabSelectedListener() {
@@ -261,13 +261,6 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                             }
                         }
                     }
-                ));
-
-                container.addView(AcidWidgets.descriptionText(
-                    ctx, mIsDarkMode,
-                    !mAddTabCustomMode
-                        ? "选择主流大模型厂商，填入 API 密钥即可一键装载默认推荐模型。"
-                        : "接入第三方聚合网关、本地 Ollama / vLLM 或任意兼容 OpenAI Chat Completions 协议的服务。"
                 ));
 
                 if (!mAddTabCustomMode) {
@@ -296,7 +289,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                 .title(preset.displayName)
                 .subtitle(preset.description)
                 .selected(isLoaded, accent)
-                .trailingBadge(ctx, mIsDarkMode, isLoaded ? "已装载 · 编辑" : "+ 配置装载", isLoaded ? accent : blue)
+                .trailingBadge(ctx, mIsDarkMode, isLoaded ? "已配置" : "添加", isLoaded ? accent : blue)
                 .onClick(new OnClickListener() {
                     @Override
                     public void onClick(View v) {
@@ -363,9 +356,9 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
 
         // 1. Display Name (live-synced to draft)
         if (draft.isCustom) {
-            form.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "供应商显示名称 (必填)"));
+            form.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "名称"));
             final EditText etDisplayName = AcidWidgets.inputField(
-                ctx, mIsDarkMode, draft.displayName, "例如: 我的中转网关 / Ollama 本地服务", true
+                ctx, mIsDarkMode, draft.displayName, "如 Ollama", true
             );
             etDisplayName.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -377,7 +370,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
             form.addView(etDisplayName);
         } else {
             TextView tvFixed = new TextView(ctx);
-            tvFixed.setText(draft.displayName + " (" + draft.id + ")");
+            tvFixed.setText(draft.displayName);
             tvFixed.setTextColor(textCol);
             tvFixed.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
             tvFixed.setTypeface(Typeface.DEFAULT_BOLD);
@@ -388,7 +381,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         // 2. API Key with Show/Hide interactive textAction (live-synced to draft)
         final EditText etApiKey = AcidWidgets.inputField(
             ctx, mIsDarkMode, draft.apiKey,
-            preset != null ? ("输入 API Key (" + preset.envKeyHint + ")") : "输入 sk-... (本地免鉴权接口可留空)",
+            preset != null ? preset.envKeyHint : "sk-...（选填）",
             true
         );
         etApiKey.setTransformationMethod(PasswordTransformationMethod.getInstance());
@@ -401,7 +394,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         });
 
         final TextView[] toggleBtnRef = new TextView[1];
-        TextView btnToggleKeyVis = AcidWidgets.textAction(ctx, mIsDarkMode, "显示密钥", blue, new OnClickListener() {
+        TextView btnToggleKeyVis = AcidWidgets.textAction(ctx, mIsDarkMode, "显示 Key", blue, new OnClickListener() {
             private boolean revealed = false;
             @Override
             public void onClick(View v) {
@@ -410,21 +403,21 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                     ? HideReturnsTransformationMethod.getInstance()
                     : PasswordTransformationMethod.getInstance());
                 if (toggleBtnRef[0] != null) {
-                    toggleBtnRef[0].setText(AcidLocale.tr(revealed ? "隐藏密钥" : "显示密钥"));
+                    toggleBtnRef[0].setText(AcidLocale.tr(revealed ? "隐藏 Key" : "显示 Key"));
                 }
                 etApiKey.setSelection(etApiKey.getText().length());
             }
         });
         toggleBtnRef[0] = btnToggleKeyVis;
 
-        form.addView(AcidWidgets.fieldLabelWithAction(ctx, mIsDarkMode, "API 密钥 (API Key)", btnToggleKeyVis));
+        form.addView(AcidWidgets.fieldLabelWithAction(ctx, mIsDarkMode, "API Key", btnToggleKeyVis));
         form.addView(etApiKey);
 
         // 3. Base URL (live-synced to draft)
-        form.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "API 接口地址 (OpenAI 兼容 Base URL)"));
+        form.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "Base URL"));
         final EditText etBaseUrl = AcidWidgets.inputField(
             ctx, mIsDarkMode, draft.baseUrl,
-            preset != null ? preset.defaultBaseUrl : "https://gateway.example.com/v1",
+            preset != null ? preset.defaultBaseUrl : "https://api.example.com/v1",
             true
         );
         etBaseUrl.addTextChangedListener(new TextWatcher() {
@@ -442,7 +435,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
 
         TextView btnReset = null;
         if (preset != null) {
-            btnReset = AcidWidgets.textAction(ctx, mIsDarkMode, "恢复默认模型", blue, new OnClickListener() {
+            btnReset = AcidWidgets.textAction(ctx, mIsDarkMode, "恢复默认", blue, new OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     draft.models.clear();
@@ -454,7 +447,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                 }
             });
         }
-        form.addView(AcidWidgets.fieldLabelWithAction(ctx, mIsDarkMode, "装载的模型列表", btnReset));
+        form.addView(AcidWidgets.fieldLabelWithAction(ctx, mIsDarkMode, "模型列表", btnReset));
 
         form.addView(buildModelDiscoveryActionBar(draft, modelsListBox));
         form.addView(modelsListBox);
@@ -465,7 +458,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         // 5. Pinned Footer Save CTA
         TextView btnSave = AcidWidgets.primaryButton(
             ctx, mIsDarkMode,
-            draft.isCustom && draft.id.isEmpty() ? "创建并装载供应商" : "保存供应商配置",
+            draft.isCustom && draft.id.isEmpty() ? "添加供应商" : "保存配置",
             accent,
             new OnClickListener() {
                 @Override
@@ -484,7 +477,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
                         draft.baseUrl = preset.defaultBaseUrl;
                     }
                     if (draft.models.isEmpty()) {
-                        AcidFeedback.warn(ctx, "请至少为此供应商添加或保留一个可用模型");
+                        AcidFeedback.warn(ctx, "请至少保留一个模型");
                         return;
                     }
 
@@ -523,12 +516,12 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         bar.addView(btnAdd);
 
         AcidWidgets.LoadingButton btnSync = AcidWidgets.LoadingButton.mini(
-            ctx, mIsDarkMode, "同步接口模型 (/models)", "获取中...", AcidTheme.COLOR_BLUE, false,
+            ctx, mIsDarkMode, "拉取 /models", "获取中...", AcidTheme.COLOR_BLUE, false,
             new AcidWidgets.LoadingButton.OnAsyncActionListener() {
                 @Override
                 public void onTrigger(final AcidWidgets.LoadingButton button) {
                     if (draft.baseUrl.isEmpty()) {
-                        AcidFeedback.warn(ctx, "请先填入有效的 API 接口地址");
+                        AcidFeedback.warn(ctx, "请先填写有效的 Base URL");
                         return;
                     }
                     button.setLoading();
@@ -582,7 +575,7 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
 
         if (draft.models.isEmpty()) {
             TextView empty = new TextView(ctx);
-            empty.setText(AcidLocale.tr("当前暂无已装载模型，请点击上方「+ 手动添加」或从接口同步"));
+            empty.setText(AcidLocale.tr("暂无模型"));
             empty.setTextColor(mutedCol);
             empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
             empty.setPadding(0, AcidTheme.dp(ctx, 6), 0, AcidTheme.dp(ctx, 6));
@@ -652,15 +645,15 @@ public class ModelProviderConfigSheet extends AcidBottomSheetView {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
 
-        box.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "模型 ID (必填)"));
+        box.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "模型 ID"));
         final EditText etId = AcidWidgets.inputField(
-            ctx, mIsDarkMode, "", "如: deepseek-chat / gpt-4o / qwen-max", true
+            ctx, mIsDarkMode, "", "如 gpt-4o", true
         );
         box.addView(etId);
 
-        box.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "显示名称 (选填，留空则同模型 ID)"));
+        box.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "显示名称"));
         final EditText etName = AcidWidgets.inputField(
-            ctx, mIsDarkMode, "", "如: DeepSeek V3", true
+            ctx, mIsDarkMode, "", "选填", true
         );
         box.addView(etName);
 

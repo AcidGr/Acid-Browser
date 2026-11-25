@@ -1059,6 +1059,11 @@ public final class AcidWidgets {
         }
         styleUpdater[0].run();
         hsv.addView(bar);
+        LinearLayout.LayoutParams hsvLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        hsvLp.bottomMargin = AcidTheme.dp(ctx, 10);
+        hsv.setLayoutParams(hsvLp);
         return hsv;
     }
 

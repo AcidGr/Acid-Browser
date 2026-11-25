@@ -90,7 +90,7 @@ public class SkillSheet extends AcidBottomSheetView {
 
                 if (skills.isEmpty()) {
                     container.addView(AcidWidgets.emptyState(
-                        ctx, mIsDarkMode, AcidIcons.ICON_AGENT, "暂无任何技能，点击右上角可添加或从 GitHub 导入"
+                        ctx, mIsDarkMode, AcidIcons.ICON_AGENT, "暂无 Skill"
                     ));
                     return;
                 }
@@ -280,18 +280,18 @@ public class SkillSheet extends AcidBottomSheetView {
                 LinearLayout metaCard = AcidWidgets.contentCard(ctx, mIsDarkMode);
                 TextView tvMeta = new TextView(ctx);
                 StringBuilder sb = new StringBuilder();
-                sb.append(en ? "Name: " : "技能标识 (Name): ").append(meta.name).append("\n");
+                sb.append(en ? "Name: " : "Skill 标识: ").append(meta.name).append("\n");
                 sb.append(en ? "Entry Path: skills/" : "入口路径: skills/").append(meta.fileName).append("\n");
                 sb.append(en ? "Status: " : "技能状态: ").append(meta.enabled
-                    ? (en ? "Enabled (Injected on demand)" : "已启用 (按需注入 Agent)")
-                    : (en ? "Disabled (Not injected)" : "已停用 (不注入 System Prompt)")).append("\n");
+                    ? (en ? "Enabled" : "已启用")
+                    : (en ? "Disabled" : "已停用")).append("\n");
                 if (meta.isBuiltin) {
-                    sb.append(en ? "Type: Official Core Builtin\n" : "技能类型: 官方核心预置 (Core Builtin)\n");
+                    sb.append(en ? "Type: Built-in Skill\n" : "技能类型: 内置技能\n");
                 } else if (meta.isDirectoryPackage) {
-                    sb.append(en ? "Type: Multi-file Skill Package (" : "技能类型: 标准多文件技能包 (含 ")
-                      .append(meta.companionFiles.size()).append(en ? " companion files)\n" : " 个附属文件)\n");
+                    sb.append(en ? "Type: Skill Package (" : "技能类型: 技能包（")
+                      .append(meta.companionFiles.size()).append(en ? " companion files)\n" : " 个附属文件）\n");
                 } else {
-                    sb.append(en ? "Type: Single-file Markdown Skill\n" : "技能类型: 单文件扩展技能 (Markdown)\n");
+                    sb.append(en ? "Type: Single-file Skill\n" : "技能类型: 单文件技能\n");
                 }
                 sb.append(en ? "Total Size: " : "总计大小: ").append(String.format(Locale.US, "%.1f KB", meta.fileSize / 1024.0)).append("\n");
                 SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
@@ -340,7 +340,7 @@ public class SkillSheet extends AcidBottomSheetView {
                 // 3. Entry Markdown Preview Box
                 container.addView(AcidWidgets.sectionHeader(
                     ctx, mIsDarkMode,
-                    meta.isDirectoryPackage ? "主入口文档 (SKILL.md)" : "Markdown 规则全文"
+                    meta.isDirectoryPackage ? "SKILL.md" : "Markdown 内容"
                 ));
                 container.addView(AcidWidgets.codePreviewBox(ctx, mIsDarkMode, content, 6000));
 
@@ -486,8 +486,8 @@ public class SkillSheet extends AcidBottomSheetView {
     private void showAddOrImportSkillPicker() {
         final Context ctx = getContext();
         String[] options = new String[] {
-            "从 GitHub / 外部链接导入 (支持文件夹/单文件/ZIP)",
-            "手动粘贴 / 编写 Markdown 技能"
+            "从 URL 导入",
+            "手动新建"
         };
         AcidDialogs.chooseSingle(
             ctx, mIsDarkMode,
@@ -523,12 +523,12 @@ public class SkillSheet extends AcidBottomSheetView {
 
         AcidDialogs.inputSingleLine(
             ctx, mIsDarkMode,
-            "从 GitHub / 外部链接导入技能",
-            "支持 GitHub 技能目录链接 (tree/... 自動拉取整包附属文件)、单文件链接 (SKILL.md) 或 .zip 链接",
+            "从 URL 导入 Skill",
+            "GitHub 目录、SKILL.md 或 .zip URL",
             initialUrl,
-            "https://github.com/owner/repo/tree/main/skills/my-skill",
+            "https://github.com/...",
             InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI,
-            "立即导入",
+            "导入",
             "请输入有效的 GitHub 或技能文件链接",
             new AcidDialogs.InputSubmitListener() {
                 @Override
@@ -577,10 +577,10 @@ public class SkillSheet extends AcidBottomSheetView {
 
         AcidDialogs.inputMultiLine(
             ctx, mIsDarkMode,
-            "添加自定义技能 (Markdown)",
-            "支持标准 YAML Frontmatter (--- name / description ---) 或 Markdown 标题格式...",
+            "新建 Skill",
+            "Markdown 内容",
             initialContent,
-            "---\nname: my-skill\ndescription: 简短描述何时触发该技能...\n---\n\n# 技能详细指南\n...",
+            "---\nname: my-skill\ndescription: 技能描述\n---\n",
             5, 12,
             "下一步",
             "内容不能为空",
@@ -589,10 +589,10 @@ public class SkillSheet extends AcidBottomSheetView {
                 public boolean onSubmit(final String content) {
                     AcidDialogs.inputSingleLine(
                         ctx, mIsDarkMode,
-                        "输入技能路径或名称",
-                        "支持单文件名 (如 my_skill.md) 或技能包路径 (如 my-skill/SKILL.md)",
+                        "保存 Skill",
+                        "文件名",
                         "custom_skill.md",
-                        "custom_skill.md 或 my-skill/SKILL.md",
+                        "my_skill.md",
                         InputType.TYPE_CLASS_TEXT,
                         "保存",
                         "技能名不能为空",

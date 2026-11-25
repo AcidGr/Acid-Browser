@@ -42,12 +42,12 @@
     <!-- Agent Floating Drawer & Quick Samples -->
     <string name="agent_new_session">New Chat</string>
     <string name="agent_sessions">Chats</string>
-    <string name="agent_input_hint">Ask Acid Agent to browse or run sandbox tasks...</string>
+    <string name="agent_input_hint">Enter task...</string>
     <string name="agent_btn_send">Send</string>
     <string name="agent_btn_stop">Stop</string>
     <string name="agent_btn_continue">Resume</string>
-    <string name="agent_welcome_title">Acid Autonomous Agent</string>
-    <string name="agent_welcome_desc">Equipped with 5 core sandbox tools: browser, read, write, edit, and bash. Ask it to research across pages, fill forms, write userscripts, or build local reports.</string>
+    <string name="agent_welcome_title">Acid Agent</string>
+    <string name="agent_welcome_desc">Browse pages, automate actions, write scripts, and process local files.</string>
     <string name="agent_sample_1">Download this file from the cloud drive</string>
     <string name="agent_sample_2">Build a Snake game and display it on the page</string>
     <string name="agent_sample_3">Remove ads on the current page</string>

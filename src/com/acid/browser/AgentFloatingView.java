@@ -513,7 +513,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         mAgentInputBar.addView(mBtnAttachFiles, attachLp);
 
         mEtAgentTaskInput = new EditText(ctx);
-        mEtAgentTaskInput.setHint(AcidLocale.tr("向 Acid Agent 发送网页或沙盒任务..."));
+        mEtAgentTaskInput.setHint(AcidLocale.tr("输入任务指令..."));
         mEtAgentTaskInput.setHintTextColor(AcidTheme.LIGHT_MUTED);
         mEtAgentTaskInput.setTextColor(AcidTheme.LIGHT_TEXT);
         mEtAgentTaskInput.setSingleLine(true);
@@ -761,7 +761,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         card.setPadding(pad, padV, pad, padV);
 
         TextView title = new TextView(ctx);
-        title.setText(AcidLocale.getString(R.string.agent_welcome_title, "Acid Agent 自主智能体", "Acid Autonomous Agent"));
+        title.setText(AcidLocale.getString(R.string.agent_welcome_title, "Acid Agent", "Acid Agent"));
         title.setTextColor(textCol);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_HERO);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -770,8 +770,8 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         TextView desc = new TextView(ctx);
         desc.setText(AcidLocale.getString(
             R.string.agent_welcome_desc,
-            "内置 browser (网页感知与操控)、read、write、edit、bash 五大沙盒工具。您可以直接发送指令让它跨网页调研、填写表单、编写油猴脚本或生成本地数据报告。",
-            "Equipped with 5 core sandbox tools: browser, read, write, edit, and bash. Ask it to research across pages, fill forms, write userscripts, or build local reports."
+            "支持网页操控、信息检索、编写脚本与处理本地文件。",
+            "Browse pages, automate actions, write scripts, and process local files."
         ));
         desc.setTextColor(mutedCol);
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
@@ -1309,7 +1309,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mDetailContainer.setVisibility(View.GONE);
 
             mLblArgs = new TextView(ctx);
-            mLblArgs.setText(AcidLocale.tr("调用参数 (Arguments)"));
+            mLblArgs.setText(AcidLocale.tr("参数"));
             mLblArgs.setTextColor(AcidTheme.LIGHT_MUTED);
             mLblArgs.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
             mLblArgs.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1329,7 +1329,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mDetailContainer.addView(mTvArgsCode, argsLp);
 
             mLblRes = new TextView(ctx);
-            mLblRes.setText(AcidLocale.tr("返回结果 (Output)"));
+            mLblRes.setText(AcidLocale.tr("结果"));
             mLblRes.setTextColor(AcidTheme.LIGHT_MUTED);
             mLblRes.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
             mLblRes.setTypeface(Typeface.DEFAULT_BOLD);
@@ -1548,7 +1548,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mBtnNewSession.update(AcidIcons.ICON_PLUS, "新对话", accent);
         }
         if (mEtAgentTaskInput != null) {
-            mEtAgentTaskInput.setHint(AcidLocale.tr("向 Acid Agent 发送网页或沙盒任务..."));
+            mEtAgentTaskInput.setHint(AcidLocale.tr("输入任务指令..."));
         }
         if (mAgentLoop != null && mAgentLoop.getActiveSession() != null) {
             renderSessionChatStream(mAgentLoop.getActiveSession());

@@ -40,6 +40,11 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         void onWebTextZoomChanged(int zoom);
         void onImportBookmarksRequested();
         void onExportBookmarksRequested();
+        void onTestWebDavRequested(WebDavClient.WebDavConfig config, BrowserBackupManager.BackupResultCallback callback);
+        void onWebDavUploadRequested(BrowserBackupManager.BackupResultCallback callback);
+        void onWebDavRestoreRequested(boolean overwriteMode, BrowserBackupManager.BackupResultCallback callback);
+        void onExportLocalBackupZipRequested(BrowserBackupManager.BackupResultCallback callback);
+        void onImportLocalBackupZipRequested(boolean overwriteMode);
     }
 
     private final BrowserDataStore mDataStore;
@@ -51,6 +56,10 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         mDataStore = dataStore;
         mListener = listener;
         setRootPage(buildMainPage());
+    }
+
+    public boolean isDarkMode() {
+        return mIsDarkMode;
     }
 
     public void setMcpRunning(boolean running) {
@@ -111,6 +120,15 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "系统与关于"));
                 container.addView(AcidWidgets.groupCard(
                     ctx, mIsDarkMode,
+                    AcidWidgets.navRow(
+                        ctx, mIsDarkMode, AcidIcons.ICON_RELOAD, accent,
+                        "同步与备份", null,
+                        new OnClickListener() {
+                            @Override public void onClick(View v) {
+                                pushPage(SyncBackupPageBuilder.buildSyncHomePage(BrowserSettingsSheet.this, mListener));
+                            }
+                        }
+                    ),
                     AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_SHIELD, amber,
                         "隐私与高级", null,
@@ -192,13 +210,6 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "浏览数据管理"));
                 container.addView(AcidWidgets.groupCard(
                     ctx, mIsDarkMode,
-                    AcidWidgets.navRow(
-                        ctx, mIsDarkMode, AcidIcons.ICON_BOOKMARK, accent,
-                        "书签导入与导出", "兼容主流浏览器 HTML 书签", null, true,
-                        new OnClickListener() {
-                            @Override public void onClick(View v) { showBookmarkBackupDialog(); }
-                        }
-                    ),
                     AcidWidgets.dangerRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_TRASH, "清除浏览数据",
                         new OnClickListener() {
@@ -253,7 +264,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                     ctx, mIsDarkMode,
                     AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_TERMINAL, accent,
-                        "MCP 服务与认证", "查看本机/局域网地址、配置 Bearer 令牌",
+                        "MCP 服务", null,
                         mIsMcpRunning ? "运行中" : "已停止", true,
                         new OnClickListener() {
                             @Override public void onClick(View v) {
@@ -380,7 +391,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                         new OnClickListener() {
                             @Override
                             public void onClick(View v) {
-                                AcidFeedback.info(ctx, "工作区配置文件: settings.json (支持实时热重载)");
+                                AcidFeedback.info(ctx, "配置文件: settings.json");
                             }
                         }
                     )
@@ -538,7 +549,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 sampleBox.addView(tvSampleTitle);
 
                 final TextView tvSampleBody = new TextView(ctx);
-                tvSampleBody.setText(AcidLocale.tr("拖动下方滑块可全局调整所有网页的正文字号大小。当前阅读比例会实时应用于全部打开的标签页，无需手动刷新。"));
+                tvSampleBody.setText(AcidLocale.tr("拖动滑块实时调整全局网页字号。"));
                 tvSampleBody.setTextColor(AcidTheme.icon(dark));
                 LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -835,9 +846,9 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         AcidDialogs.inputSingleLine(
             ctx, mIsDarkMode,
             "自定义搜索引擎",
-            "搜索地址模板 (使用 %s 代表搜索词)",
+            "搜索 URL（%s 代表搜索词）",
             mDataStore.getCustomSearchEngineUrl(),
-            "https://example.com/search?q=%s",
+            "https://example.com/s?q=%s",
             InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI,
             "保存",
             "自定义搜索 URL 不能为空",
@@ -880,8 +891,8 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         final Context ctx = getContext();
         AcidDialogs.inputSingleLine(
             ctx, mIsDarkMode,
-            "自定义主页网址",
-            "主页网址",
+            "自定义主页 URL",
+            "主页 URL",
             mDataStore.getCustomHomeUrl(),
             "https://www.bing.com",
             InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI,
@@ -905,7 +916,7 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         AcidDialogs.confirmDanger(
             getContext(), mIsDarkMode,
             "清理 AI 工作区",
-            "将清除 Agent 在沙盒中生成的历史报告、抓取数据与临时文件。\n\n安全保护：不会删除 settings.json 配置文件、bookmarks.json 书签、history.json 浏览历史、自定义主页 (homepage)、用户脚本 (userscripts) 与广告拦截规则 (adblock)。",
+            "将清除 Agent 生成的临时文件，保留设置、书签、脚本与拦截规则。",
             "立即清理",
             new Runnable() {
                 @Override
@@ -916,39 +927,14 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         );
     }
 
-    private void showBookmarkBackupDialog() {
-        final Context ctx = getContext();
-        String[] options = new String[]{
-            "导入书签 (.html / .json)",
-            "导出书签 (.html)"
-        };
-        AcidDialogs.chooseSingle(
-            ctx, mIsDarkMode,
-            "选择书签操作",
-            options,
-            -1,
-            new AcidDialogs.SingleChoiceCallback() {
-                @Override
-                public void onSelected(int index) {
-                    if (mListener == null) return;
-                    if (index == 0) {
-                        mListener.onImportBookmarksRequested();
-                    } else if (index == 1) {
-                        mListener.onExportBookmarksRequested();
-                    }
-                }
-            }
-        );
-    }
-
     private void showClearDataDialog() {
         final Context ctx = getContext();
         final String[] options = new String[]{
-            "网页缓存 (Cache)",
-            "Cookies 与网站登录状态",
-            "历史浏览记录",
-            "网页本地存储 (WebStorage)",
-            "AI 工作区临时文件 (保留配置与脚本)"
+            "网页缓存",
+            "Cookie 与登录状态",
+            "浏览历史",
+            "网站本地存储",
+            "AI 工作区临时文件"
         };
         final boolean[] checked = new boolean[]{true, false, true, false, false};
 

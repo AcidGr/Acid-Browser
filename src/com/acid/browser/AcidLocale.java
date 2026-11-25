@@ -231,6 +231,7 @@ public final class AcidLocale {
                 if ("全部会话".equals(prefix)) return "All Chats" + tail;
                 if ("已装载供应商".equals(prefix)) return "Configured Providers" + tail;
                 if ("默认供应商目录".equals(prefix)) return "Preset Providers" + tail;
+                if ("预设供应商".equals(prefix)) return "Preset Providers" + tail;
                 if ("全部书签".equals(prefix)) return "All Bookmarks" + tail;
                 if ("未分类".equals(prefix)) return "Uncategorized" + tail;
                 if ("搜索结果".equals(prefix)) return "Search Results" + tail;
@@ -407,6 +408,9 @@ public final class AcidLocale {
         if (s.startsWith("已装载 ") && s.contains(" 个模型: ")) {
             return s.replace("已装载 ", "Loaded ").replace(" 个模型: ", " models: ").replace(" 等", " etc.");
         }
+        if (s.contains(" 个模型: ") && Character.isDigit(s.charAt(0))) {
+            return s.replace(" 个模型: ", " models: ").replace(" 等", " etc.");
+        }
         if (s.startsWith("连接成功！服务端返回 ") && s.endsWith(" 个可用模型")) {
             String n = s.substring(11, s.length() - 6).trim();
             return "Connected! Server returned " + n + " available models";
@@ -484,6 +488,10 @@ public final class AcidLocale {
             String name = s.substring(8, s.length() - 24);
             return "Dissolve folder \"" + name + "\"? Bookmarks inside will be moved up or uncategorized without being deleted.";
         }
+        if (s.startsWith("解散「") && s.endsWith("」后，书签将移至未分类。")) {
+            String name = s.substring(3, s.length() - 12);
+            return "Dissolving \"" + name + "\" moves its bookmarks to Uncategorized.";
+        }
         if (s.startsWith("确定要删除文件夹「") && s.endsWith("」及其中的全部书签吗？此操作无法撤销。")) {
             String name = s.substring(9, s.length() - 20);
             return "Delete folder \"" + name + "\" and all bookmarks inside? This cannot be undone.";
@@ -544,6 +552,75 @@ public final class AcidLocale {
         }
         if (s.startsWith("已移除 ") && s.endsWith(" 个下载任务记录")) {
             return "Removed " + s.substring(4, s.length() - 8).trim() + " download records";
+        }
+        if (s.startsWith("云端上传完成（") && s.endsWith(" 条书签）")) {
+            String count = s.substring(7, s.length() - 5).trim();
+            return "Cloud upload complete (" + count + " bookmarks)";
+        }
+        if (s.startsWith("已恢复 ") && s.contains(" 项模块数据")) {
+            boolean partialArchiveNote = false;
+            String core = s;
+            String noteSuffix = "（云端暂无完整包，仅恢复书签）";
+            if (core.endsWith(noteSuffix)) {
+                partialArchiveNote = true;
+                core = core.substring(0, core.length() - noteSuffix.length());
+            }
+            int modEnd = core.indexOf(" 项模块数据");
+            String modCount = core.substring(4, modEnd).trim();
+            String tail = core.substring(modEnd + 6);
+            StringBuilder en = new StringBuilder("Restored ").append(modCount).append(" modules");
+            if (tail.startsWith(" · 新增书签 ")) {
+                en.append(" · ").append(tail.substring(8).trim()).append(" new bookmarks");
+            } else if (tail.startsWith(" · 书签 ")) {
+                en.append(" · ").append(tail.substring(6).trim()).append(" bookmarks");
+            }
+            if (partialArchiveNote) {
+                en.append(" (bookmarks.html only; no full archive on server)");
+            }
+            return en.toString();
+        }
+        final String authFailPrefix = "认证失败（HTTP ";
+        final String authFailSuffix = "），请检查用户名或应用专用密码";
+        if (s.startsWith(authFailPrefix) && s.endsWith(authFailSuffix)) {
+            String code = s.substring(authFailPrefix.length(), s.length() - authFailSuffix.length()).trim();
+            return "Authentication failed (HTTP " + code + "). Check username or app password.";
+        }
+        final String davDirErrPrefix = "云端目录尚未创建或服务权限不足（HTTP ";
+        final String davErrSuffix = "）";
+        if (s.startsWith(davDirErrPrefix) && s.endsWith(davErrSuffix)) {
+            String code = s.substring(davDirErrPrefix.length(), s.length() - davErrSuffix.length()).trim();
+            return "Remote folder missing or insufficient permissions (HTTP " + code + ")";
+        }
+        final String davSpaceErrPrefix = "云端存储空间不足或单文件超出限制（HTTP ";
+        if (s.startsWith(davSpaceErrPrefix) && s.endsWith(davErrSuffix)) {
+            String code = s.substring(davSpaceErrPrefix.length(), s.length() - davErrSuffix.length()).trim();
+            return "Insufficient cloud storage or file too large (HTTP " + code + ")";
+        }
+        final String sizeLimitPrefix = "文件体积超过安全限制（最大 ";
+        final String sizeLimitSuffix = " MB）";
+        if (s.startsWith(sizeLimitPrefix) && s.endsWith(sizeLimitSuffix)) {
+            String mb = s.substring(sizeLimitPrefix.length(), s.length() - sizeLimitSuffix.length()).trim();
+            return "File exceeds size limit (max " + mb + " MB)";
+        }
+        final String exportZipPrefix = "已导出至 Download/";
+        if (s.startsWith(exportZipPrefix)) {
+            return "Exported to Download/" + s.substring(exportZipPrefix.length());
+        }
+        final String davPolicyPrefix = "WebDAV 地址被安全策略拦截：";
+        if (s.startsWith(davPolicyPrefix)) {
+            return "WebDAV URL blocked by security policy: " + s.substring(davPolicyPrefix.length());
+        }
+        final String tlsVerifyPrefix = "TLS 主机名校验失败：";
+        if (s.startsWith(tlsVerifyPrefix)) {
+            return "TLS hostname verification failed: " + s.substring(tlsVerifyPrefix.length());
+        }
+        if (s.startsWith("最近记录：")) {
+            String rest = s.substring(5);
+            int sep = rest.indexOf(" · ");
+            if (sep > 0) {
+                return "Last activity: " + rest.substring(0, sep) + " · " + tr(rest.substring(sep + 3));
+            }
+            return "Last activity: " + rest;
         }
         if (s.startsWith("[") && s.contains("] ")) {
             int close = s.indexOf("] ");
@@ -811,7 +888,6 @@ public final class AcidLocale {
         EN_MAP.put("选择默认搜索引擎", "Select Search Engine");
         EN_MAP.put("自定义搜索引擎", "Custom Search Engine");
         EN_MAP.put("自定义搜索引擎地址", "Custom Search URL");
-        EN_MAP.put("搜索地址模板 (使用 %s 代表搜索词)", "Search URL template (use %s for query)");
         EN_MAP.put("自定义搜索 URL 不能为空", "Custom search URL cannot be empty");
         EN_MAP.put("已保存自定义搜索引擎", "Custom search engine saved");
         EN_MAP.put("百度 (Baidu)", "Baidu");
@@ -834,8 +910,6 @@ public final class AcidLocale {
         EN_MAP.put("网页字体大小", "Webpage Font Size");
         EN_MAP.put("实时效果预览", "Live Preview");
         EN_MAP.put("Acid Browser · 网页排版预览", "Acid Browser · Webpage Typography Preview");
-        EN_MAP.put("拖动下方滑块可全局调整所有网页的正文字号大小。当前阅读比例会实时应用于全部打开的标签页，无需手动刷新。",
-            "Drag the slider below to scale text across all webpages. Changes apply live to every open tab without reloading.");
         EN_MAP.put("发布于今天 · 阅读约 3 分钟 · 评论 12", "Published today · 3 min read · 12 comments");
         EN_MAP.put("字号调节", "Scale Adjustment");
         EN_MAP.put("全局网页缩放", "Global Web Text Scale");
@@ -845,11 +919,7 @@ public final class AcidLocale {
         EN_MAP.put("浏览数据管理", "Browsing Data");
         EN_MAP.put("清除浏览数据", "Clear Browsing Data");
         EN_MAP.put("退出时自动清理", "Clear Data on Exit");
-        EN_MAP.put("网页缓存 (Cache)", "Web Cache");
-        EN_MAP.put("Cookies 与网站登录状态", "Cookies & Site Data");
         EN_MAP.put("历史浏览记录", "Browsing History");
-        EN_MAP.put("网页本地存储 (WebStorage)", "Web Storage (LocalStorage/IndexedDB)");
-        EN_MAP.put("AI 工作区临时文件 (保留配置与脚本)", "AI Workspace Temp Files (Keep configs & scripts)");
         EN_MAP.put("请至少勾选一项要清除的数据", "Please select at least one item to clear");
 
         // AI & Automation settings
@@ -857,8 +927,6 @@ public final class AcidLocale {
         EN_MAP.put("模型配置", "Model Configuration");
         EN_MAP.put("打开 Agent 对话窗", "Open Agent Chat");
         EN_MAP.put("远程网关与沙盒存储", "Remote Gateway & Sandbox");
-        EN_MAP.put("MCP 服务与认证", "MCP Server & Auth");
-        EN_MAP.put("查看本机/局域网地址、配置 Bearer 令牌", "View Local/LAN endpoints & Bearer token");
         EN_MAP.put("MCP 运行中", "MCP Running");
         EN_MAP.put("运行中", "Running");
         EN_MAP.put("已停止", "Stopped");
@@ -866,8 +934,6 @@ public final class AcidLocale {
         EN_MAP.put("已暂停", "Paused");
         EN_MAP.put("清理 AI 工作区文件", "Clean AI Workspace Temp Files");
         EN_MAP.put("清理 AI 工作区", "Clean AI Workspace");
-        EN_MAP.put("将清除 Agent 在沙盒中生成的历史报告、抓取数据与临时文件。\n\n安全保护：不会删除 settings.json 配置文件、bookmarks.json 书签、history.json 浏览历史、自定义主页 (homepage)、用户脚本 (userscripts) 与广告拦截规则 (adblock)。",
-            "Removes temporary reports and scraped files generated by the Agent.\n\nProtected: settings.json, bookmarks.json, history.json, custom homepage, userscripts, and adblock rules are preserved.");
         EN_MAP.put("AI 工作区当前无临时残留 (settings.json 与脚本已安全保留)", "No temporary files in AI workspace (configs & scripts preserved)");
 
         // Protection & Extensions
@@ -884,11 +950,7 @@ public final class AcidLocale {
         EN_MAP.put("开发者与配置同步", "Developer & Config Sync");
         EN_MAP.put("网页远程调试", "WebView Remote Debugging");
         EN_MAP.put("配置文件", "Config File");
-        EN_MAP.put("工作区配置文件: settings.json (支持实时热重载)", "Workspace config: settings.json (Live hot-reload supported)");
-        EN_MAP.put("已开启网页远程调试 (Chrome DevTools)", "Enabled WebView Remote Debugging (Chrome DevTools)");
         EN_MAP.put("已关闭网页远程调试", "Disabled WebView Remote Debugging");
-        EN_MAP.put("已开启「不跟踪 (DNT)」请求", "Enabled Do Not Track (DNT)");
-        EN_MAP.put("已关闭「不跟踪」请求", "Disabled Do Not Track (DNT)");
         EN_MAP.put("已开启无图省流模式", "Enabled Block Images mode");
         EN_MAP.put("已恢复正常图片加载", "Restored image loading");
 
@@ -942,19 +1004,12 @@ public final class AcidLocale {
         EN_MAP.put("会话", "Chats");
         EN_MAP.put("历史会话", "Chat History");
         EN_MAP.put("新建对话", "New Chat");
-        EN_MAP.put("暂无历史对话，点击右上角「+ 新建对话」开始", "No chat history yet. Tap \"+ New Chat\" at top-right to start.");
         EN_MAP.put("删除对话记录", "Delete Chat");
         EN_MAP.put("已删除对话", "Chat deleted");
-        EN_MAP.put("向 Acid Agent 发送网页或沙盒任务...", "Ask Acid Agent to browse or run sandbox tasks...");
-        EN_MAP.put("Acid Agent 自主智能体", "Acid Autonomous Agent");
-        EN_MAP.put("内置 browser (网页感知与操控)、read、write、edit、bash 五大沙盒工具。您可以直接发送指令让它跨网页调研、填写表单、编写油猴脚本或生成本地数据报告。",
-            "Equipped with 5 core sandbox tools: browser, read, write, edit, and bash. Ask it to research across pages, fill forms, write userscripts, or build local reports.");
         EN_MAP.put("💡 帮我下载网盘里的这个文件", "💡 Download this file from the cloud drive");
         EN_MAP.put("💡 帮我做一个贪吃蛇游戏并直接展示在页面上", "💡 Build a Snake game and display it on the page");
         EN_MAP.put("💡 帮我去掉当前页面上的广告", "💡 Remove ads on the current page");
         EN_MAP.put("💡 帮我下载当前页面上的媒体内容", "💡 Download media from the current page");
-        EN_MAP.put("调用参数 (Arguments)", "Arguments");
-        EN_MAP.put("返回结果 (Output)", "Output");
         EN_MAP.put("执行中", "Running");
         EN_MAP.put("失败", "Failed");
         EN_MAP.put("完成", "Done");
@@ -976,63 +1031,24 @@ public final class AcidLocale {
 
         // Model Selector & Provider Config
         EN_MAP.put("选择模型", "Select Model");
-        EN_MAP.put("当前使用模型", "Current Active Model");
-        EN_MAP.put("暂无可用模型，请点击右上角「模型配置」添加", "No models loaded. Tap \"Model Configuration\" at top-right to add.");
-        EN_MAP.put("思考深度 (Reasoning Effort)", "Reasoning Effort");
-        EN_MAP.put("搜索已装载的供应商或模型名称...", "Search loaded providers or models...");
-        EN_MAP.put("● 密钥已就绪", "● API Key Ready");
         EN_MAP.put("● 待填 API Key", "● API Key Required");
-        EN_MAP.put("● 待填密钥", "● Key Required");
-        EN_MAP.put("尚未装载任何模型，请点击右上角「模型配置」添加供应商", "No models loaded yet. Tap \"Model Configuration\" to add a provider.");
-        EN_MAP.put("未找到匹配的已装载模型", "No matching loaded models found");
         EN_MAP.put("添加供应商", "Add Provider");
-        EN_MAP.put("自定义", "Custom");
         EN_MAP.put("内置目录", "Preset");
-        EN_MAP.put("测试连通性", "Test Connection");
         EN_MAP.put("测试中...", "Testing...");
-        EN_MAP.put("配置与模型", "Configure & Models");
         EN_MAP.put("删除供应商", "Delete Provider");
         EN_MAP.put("添加模型供应商", "Add Model Provider");
-        EN_MAP.put("自定义供应商 API", "Custom Provider API");
-        EN_MAP.put("选择主流大模型厂商，填入 API 密钥即可一键装载默认推荐模型。", "Select a popular LLM provider and enter your API Key to load recommended models.");
-        EN_MAP.put("接入第三方聚合网关、本地 Ollama / vLLM 或任意兼容 OpenAI Chat Completions 协议的服务。", "Connect any OpenAI-compatible gateway, local Ollama / vLLM, or custom endpoint.");
-        EN_MAP.put("已装载 · 编辑", "Loaded · Edit");
-        EN_MAP.put("+ 配置装载", "+ Configure");
         EN_MAP.put("创建自定义供应商", "Create Custom Provider");
-        EN_MAP.put("供应商显示名称 (必填)", "Provider Display Name (Required)");
-        EN_MAP.put("例如: 我的中转网关 / Ollama 本地服务", "e.g., My OpenAI Proxy / Local Ollama");
-        EN_MAP.put("输入 sk-... (本地免鉴权接口可留空)", "Enter sk-... (leave blank for local auth-free endpoints)");
         EN_MAP.put("显示密钥", "Show Key");
-        EN_MAP.put("隐藏密钥", "Hide Key");
-        EN_MAP.put("API 密钥 (API Key)", "API Key");
-        EN_MAP.put("API 接口地址 (OpenAI 兼容 Base URL)", "API Base URL (OpenAI Compatible)");
         EN_MAP.put("恢复默认模型", "Restore Defaults");
         EN_MAP.put("已恢复预设模型目录", "Restored preset models");
-        EN_MAP.put("装载的模型列表", "Loaded Models");
-        EN_MAP.put("创建并装载供应商", "Create & Load Provider");
-        EN_MAP.put("保存供应商配置", "Save Provider Config");
         EN_MAP.put("供应商名称不能为空", "Provider name cannot be empty");
-        EN_MAP.put("请至少为此供应商添加或保留一个可用模型", "Please keep or add at least one model");
         EN_MAP.put("+ 手动添加", "+ Add Manually");
-        EN_MAP.put("同步接口模型 (/models)", "Sync Models (/models)");
         EN_MAP.put("获取中...", "Fetching...");
-        EN_MAP.put("请先填入有效的 API 接口地址", "Please enter a valid API Base URL first");
         EN_MAP.put("接口未返回任何可用模型", "Endpoint returned no available models");
-        EN_MAP.put("当前暂无已装载模型，请点击上方「+ 手动添加」或从接口同步", "No models loaded. Tap \"+ Add Manually\" or sync from endpoint.");
-        EN_MAP.put("模型 ID (必填)", "Model ID (Required)");
-        EN_MAP.put("如: deepseek-chat / gpt-4o / qwen-max", "e.g., deepseek-chat / gpt-4o / qwen-max");
-        EN_MAP.put("显示名称 (选填，留空则同模型 ID)", "Display Name (Optional)");
-        EN_MAP.put("如: DeepSeek V3", "e.g., DeepSeek V3");
         EN_MAP.put("手动添加模型", "Add Model Manually");
         EN_MAP.put("模型 ID 不能为空", "Model ID cannot be empty");
         EN_MAP.put("该模型 ID 已存在", "Model ID already exists");
         EN_MAP.put("添加所选", "Add Selected");
-        EN_MAP.put("默认 (Default)", "Default");
-        EN_MAP.put("关闭 (Off)", "Off");
-        EN_MAP.put("低 (Low)", "Low");
-        EN_MAP.put("中 (Medium)", "Medium");
-        EN_MAP.put("高 (High)", "High");
-        EN_MAP.put("极高 (Max)", "Max");
         EN_MAP.put("关闭思考", "Think:Off");
         EN_MAP.put("思考:低", "Think:Low");
         EN_MAP.put("思考:中", "Think:Med");
@@ -1052,13 +1068,10 @@ public final class AcidLocale {
 
         // Bookmarks & History
         EN_MAP.put("书签与历史", "Bookmarks & History");
-        EN_MAP.put("搜索书签标题或网址...", "Search bookmarks by title or URL...");
-        EN_MAP.put("搜索历史标题或网址...", "Search history by title or URL...");
         EN_MAP.put("收藏当前页", "Bookmark Page");
         EN_MAP.put("已收藏当前网页", "Page bookmarked");
         EN_MAP.put("清空历史", "Clear History");
         EN_MAP.put("暂无书签收藏", "No bookmarks yet");
-        EN_MAP.put("暂无书签收藏，点击右上角可收藏当前页", "No bookmarks yet. Tap top-right to bookmark current page.");
         EN_MAP.put("暂无历史浏览记录", "No browsing history yet");
         EN_MAP.put("全选", "Select All");
         EN_MAP.put("取消全选", "Deselect All");
@@ -1080,8 +1093,6 @@ public final class AcidLocale {
         EN_MAP.put("删除书签", "Delete Bookmark");
         EN_MAP.put("添加到书签", "Add to Bookmarks");
         EN_MAP.put("已添加至书签收藏", "Added to bookmarks");
-        EN_MAP.put("网站标题", "Site Title");
-        EN_MAP.put("网址 (URL)", "URL");
         EN_MAP.put("网址不能为空", "URL cannot be empty");
         EN_MAP.put("书签已更新", "Bookmark updated");
         EN_MAP.put("已删除书签", "Bookmark deleted");
@@ -1092,28 +1103,17 @@ public final class AcidLocale {
         EN_MAP.put("添加 / 导入", "Add / Import");
         EN_MAP.put("书签操作", "Bookmark Actions");
         EN_MAP.put("手动添加书签", "Add Bookmark");
-        EN_MAP.put("导入书签 (.html / .json)", "Import Bookmarks (.html / .json)");
-        EN_MAP.put("导出书签 (.html)", "Export Bookmarks (.html)");
         EN_MAP.put("添加书签", "Add Bookmark");
-        EN_MAP.put("添加", "Add");
-        EN_MAP.put("分类文件夹 (选填)", "Folder (Optional)");
-        EN_MAP.put("留空为未分类，支持多级如 开发/开源", "Leave empty for uncategorized, or e.g. Dev/Tools");
         EN_MAP.put("未分类", "Uncategorized");
         EN_MAP.put("管理", "Manage");
         EN_MAP.put("重命名文件夹", "Rename Folder");
         EN_MAP.put("文件夹名称", "Folder Name");
-        EN_MAP.put("输入新文件夹名称 (支持 A/B)", "Enter new folder name (supports A/B)");
         EN_MAP.put("文件夹名称不能为空", "Folder name cannot be empty");
-        EN_MAP.put("解散文件夹 (移至未分类)", "Dissolve Folder (Move to Uncategorized)");
         EN_MAP.put("解散", "Dissolve");
         EN_MAP.put("删除文件夹及书签", "Delete Folder & Bookmarks");
-        EN_MAP.put("书签导入与导出", "Import & Export Bookmarks");
-        EN_MAP.put("兼容主流浏览器 HTML 书签", "Compatible with standard HTML bookmarks");
-        EN_MAP.put("选择书签操作", "Bookmark Import / Export");
         EN_MAP.put("选择书签文件 (.html / .json)", "Select Bookmark File (.html / .json)");
         EN_MAP.put("书签导出成功", "Bookmarks Exported");
         EN_MAP.put("分享文件", "Share File");
-        EN_MAP.put("完成", "Done");
         EN_MAP.put("已导出 ", "Exported ");
         EN_MAP.put(" 条书签至：", " bookmarks to:");
         EN_MAP.put("分享书签文件", "Share Bookmark File");
@@ -1136,10 +1136,8 @@ public final class AcidLocale {
         EN_MAP.put("视频", "Video");
         EN_MAP.put("音频", "Audio");
         EN_MAP.put("其它", "Other");
-        EN_MAP.put("搜索下载文件名...", "Search downloaded files...");
         EN_MAP.put("打开目录", "Open Folder");
         EN_MAP.put("暂无下载任务记录", "No download tasks yet");
-        EN_MAP.put("未找到匹配的下载任务", "No matching downloads found");
         EN_MAP.put("开始下载", "Start Download");
         EN_MAP.put("暂停下载", "Pause Download");
         EN_MAP.put("继续下载", "Resume Download");
@@ -1159,8 +1157,6 @@ public final class AcidLocale {
         EN_MAP.put("已删除任务及本地源文件", "Deleted task and local file");
         EN_MAP.put("已移除下载任务记录", "Removed download record");
         EN_MAP.put("新建下载", "New Download");
-        EN_MAP.put("保存文件名 (可修改)", "File Name (Editable)");
-        EN_MAP.put("输入保存文件名", "Enter file name");
         EN_MAP.put("保存目录: /Download/", "Folder: /Download/");
         EN_MAP.put("浏览目录", "Browse");
         EN_MAP.put("复制链接", "Copy Link");
@@ -1170,7 +1166,6 @@ public final class AcidLocale {
         // AdBlock Sheet
         EN_MAP.put("防护已开启", "Protection Active");
         EN_MAP.put("防护已暂停", "Protection Paused");
-        EN_MAP.put("自动拦截网页广告请求、弹窗贴片与恶意唤端", "Automatically blocks ads, popups, and unwanted app launches");
         EN_MAP.put("广告拦截已开启", "AdBlock enabled");
         EN_MAP.put("广告拦截已暂停", "AdBlock paused");
         EN_MAP.put("累计已拦截请求: ", "Total Blocked Requests: ");
@@ -1178,13 +1173,9 @@ public final class AcidLocale {
         EN_MAP.put("订阅规则", "Subscribed");
         EN_MAP.put("自定义规则", "Custom");
         EN_MAP.put("阻止调用第三方 APP", "Block External App Launches");
-        EN_MAP.put("外部应用唤起拦截等级", "App Launch Interception Policy");
         EN_MAP.put("完全拦截", "Block All");
         EN_MAP.put("弹窗询问", "Ask First");
         EN_MAP.put("完全不拦截", "Allow All");
-        EN_MAP.put("已切换为「一级：完全拦截第三方 APP」", "Switched to Level 1: Block All External Apps");
-        EN_MAP.put("已切换为「二级：唤起第三方 APP 时弹窗询问」", "Switched to Level 2: Ask Before Opening External Apps");
-        EN_MAP.put("已切换为「三级：允许直接打开第三方 APP」", "Switched to Level 3: Allow External Apps");
         EN_MAP.put(
             "当前为「一级：完全拦截」—— 严禁网页自动拉起任何外部应用，强制留在浏览器内浏览。\n注：当 AI Agent 处于运行接管状态时，将自动临时锁定为「完全拦截」，任务结束后恢复您的设置。",
             "Current: Level 1 (Block All) — Prevents web pages from launching any external apps and keeps browsing inside Acid Browser.\nNote: Automatically locked to \"Block All\" while AI Agent is active, and restored when finished."
@@ -1198,18 +1189,11 @@ public final class AcidLocale {
             "Current: Level 3 (Allow All) — Allows web pages to directly launch installed third-party apps.\nNote: Automatically locked to \"Block All\" while AI Agent is active, and restored when finished."
         );
         EN_MAP.put("在线规则订阅", "Filter Subscription");
-        EN_MAP.put("ABP / EasyList 订阅地址", "ABP / EasyList Subscription URL");
-        EN_MAP.put("拉取并更新订阅规则", "Fetch & Update Rules");
-        EN_MAP.put("正在拉取规则...", "Fetching rules...");
         EN_MAP.put("请输入有效的订阅规则 URL", "Please enter a valid subscription URL");
         EN_MAP.put("自定义拦截规则", "Custom Filter Rules");
-        EN_MAP.put("规则列表 (支持 ||domain^ 域名拦截与 ##selector 元素隐藏)", "Rules (||domain^ network block & ##selector element hiding)");
-        EN_MAP.put("例如:\n||ads.example.com^\nexample.com##.floating-banner", "e.g.:\n||ads.example.com^\nexample.com##.floating-banner");
-        EN_MAP.put("保存自定义规则", "Save Custom Rules");
         EN_MAP.put("自定义拦截规则已保存生效", "Custom rules saved and applied");
 
         // Userscripts Sheet
-        EN_MAP.put("尚未安装任何用户脚本，点击右上角可导入", "No userscripts installed. Tap top-right to import.");
         EN_MAP.put("导入脚本", "Import");
         EN_MAP.put("手动导入", "Manual Import");
         EN_MAP.put("所有网站", "All Sites");
@@ -1234,9 +1218,6 @@ public final class AcidLocale {
         EN_MAP.put("检查更新失败", "Update check failed");
         EN_MAP.put("发现新版本", "Update Available");
         EN_MAP.put("导入用户脚本", "Import Userscript");
-        EN_MAP.put("在线脚本 URL (.user.js) 或完整脚本源码", "Script URL (.user.js) or full script source");
-        EN_MAP.put("https://.../script.user.js 或 // ==UserScript==...", "https://.../script.user.js or // ==UserScript==...");
-        EN_MAP.put("解析并安装", "Parse & Install");
         EN_MAP.put("请输入脚本链接或源码", "Please enter a script URL or source code");
         EN_MAP.put("未检测到有效 URL 或 ==UserScript== 元数据头", "No valid URL or ==UserScript== header detected");
         EN_MAP.put("获取脚本失败，内容为空", "Failed to fetch script: empty content");
@@ -1244,7 +1225,6 @@ public final class AcidLocale {
         EN_MAP.put("安装用户脚本", "Install Userscript");
 
         // Skills Sheet
-        EN_MAP.put("暂无任何技能，点击右上角可添加或从 GitHub 导入", "No skills found. Tap top-right to add or import from GitHub.");
         EN_MAP.put("添加技能", "Add Skill");
         EN_MAP.put("查看技能详情", "Skill Details");
         EN_MAP.put("停用技能", "Disable Skill");
@@ -1253,8 +1233,6 @@ public final class AcidLocale {
         EN_MAP.put("重置默认", "Reset");
         EN_MAP.put("删除技能", "Delete Skill");
         EN_MAP.put("技能元数据", "Skill Metadata");
-        EN_MAP.put("主入口文档 (SKILL.md)", "Entry Document (SKILL.md)");
-        EN_MAP.put("Markdown 规则全文", "Markdown Document");
         EN_MAP.put("复制全文", "Copy Full Text");
         EN_MAP.put("已复制技能 Markdown 全文", "Copied skill Markdown to clipboard");
         EN_MAP.put("编辑修改", "Edit Skill");
@@ -1270,27 +1248,10 @@ public final class AcidLocale {
         EN_MAP.put("删除失败", "Delete failed");
         EN_MAP.put("保存技能失败", "Failed to save skill");
         EN_MAP.put("保存失败", "Save failed");
-        EN_MAP.put("从 GitHub / 外部链接导入 (支持文件夹/单文件/ZIP)", "Import from GitHub / URL (Folder / File / ZIP)");
-        EN_MAP.put("手动粘贴 / 编写 Markdown 技能", "Paste / Write Markdown Skill Manually");
         EN_MAP.put("添加或导入技能", "Add or Import Skill");
-        EN_MAP.put("从 GitHub / 外部链接导入技能", "Import Skill from GitHub / URL");
-        EN_MAP.put("支持 GitHub 技能目录链接 (tree/... 自動拉取整包附属文件)、单文件链接 (SKILL.md) 或 .zip 链接",
-            "Supports GitHub directory URLs (tree/...), single SKILL.md URLs, or .zip archive URLs");
-        EN_MAP.put("立即导入", "Import Now");
         EN_MAP.put("请输入有效的 GitHub 或技能文件链接", "Please enter a valid GitHub or skill URL");
         EN_MAP.put("正在从远程拉取技能及附属文件...", "Fetching skill and companion files...");
-        EN_MAP.put("添加自定义技能 (Markdown)", "Add Custom Skill (Markdown)");
-        EN_MAP.put("支持标准 YAML Frontmatter (--- name / description ---) 或 Markdown 标题格式...",
-            "Supports YAML Frontmatter (--- name / description ---) or Markdown headings...");
-        EN_MAP.put(
-            "---\nname: my-skill\ndescription: 简短描述何时触发该技能...\n---\n\n# 技能详细指南\n...",
-            "---\nname: my-skill\ndescription: Briefly describe when to use this skill...\n---\n\n# Skill Guide\n..."
-        );
         EN_MAP.put("内容不能为空", "Content cannot be empty");
-        EN_MAP.put("输入技能路径或名称", "Enter Skill Path or Name");
-        EN_MAP.put("支持单文件名 (如 my_skill.md) 或技能包路径 (如 my-skill/SKILL.md)",
-            "Supports flat file (my_skill.md) or package path (my-skill/SKILL.md)");
-        EN_MAP.put("custom_skill.md 或 my-skill/SKILL.md", "custom_skill.md or my-skill/SKILL.md");
         EN_MAP.put("技能名不能为空", "Skill name cannot be empty");
         EN_MAP.put("保存修改", "Save Changes");
 
@@ -1298,64 +1259,18 @@ public final class AcidLocale {
         EN_MAP.put("MCP 服务", "MCP Server");
         EN_MAP.put("MCP 服务运行中", "MCP Server Running");
         EN_MAP.put("MCP 服务已停止", "MCP Server Stopped");
-        EN_MAP.put("允许外部 AI 工具连接并协同遥控浏览器。请开启时确保你知道 MCP 是什么。",
-            "Allows external AI tools (Cursor, Claude Desktop) to connect and automate the browser via MCP.");
         EN_MAP.put("连接地址", "Endpoints");
-        EN_MAP.put("点击复制本机地址", "Tap to copy localhost URL");
-        EN_MAP.put("服务未启动", "Server stopped");
-        EN_MAP.put("局域网监听未开启 (仅本机可连)", "LAN access disabled (localhost only)");
-        EN_MAP.put("点击复制局域网地址", "Tap to copy LAN URL");
-        EN_MAP.put("未连接 Wi-Fi / 无局域网 IP", "No Wi-Fi / LAN IP detected");
         EN_MAP.put("本机地址", "Localhost Endpoint");
         EN_MAP.put("局域网地址", "LAN Endpoint");
         EN_MAP.put("未启动", "Stopped");
         EN_MAP.put("未就绪", "Not Ready");
         EN_MAP.put("服务端口", "Port");
-        EN_MAP.put("MCP 服务未启动，请先在上方启动服务", "MCP Server is stopped. Please start it above first.");
-        EN_MAP.put("请先在下方开启「允许局域网设备连接」", "Please enable \"Allow LAN Connections\" below first");
         EN_MAP.put("当前未检测到局域网 IP，请确认已连接 Wi-Fi", "No LAN IP detected. Please check your Wi-Fi connection.");
-        EN_MAP.put("安全认证 (Bearer Token)", "Authentication (Bearer Token)");
-        EN_MAP.put("启用 Bearer 令牌认证", "Require Bearer Token Auth");
-        EN_MAP.put("外部客户端必须携带令牌才能访问，防止恶意网页与未授权调用", "Require token header or query parameter for all MCP requests");
-        EN_MAP.put("已启用 MCP 令牌认证", "MCP token authentication enabled");
-        EN_MAP.put("已停用令牌认证 (允许匿名访问)", "MCP token authentication disabled");
-        EN_MAP.put("访问令牌 (Token)", "Access Token");
-        EN_MAP.put("点击查看与复制完整令牌", "Tap to view and copy full token");
-        EN_MAP.put("重新生成访问令牌", "Regenerate Access Token");
-        EN_MAP.put("原有令牌将立即失效，需在客户端更新", "Invalidates current token immediately");
-        EN_MAP.put("重置令牌确认", "Regenerate Token?");
-        EN_MAP.put("重新生成后，已连接的外部客户端需要更新为新令牌才能继续调用。确认生成新令牌吗？",
-            "Existing MCP clients will need the new token to connect. Generate a new token now?");
-        EN_MAP.put("确认重置", "Regenerate");
         EN_MAP.put("新令牌已生成并复制到剪贴板", "New token generated and copied to clipboard");
         EN_MAP.put("网络访问控制", "Network Access");
-        EN_MAP.put("允许局域网设备连接", "Allow LAN Connections");
-        EN_MAP.put("监听 0.0.0.0，使同一 Wi-Fi 下的电脑等设备能访问 MCP", "Bind 0.0.0.0 so desktop clients on the same Wi-Fi can connect");
         EN_MAP.put("已允许局域网连接，建议开启上方令牌认证以保安全", "LAN access enabled. Keeping token auth enabled is recommended.");
         EN_MAP.put("已允许局域网连接", "LAN access enabled");
         EN_MAP.put("已限制仅本机回环访问", "Restricted to localhost (127.0.0.1) only");
-        EN_MAP.put("连接与使用说明", "Connection Guide");
-        EN_MAP.put("复制令牌", "Copy Token");
-        EN_MAP.put(
-            "1. 本机/跨机连接：\n"
-            + "   • 同一手机上的 AI 工具使用「本机地址」。\n"
-            + "   • 电脑上的 Cursor、Claude Desktop 等请使用「局域网地址」，两台设备需在同一 Wi-Fi 下。\n\n"
-            + "2. 客户端认证配置：\n"
-            + "   • 开启认证后，客户端需在请求头中配置：\n"
-            + "     Authorization: Bearer <访问令牌>\n"
-            + "   • 或在连接 URL 结尾追加参数：?token=<访问令牌>\n\n"
-            + "3. 安全注意：\n"
-            + "   • 认证通信不加密，请在可信任的家庭或公司局域网中使用，切勿在公共开放 Wi-Fi 下开启局域网连接。",
-            "1. Local / LAN Connection:\n"
-            + "   • On-device AI tools: use the Localhost Endpoint.\n"
-            + "   • Desktop tools (Cursor, Claude Desktop): use the LAN Endpoint on the same Wi-Fi.\n\n"
-            + "2. Client Authentication:\n"
-            + "   • When auth is enabled, pass the header:\n"
-            + "     Authorization: Bearer <token>\n"
-            + "   • Or append query parameter: ?token=<token>\n\n"
-            + "3. Security Notice:\n"
-            + "   • Traffic is unencrypted HTTP. Use LAN mode only on trusted private Wi-Fi networks."
-        );
 
         // About & Begging Sheet
         EN_MAP.put("乞讨", "Donate");
@@ -1363,8 +1278,6 @@ public final class AcidLocale {
         EN_MAP.put("开发者", "Developer");
         EN_MAP.put("GitHub 开源仓库", "GitHub Repository");
         EN_MAP.put("内核简介", "Architecture");
-        EN_MAP.put("Acid Browser 是一款零第三方依赖、原生内嵌自主 Agent Loop、本地 MCP 控制网关、油猴脚本引擎与 ABP 广告拦截器的超轻量现代 AI 浏览器。",
-            "Acid Browser is an ultra-lightweight, zero-dependency AI browser with a native autonomous Agent Loop, local MCP gateway, Userscript engine, and ABP ad blocker.");
         EN_MAP.put("此为作者的乞讨页面，您可以付款但是您得不到任何好处！",
             "This is the author's begging page — you can pay, but you will get nothing in return!");
         EN_MAP.put("微信", "WeChat Pay");
@@ -1390,7 +1303,6 @@ public final class AcidLocale {
         EN_MAP.put("邮箱已复制", "Email copied");
         EN_MAP.put("查看图片", "View Image");
         EN_MAP.put("下载图片", "Download Image");
-        EN_MAP.put("复制链接", "Copy Link");
         EN_MAP.put("链接已复制", "Link copied");
         EN_MAP.put("复制图片链接", "Copy Image Link");
         EN_MAP.put("图片链接已复制", "Image link copied");
@@ -1409,5 +1321,203 @@ public final class AcidLocale {
         EN_MAP.put("请输入要让 Agent 执行的任务指令，或点击左侧 + 上传附件", "Enter a task instruction or tap + on the left to attach files");
         EN_MAP.put("工作区路径: ", "Workspace path: ");
         EN_MAP.put("继续加载更多", "Load more");
+
+        // Sync & Backup Center + WebDAV
+        EN_MAP.put("同步与备份", "Sync & Backup");
+        EN_MAP.put("WebDAV 云同步", "WebDAV Cloud Sync");
+        EN_MAP.put("WebDAV 服务器", "WebDAV Server");
+        EN_MAP.put("已配置", "Configured");
+        EN_MAP.put("未配置", "Not Configured");
+        EN_MAP.put("最近记录：", "Last activity: ");
+        EN_MAP.put("立即上传", "Upload Now");
+        EN_MAP.put("上传中...", "Uploading...");
+        EN_MAP.put("从云端恢复", "Restore from Cloud");
+        EN_MAP.put("恢复中...", "Restoring...");
+        EN_MAP.put("请先配置 WebDAV 服务器账号", "Please configure WebDAV server credentials first");
+        EN_MAP.put("请至少勾选一项要同步的内容", "Select at least one item to sync");
+        EN_MAP.put("请至少勾选一项要恢复的内容", "Select at least one item to restore");
+        EN_MAP.put("请至少勾选一项要导出的内容", "Select at least one item to export");
+        EN_MAP.put("请至少勾选一项要备份的内容", "Select at least one item to back up");
+        EN_MAP.put("选择云端恢复方式", "Cloud Restore Mode");
+        EN_MAP.put("选择本地备份恢复方式", "Local Backup Restore Mode");
+        EN_MAP.put("合并恢复（保留本地数据）", "Merge & Restore (Keep local data)");
+        EN_MAP.put("完全覆盖", "Overwrite Local");
+        EN_MAP.put("同步内容", "Sync Scope");
+        EN_MAP.put("书签", "Bookmarks");
+        EN_MAP.put("浏览器设置", "Browser Settings");
+        EN_MAP.put("油猴脚本", "Userscripts");
+        EN_MAP.put("Skills 与自定义主页", "AI Skills & Homepage");
+        EN_MAP.put("本地备份", "Local Backup");
+        EN_MAP.put("导出备份包", "Export Backup");
+        EN_MAP.put("导入备份包", "Import Backup");
+        EN_MAP.put("书签文件", "Bookmark Files");
+        EN_MAP.put("导入书签", "Import Bookmarks");
+        EN_MAP.put("导出书签", "Export Bookmarks");
+        EN_MAP.put("不包含浏览历史、Cookie、API Key 与 Token。", "Excludes history, cookies, API Keys, and Tokens.");
+        EN_MAP.put("WebDAV 配置", "WebDAV Setup");
+        EN_MAP.put("WebDAV 账号配置", "WebDAV Account Setup");
+        EN_MAP.put("预设", "Presets");
+        EN_MAP.put("坚果云", "Jianguoyun");
+        EN_MAP.put("坚果云需使用第三方应用专用密码", "Jianguoyun requires an app-specific password");
+        EN_MAP.put("WebDAV URL", "WebDAV URL");
+        EN_MAP.put("同步目录", "Remote Folder");
+        EN_MAP.put("留空为根目录", "Blank for root");
+        EN_MAP.put("用户名", "Username");
+        EN_MAP.put("选填", "Optional");
+        EN_MAP.put("密码", "Password");
+        EN_MAP.put("显示密码", "Show Password");
+        EN_MAP.put("隐藏密码", "Hide Password");
+        EN_MAP.put("测试连接", "Test Connection");
+        EN_MAP.put("保存配置", "Save Config");
+        EN_MAP.put("WebDAV 配置已保存", "WebDAV configuration saved");
+        EN_MAP.put("清空", "Clear");
+        EN_MAP.put("已清除 WebDAV 服务器配置", "Cleared WebDAV server configuration");
+        EN_MAP.put("本地备份导出成功", "Backup Exported");
+        EN_MAP.put("已导出整套环境备份包（", "Exported full backup package (");
+        EN_MAP.put("）至：", ") to:");
+        EN_MAP.put("分享备份压缩包", "Share Backup Archive");
+        EN_MAP.put("选择完整备份压缩包 (.zip)", "Select Full Backup Archive (.zip)");
+        EN_MAP.put("云端同步上传成功", "Cloud sync upload succeeded");
+        EN_MAP.put("从云端恢复完成", "Cloud restore completed");
+        EN_MAP.put("本地备份包导出成功", "Local backup archive exported");
+        EN_MAP.put("本地备份包恢复完成", "Local backup restore completed");
+        EN_MAP.put("云端上传完成", "Cloud upload complete");
+        EN_MAP.put("备份包中未包含所选模块数据", "No matching module data found in backup archive");
+        EN_MAP.put("连接成功（云端同步目录将在首次上传时自动创建）",
+            "Connected (remote sync folder will be created on first upload)");
+        EN_MAP.put("连接成功，云端同步目录已就绪", "Connected, remote sync folder is ready");
+        EN_MAP.put("连接成功，WebDAV 服务可用", "Connected, WebDAV service is available");
+        EN_MAP.put("云端路径或备份文件不存在（HTTP 404）", "Remote path or backup file not found (HTTP 404)");
+        EN_MAP.put("云端目录中未找到备份文件（acid_backup.zip 或 bookmarks.html）",
+            "No backup files found in remote folder (acid_backup.zip or bookmarks.html)");
+        EN_MAP.put("WebDAV 服务器地址格式无效", "Invalid WebDAV server URL");
+        EN_MAP.put("云端备份文件体积超出安全上限", "Remote backup file exceeds size limit");
+        EN_MAP.put("无效的 Acid 备份包：缺少 manifest.json", "Invalid Acid backup archive: missing manifest.json");
+        EN_MAP.put("备份元数据 manifest.json 已损坏", "Corrupted backup manifest.json");
+        EN_MAP.put("备份包内容为空", "Backup archive is empty");
+        EN_MAP.put("无法读取选中的备份包", "Unable to read selected backup archive");
+        EN_MAP.put("无法定位本地下载目录", "Unable to locate local Downloads folder");
+        EN_MAP.put("操作失败，请稍后重试", "Operation failed, please try again");
+
+        // Concise UI Labels across Settings, Models, MCP, AdBlock & Sheets
+        EN_MAP.put("百度", "Baidu");
+        EN_MAP.put("必应", "Bing");
+        EN_MAP.put("空白页", "Blank Page");
+        EN_MAP.put("允许唤起", "Allow");
+        EN_MAP.put("低", "Low");
+        EN_MAP.put("中", "Medium");
+        EN_MAP.put("高", "High");
+        EN_MAP.put("极高", "Max");
+        EN_MAP.put("默认", "Default");
+        EN_MAP.put("配置文件: settings.json", "Config file: settings.json");
+        EN_MAP.put("拖动滑块实时调整全局网页字号。", "Drag the slider to adjust webpage text size.");
+        EN_MAP.put("将清除 Agent 生成的临时文件，保留设置、书签、脚本与拦截规则。",
+            "Removes temporary Agent files; keeps settings, bookmarks, scripts, and filters.");
+        EN_MAP.put("网页缓存", "Web Cache");
+        EN_MAP.put("Cookie 与登录状态", "Cookies & Login Data");
+        EN_MAP.put("浏览历史", "Browsing History");
+        EN_MAP.put("网站本地存储", "Site Storage");
+        EN_MAP.put("AI 工作区临时文件", "Agent Temp Files");
+        EN_MAP.put("已开启网页远程调试", "WebView remote debugging enabled");
+        EN_MAP.put("当前模型", "Active Model");
+        EN_MAP.put("暂无可用模型", "No models available");
+        EN_MAP.put("思考深度", "Reasoning Effort");
+        EN_MAP.put("搜索模型", "Search models");
+        EN_MAP.put("未找到匹配模型", "No matching models");
+        EN_MAP.put("配置", "Configure");
+        EN_MAP.put("服务器地址", "Server URL");
+        EN_MAP.put("名称", "Name");
+        EN_MAP.put("如 Ollama", "e.g. Ollama");
+        EN_MAP.put("恢复默认", "Reset Defaults");
+        EN_MAP.put("模型列表", "Models");
+        EN_MAP.put("请至少保留一个模型", "Keep at least one model");
+        EN_MAP.put("暂无模型", "No models");
+        EN_MAP.put("模型 ID", "Model ID");
+        EN_MAP.put("如 gpt-4o", "e.g. gpt-4o");
+        EN_MAP.put("显示名称", "Display Name");
+        EN_MAP.put("允许外部 AI 客户端控制浏览器", "Allow external AI clients to control the browser");
+        EN_MAP.put("未连接 Wi-Fi", "Wi-Fi Disconnected");
+        EN_MAP.put("未开启", "Disabled");
+        EN_MAP.put("请先启动 MCP 服务", "Start MCP server first");
+        EN_MAP.put("请先开启局域网访问", "Enable LAN access first");
+        EN_MAP.put("访问令牌", "Access Token");
+        EN_MAP.put("允许局域网连接", "Allow LAN Connections");
+        EN_MAP.put("同一 Wi-Fi 设备可访问", "Accessible over the same Wi-Fi");
+        EN_MAP.put("使用说明", "Guide");
+        EN_MAP.put("已设为完全拦截", "Set to Block All");
+        EN_MAP.put("已设为弹窗询问", "Set to Ask First");
+        EN_MAP.put("已设为允许唤起", "Set to Allow");
+        EN_MAP.put("Agent 运行期间自动锁定为完全拦截", "Locked to Block All while Agent runs");
+        EN_MAP.put("更新订阅", "Update");
+        EN_MAP.put("更新中...", "Updating...");
+        EN_MAP.put("规则列表（支持 ||domain^ 与 ##selector）", "Rules (||domain^ & ##selector)");
+        EN_MAP.put("保存规则", "Save Rules");
+        EN_MAP.put("暂无用户脚本", "No userscripts");
+        EN_MAP.put("技能文档", "Skill Document");
+        EN_MAP.put("手动新建", "Create Manually");
+        EN_MAP.put("导入", "Import");
+        EN_MAP.put("---\nname: my-skill\ndescription: 技能描述\n---\n",
+            "---\nname: my-skill\ndescription: Skill description\n---\n");
+        EN_MAP.put("文件名", "File Name");
+        EN_MAP.put("搜索书签", "Search bookmarks");
+        EN_MAP.put("搜索历史", "Search history");
+        EN_MAP.put("暂无书签", "No bookmarks");
+        EN_MAP.put("暂无历史记录", "No history");
+        EN_MAP.put("标题", "Title");
+        EN_MAP.put("网址", "URL");
+        EN_MAP.put("文件夹", "Folder");
+        EN_MAP.put("选填，多级用 / 分隔", "Optional, use / for nested");
+        EN_MAP.put("新名称", "New name");
+        EN_MAP.put("解散文件夹", "Dissolve Folder");
+        EN_MAP.put("留空为未分类", "Blank for Uncategorized");
+        EN_MAP.put("移至目标文件夹（留空为未分类）：", "Move to folder (blank for Uncategorized):");
+        EN_MAP.put("搜索下载", "Search downloads");
+        EN_MAP.put("暂无下载记录", "No downloads");
+        EN_MAP.put("未找到匹配任务", "No matching downloads");
+        EN_MAP.put("暂无历史对话", "No chat history");
+        EN_MAP.put("输入任务指令...", "Enter task...");
+        EN_MAP.put("参数", "Args");
+        EN_MAP.put("结果", "Output");
+        EN_MAP.put("零第三方依赖的轻量 AI 浏览器，内置自主智能体、油猴脚本、广告拦截与 MCP 服务。",
+            "Lightweight, zero-dependency AI browser with an autonomous Agent, Userscripts, AdBlock, and MCP.");
+
+        // Preserved Technical Terms (Skills / MCP / Token / URL / Key / DNT / WebDAV)
+        EN_MAP.put("已开启 DNT 请求", "Do Not Track (DNT) enabled");
+        EN_MAP.put("已关闭 DNT 请求", "Do Not Track (DNT) disabled");
+        EN_MAP.put("搜索 URL（%s 代表搜索词）", "Search URL (%s for query)");
+        EN_MAP.put("自定义主页 URL", "Custom Homepage URL");
+        EN_MAP.put("主页 URL", "Homepage URL");
+        EN_MAP.put("请输入有效的 http:// 或 https:// URL", "Please enter a valid http:// or https:// URL");
+        EN_MAP.put("● Key 已就绪", "● Key Ready");
+        EN_MAP.put("自定义 API", "Custom API");
+        EN_MAP.put("sk-...（选填）", "sk-... (Optional)");
+        EN_MAP.put("显示 Key", "Show Key");
+        EN_MAP.put("隐藏 Key", "Hide Key");
+        EN_MAP.put("API Key", "API Key");
+        EN_MAP.put("Base URL", "Base URL");
+        EN_MAP.put("拉取 /models", "Fetch /models");
+        EN_MAP.put("请先填写有效的 Base URL", "Please enter a valid Base URL first");
+        EN_MAP.put("Token 认证", "Token Auth");
+        EN_MAP.put("启用 Token 认证", "Require Token Auth");
+        EN_MAP.put("已启用 MCP Token 认证", "MCP Token auth enabled");
+        EN_MAP.put("已停用 Token 认证", "MCP Token auth disabled");
+        EN_MAP.put("访问 Token", "Access Token");
+        EN_MAP.put("重置 Token", "Reset Token");
+        EN_MAP.put("重置后旧 Token 立即失效，客户端需更新。",
+            "Resetting invalidates the current Token for all clients.");
+        EN_MAP.put("复制 Token", "Copy Token");
+        EN_MAP.put("请求头携带 Authorization: Bearer <Token> 或参数 ?token=<Token>。\n局域网通信未加密，请仅在可信 Wi-Fi 开启。",
+            "Use Authorization: Bearer <Token> or ?token=<Token>.\nLAN traffic is unencrypted; use on trusted Wi-Fi only.");
+        EN_MAP.put("订阅 URL", "Subscription URL");
+        EN_MAP.put("脚本 URL 或源码", "Script URL or source");
+        EN_MAP.put("暂无 Skill", "No skills");
+        EN_MAP.put("SKILL.md", "SKILL.md");
+        EN_MAP.put("Markdown 内容", "Markdown Content");
+        EN_MAP.put("从 URL 导入", "Import from URL");
+        EN_MAP.put("从 URL 导入 Skill", "Import Skill from URL");
+        EN_MAP.put("GitHub 目录、SKILL.md 或 .zip URL", "GitHub folder, SKILL.md, or .zip URL");
+        EN_MAP.put("新建 Skill", "New Skill");
+        EN_MAP.put("保存 Skill", "Save Skill");
+        EN_MAP.put("URL", "URL");
     }
 }

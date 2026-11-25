@@ -12,6 +12,7 @@ import org.json.JSONObject;
 import com.acid.browser.download.DownloadItem;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -560,6 +561,84 @@ public class BrowserDataStore {
 
     public boolean reloadFromJsonFile(boolean forceOverwritePending) {
         return reloadSettingsInternal(forceOverwritePending, false);
+    }
+
+    /**
+     * Applies restored backup settings directly under {@link #mSettingsFileLock} and persists
+     * the resulting normalized {@code settings.json} without triggering redundant reloads.
+     */
+    public void applyRestoredSettingsJson(JSONObject backupSettings, boolean overwriteMode) throws IOException {
+        final List<ChangedKeyEntry<?>> changedEntries = new ArrayList<ChangedKeyEntry<?>>();
+        synchronized (mSettingsFileLock) {
+            try {
+                synchronized (mSettingsStateLock) {
+                    SharedPreferences.Editor ed = prefs().edit();
+                    for (int i = 0; i < AcidSettings.ALL_KEYS.size(); i++) {
+                        ChangedKeyEntry<?> diff = applyRestoredSingleKey(
+                            backupSettings, overwriteMode, ed, AcidSettings.ALL_KEYS.get(i)
+                        );
+                        if (diff != null) {
+                            changedEntries.add(diff);
+                        }
+                    }
+                    ed.putBoolean(PREF_SETTINGS_PENDING_SYNC, false);
+                    ed.apply();
+                    mSettingsRevision.incrementAndGet();
+                }
+                if (mSettingsJsonFile != null) {
+                    mLastSelfSaveTime = System.currentTimeMillis();
+                    final JSONObject o;
+                    synchronized (mSettingsStateLock) {
+                        o = exportToJson();
+                    }
+                    String jsonText = o.toString(2);
+                    AcidIo.writeFileUtf8(mSettingsJsonFile, jsonText);
+                    mLastSyncedSettingsJson = jsonText;
+                }
+            } catch (IOException ioe) {
+                throw ioe;
+            } catch (Exception e) {
+                throw new IOException("恢复浏览器设置失败: " + e.getMessage(), e);
+            }
+        }
+        notifySettingsChangedEntries(changedEntries);
+    }
+
+    private <T> ChangedKeyEntry<T> applyRestoredSingleKey(
+        JSONObject backupSettings,
+        boolean overwriteMode,
+        SharedPreferences.Editor ed,
+        AcidSettings.SettingKey<T> key
+    ) throws Exception {
+        if (!key.exportToJson) return null;
+        T oldVal = get(key);
+        final T nextVal;
+        if (backupSettings != null && backupSettings.has(key.jsonKey)) {
+            nextVal = key.sanitize(key.parseFromJson(backupSettings.get(key.jsonKey)));
+        } else if (overwriteMode) {
+            nextVal = key.defaultValue;
+        } else {
+            nextVal = oldVal;
+        }
+        key.write(ed, nextVal);
+        boolean changed = (oldVal == null) ? (nextVal != null) : !oldVal.equals(nextVal);
+        return changed ? new ChangedKeyEntry<T>(key, nextVal) : null;
+    }
+
+    private void notifySettingsChangedEntries(List<ChangedKeyEntry<?>> changedEntries) {
+        for (int i = 0; i < changedEntries.size(); i++) {
+            changedEntries.get(i).notifyOn(this);
+        }
+        if (mSettingsChangedListener != null) {
+            dispatchCallback(new Runnable() {
+                @Override
+                public void run() {
+                    if (mSettingsChangedListener != null) {
+                        mSettingsChangedListener.onSettingsChanged();
+                    }
+                }
+            });
+        }
     }
 
     private boolean reloadSettingsInternal(boolean forceOverwritePending, boolean checkObserverBaseline) {
