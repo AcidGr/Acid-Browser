@@ -471,17 +471,57 @@ public class AcidSandboxTools {
     // 1. Browser Tool Implementation (Closed-Loop Observation)
     // =========================================================================
 
+    public static boolean shouldPollForDownloadAfterAction(
+        String action,
+        JSONObject args,
+        JSONObject receipt,
+        boolean tabIsLoading
+    ) {
+        if (action == null) return false;
+        if ("navigate".equals(action)) {
+            return true;
+        }
+        if ("click".equals(action)) {
+            if (tabIsLoading) return true;
+            if (receipt != null) {
+                JSONObject effect = receipt.optJSONObject("effect");
+                if (effect != null && effect.optBoolean("url_changed", false)) {
+                    return true;
+                }
+                JSONObject hit = receipt.optJSONObject("hit");
+                if (hit != null && "a".equalsIgnoreCase(hit.optString("tag", ""))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if ("eval".equals(action)) {
+            if (tabIsLoading) return true;
+            String code = args != null ? args.optString("code", "") : "";
+            return code.toLowerCase(Locale.US).contains("download");
+        }
+        return false;
+    }
+
+    private boolean isTargetTabLoading() {
+        BrowserController.TabSession t = mController != null ? mController.getTargetTab() : null;
+        return t != null && t.isLoading;
+    }
+
     private String awaitAndFormatDownloadNotice(int dlCountBefore, long maxWaitMs) {
         if (mController == null) return "";
-        long waited = 0;
-        while (mController.getTriggeredDownloadsCount() <= dlCountBefore && waited < maxWaitMs) {
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
+        if (mController.getTriggeredDownloadsCount() <= dlCountBefore && maxWaitMs > 0) {
+            long waited = 0;
+            while (mController.getTriggeredDownloadsCount() <= dlCountBefore && waited < maxWaitMs) {
+                long step = Math.min(50L, maxWaitMs - waited);
+                try {
+                    Thread.sleep(step);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                waited += step;
             }
-            waited += 100;
         }
         if (mController.getTriggeredDownloadsCount() > dlCountBefore) {
             String info = mController.getLastTriggeredDownloadInfo();
@@ -630,7 +670,7 @@ public class AcidSandboxTools {
                 return new ToolExecResult("Error: Browser controller or automation driver unavailable", false, null);
             }
             JSONObject obs = driver.navigateSync(url, 3800);
-            String dlNotice = awaitAndFormatDownloadNotice(dlBefore, 400);
+            String dlNotice = awaitAndFormatDownloadNotice(dlBefore, 250);
             return new ToolExecResult(dlNotice + formatObservationWithActionHeader("NAVIGATE -> " + url, null, obs), false, null);
         }
 
@@ -656,8 +696,9 @@ public class AcidSandboxTools {
                     );
                 }
             }
-            Thread.sleep(380); // Let page animations/DOM settle after click
-            String dlNotice = awaitAndFormatDownloadNotice(dlBefore, 500);
+            Thread.sleep(80); // Let microtasks/DOM settle after click
+            long dlWait = shouldPollForDownloadAfterAction("click", args, clickRes, isTargetTabLoading()) ? 300L : 0L;
+            String dlNotice = awaitAndFormatDownloadNotice(dlBefore, dlWait);
             JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
             return new ToolExecResult(dlNotice + formatObservationWithActionHeader("CLICK", clickRes, obs), false, null);
         }
@@ -742,7 +783,7 @@ public class AcidSandboxTools {
             String code = args.optString("code", "");
             long timeout = args.optLong("timeout_ms", 10000);
             String raw = driver.evaluateJsAsync(code, timeout);
-            long pollWait = (code.contains("location") || code.contains(".click(") || code.contains("download")) ? 1800 : 0;
+            long pollWait = shouldPollForDownloadAfterAction("eval", args, null, isTargetTabLoading()) ? 400L : 0L;
             String dlNotice = awaitAndFormatDownloadNotice(dlBefore, pollWait);
             return new ToolExecResult(dlNotice + "=== [BROWSER ACTION: EVAL] ===\n" + raw, false, null);
         }
@@ -876,7 +917,9 @@ public class AcidSandboxTools {
                 }
             });
             latch.await(2000, TimeUnit.MILLISECONDS);
-            Thread.sleep(400);
+            if ("new".equals(sub) || "switch".equals(sub)) {
+                Thread.sleep(150);
+            }
 
             StringBuilder sb = new StringBuilder("=== [BROWSER ACTION: TABS (" + sub.toUpperCase() + ")] ===\n");
             List<BrowserController.TabSession> tabs = mController.getTabs();
@@ -886,8 +929,12 @@ public class AcidSandboxTools {
                   .append("[tab_id=").append(t.id).append("] ")
                   .append(t.title).append(" (").append(t.url).append(")\n");
             }
-            JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
-            sb.append("\n").append(obs.optString("compactText", ""));
+            if ("list".equals(sub) && driver.isTargetTabCongested()) {
+                sb.append("\n[Target tab renderer is currently busy; skipped inline DOM snapshot]");
+            } else {
+                JSONObject obs = driver.observeSync(mController.isSomEnabled(), true, false);
+                sb.append("\n").append(obs.optString("compactText", ""));
+            }
             return new ToolExecResult(sb.toString(), false, null);
         }
 

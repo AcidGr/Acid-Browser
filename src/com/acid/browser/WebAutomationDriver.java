@@ -106,6 +106,7 @@ public class WebAutomationDriver {
     private final AutomationHost mHost;
     private final Handler mMainHandler;
     private final ScreenshotCaptureHelper mScreenshotHelper = new ScreenshotCaptureHelper();
+    private final RendererSingleFlightGate mRenderGate = new RendererSingleFlightGate();
 
     public WebAutomationDriver(Context context, AutomationHost host) {
         mContext = context;
@@ -142,13 +143,73 @@ public class WebAutomationDriver {
         return trimmed;
     }
 
+    private boolean probeCongestedTabRecoverySync(final int tabId, final RendererSingleFlightGate.ProbeTicket probe) {
+        if (mMainHandler == null || mHost == null || probe == null) {
+            mRenderGate.onRecoveryProbeFinished(probe, false);
+            return false;
+        }
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicBoolean alive = new AtomicBoolean(false);
+        final AtomicBoolean probeTimedOut = new AtomicBoolean(false);
+        boolean posted = mMainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (probeTimedOut.get()) {
+                    mRenderGate.onRecoveryProbeFinished(probe, false);
+                    latch.countDown();
+                    return;
+                }
+                try {
+                    BrowserController.TabSession targetTab = mHost.getTargetTab();
+                    if (targetTab == null || targetTab.id != tabId || targetTab.webView == null) {
+                        mRenderGate.onRecoveryProbeFinished(probe, false);
+                        latch.countDown();
+                        return;
+                    }
+                    targetTab.webView.evaluateJavascript("1", new ValueCallback<String>() {
+                        @Override
+                        public void onReceiveValue(String value) {
+                            boolean ok = "1".equals(unescapeEvaluateResult(value));
+                            alive.set(ok);
+                            mRenderGate.onRecoveryProbeFinished(probe, ok);
+                            latch.countDown();
+                        }
+                    });
+                } catch (Throwable t) {
+                    mRenderGate.onRecoveryProbeFinished(probe, false);
+                    latch.countDown();
+                }
+            }
+        });
+        if (!posted) {
+            mRenderGate.onRecoveryProbeFinished(probe, false);
+            return false;
+        }
+        try {
+            if (!latch.await(250, TimeUnit.MILLISECONDS)) {
+                // Keep activeProbe pending until V8 delivers ValueCallback (or expires),
+                // so a late probe response (>250ms) still unlocks the congested tab immediately.
+                probeTimedOut.set(true);
+                return false;
+            }
+        } catch (InterruptedException e) {
+            probeTimedOut.set(true);
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        return alive.get();
+    }
+
     public String evaluateJsSync(final String jsExpr, long timeoutMs) {
         // Enforce thread contract: never allow blocking latch.await on Android's UI message loop
         if (isMainLooper()) {
             Log.w(TAG, "evaluateJsSync called directly on MainLooper; dispatching asynchronously without latch await to prevent UI deadlock");
-            BrowserController.TabSession targetTab = mHost.getTargetTab();
+            BrowserController.TabSession targetTab = mHost != null ? mHost.getTargetTab() : null;
             if (targetTab == null || targetTab.webView == null) {
                 return "{\"ok\":false,\"error\":\"NO_TARGET_TAB\"}";
+            }
+            if (mRenderGate.isTabCongested(targetTab.id)) {
+                return "{\"ok\":false,\"error\":\"RENDERER_BUSY\"}";
             }
             try {
                 targetTab.webView.evaluateJavascript(jsExpr, null);
@@ -158,41 +219,85 @@ public class WebAutomationDriver {
             }
         }
 
-        final CountDownLatch latch = new CountDownLatch(1);
-        final AtomicReference<String> ref = new AtomicReference<String>("{\"ok\":false,\"error\":\"TIMEOUT\"}");
-
         if (mMainHandler == null) {
             return "{\"ok\":false,\"error\":\"NO_HANDLER\"}";
         }
 
-        mMainHandler.post(new Runnable() {
+        final BrowserController.TabSession preTab = mHost != null ? mHost.getTargetTab() : null;
+        if (preTab != null && preTab.id > 0 && mRenderGate.isTabCongested(preTab.id)) {
+            RendererSingleFlightGate.ProbeTicket probe =
+                mRenderGate.tryBeginRecoveryProbe(preTab.id, SystemClock.uptimeMillis());
+            if (probe == null || !probeCongestedTabRecoverySync(preTab.id, probe)) {
+                return "{\"ok\":false,\"error\":\"RENDERER_BUSY\"}";
+            }
+        }
+
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<String> ref = new AtomicReference<String>("{\"ok\":false,\"error\":\"TIMEOUT\"}");
+        final AtomicReference<RendererSingleFlightGate.Ticket> ticketRef =
+            new AtomicReference<RendererSingleFlightGate.Ticket>();
+        final AtomicBoolean callerTimedOut = new AtomicBoolean(false);
+
+        boolean posted = mMainHandler.post(new Runnable() {
             @Override
             public void run() {
+                if (callerTimedOut.get()) {
+                    latch.countDown();
+                    return;
+                }
                 try {
-                    BrowserController.TabSession targetTab = mHost.getTargetTab();
+                    BrowserController.TabSession targetTab = mHost != null ? mHost.getTargetTab() : null;
                     if (targetTab == null || targetTab.webView == null) {
                         ref.set("{\"ok\":false,\"error\":\"NO_TARGET_TAB\"}");
+                        latch.countDown();
+                        return;
+                    }
+                    final RendererSingleFlightGate.Ticket ticket = mRenderGate.tryBegin(targetTab.id);
+                    if (ticket == null) {
+                        ref.set("{\"ok\":false,\"error\":\"RENDERER_BUSY\"}");
+                        latch.countDown();
+                        return;
+                    }
+                    ticketRef.set(ticket);
+                    if (callerTimedOut.get()) {
+                        mRenderGate.onCompleted(ticket);
                         latch.countDown();
                         return;
                     }
                     targetTab.webView.evaluateJavascript(jsExpr, new ValueCallback<String>() {
                         @Override
                         public void onReceiveValue(String value) {
+                            mRenderGate.onCompleted(ticket);
                             ref.set(unescapeEvaluateResult(value));
                             latch.countDown();
                         }
                     });
                 } catch (Throwable t) {
+                    mRenderGate.onCompleted(ticketRef.get());
                     Log.w(TAG, "evaluateJavascript crashed on UI thread: " + t.getMessage());
                     ref.set("{\"ok\":false,\"error\":" + JSONObject.quote("EVAL_EXCEPTION: " + t.getMessage()) + "}");
                     latch.countDown();
                 }
             }
         });
+        if (!posted) {
+            return "{\"ok\":false,\"error\":\"NO_HANDLER\"}";
+        }
 
         try {
-            latch.await(timeoutMs, TimeUnit.MILLISECONDS);
+            if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+                callerTimedOut.set(true);
+                RendererSingleFlightGate.Ticket ticket = ticketRef.get();
+                if (ticket != null) {
+                    mRenderGate.onTimedOut(ticket, SystemClock.uptimeMillis());
+                }
+            }
         } catch (InterruptedException e) {
+            callerTimedOut.set(true);
+            RendererSingleFlightGate.Ticket ticket = ticketRef.get();
+            if (ticket != null) {
+                mRenderGate.onTimedOut(ticket, SystemClock.uptimeMillis());
+            }
             Thread.currentThread().interrupt();   // preserve the interrupt for the caller
             Log.w(TAG, "Interrupted while waiting for a JS evaluation result", e);
         }
@@ -346,9 +451,15 @@ public class WebAutomationDriver {
             if (parsed != null && (parsed.contains("\"NO_ACTIVE_TAB\"") || parsed.contains("\"NO_TARGET_TAB\""))) {
                 return evalError("NO_ACTIVE_TAB", "no active tab", 0);
             }
+            if (parsed != null && parsed.contains("\"RENDERER_BUSY\"")) {
+                return evalError("RENDERER_BUSY", "renderer main thread is busy; skipped eval to prevent queue pileup", 0);
+            }
             boolean parsedOk = EVAL_PARSED_MARKER.equals(parsed);
             boolean injectTimedOut = parsed != null && parsed.contains("\"TIMEOUT\"");
-            if (!parsedOk && !injectTimedOut) {
+            if (injectTimedOut) {
+                return evalError("ASYNC_TIMEOUT", "eval injection timed out; renderer may be busy", effTimeout);
+            }
+            if (!parsedOk) {
                 // Syntax error for this shape: nothing executed, try the next shape.
                 if (triedModes.length() > 0) triedModes.append(", ");
                 triedModes.append(cand.mode);
@@ -376,6 +487,9 @@ public class WebAutomationDriver {
             " var p=m[" + q + "]; delete m[" + q + "]; return p;})()";
         while (SystemClock.uptimeMillis() < deadline) {
             String r = evaluateJsSync(expr, 1000);
+            if (r != null && r.contains("\"RENDERER_BUSY\"")) {
+                return evalError("RENDERER_BUSY", "renderer main thread became busy while waiting for eval result", effTimeout);
+            }
             if (r != null && r.startsWith("{")) {
                 try {
                     JSONObject parsed = new JSONObject(r);
@@ -389,7 +503,7 @@ public class WebAutomationDriver {
                 }
             }
             try {
-                Thread.sleep(50);
+                Thread.sleep(60);
             } catch (InterruptedException e) {
                 return evalError("INTERRUPTED", "eval interrupted", 0);
             }
@@ -404,6 +518,9 @@ public class WebAutomationDriver {
             "new AF(" + JSONObject.quote(code) + ");return 'parse ok';}catch(e){" +
             "return (e&&e.name?e.name+': ':'')+String(e&&e.message||e);}})()";
         String r = evaluateJsSync(expr, 1500);
+        if (r != null && r.contains("\"RENDERER_BUSY\"")) {
+            return "SyntaxError (diagnostics skipped: renderer busy)";
+        }
         if (r == null || r.isEmpty() || r.startsWith("{") || "parse ok".equals(r)) {
             return "SyntaxError (details unavailable)";
         }
@@ -477,58 +594,28 @@ public class WebAutomationDriver {
         return err;
     }
 
+    private boolean injectBridgeScriptSync() {
+        UserscriptManager um = mHost != null ? mHost.getUserscriptManager() : null;
+        if (um == null) return false;
+        String bridgeJs = um.getBridgeJs();
+        if (bridgeJs == null || bridgeJs.isEmpty()) return false;
+        String suffix = mHost.isTargetDesktopMode()
+            ? "\nif(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}"
+            : "";
+        String res = evaluateJsSync(bridgeJs + suffix, 1500);
+        return res == null || !res.contains("\"error\"");
+    }
+
     public void ensureBridgeInjectedSync() {
         try {
-            String check = evaluateJsSync("(function(){ return (window.__acidBridge && window.__acidBridge.__initialized) ? 'ok' : 'missing'; })()", 800);
-            if (!"ok".equals(check)) {
-                UserscriptManager um = mHost.getUserscriptManager();
-                if (um != null) {
-                    final String bridgeJs = um.getBridgeJs();
-                    if (bridgeJs != null && !bridgeJs.isEmpty()) {
-                        if (isMainLooper()) {
-                            BrowserController.TabSession tab = mHost.getTargetTab();
-                            if (tab != null && tab.webView != null) {
-                                tab.webView.evaluateJavascript(bridgeJs, null);
-                                if (tab.isDesktopMode) {
-                                    tab.webView.evaluateJavascript(
-                                        "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
-                                        null
-                                    );
-                                }
-                            }
-                        } else {
-                            final CountDownLatch latch = new CountDownLatch(1);
-                            mMainHandler.post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    try {
-                                        BrowserController.TabSession tab = mHost.getTargetTab();
-                                        if (tab != null && tab.webView != null) {
-                                            tab.webView.evaluateJavascript(bridgeJs, null);
-                                            if (tab.isDesktopMode) {
-                                                tab.webView.evaluateJavascript(
-                                                    "if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}",
-                                                    null
-                                                );
-                                            }
-                                        }
-                                    } catch (Throwable t) {
-                                        Log.w(TAG, "Bridge re-injection on UI thread caught: " + t.getMessage());
-                                    } finally {
-                                        latch.countDown();
-                                    }
-                                }
-                            });
-                            try {
-                                latch.await(1000, TimeUnit.MILLISECONDS);
-                            } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                            }
-                        }
-                    }
-                }
-            } else if (mHost.isTargetDesktopMode()) {
-                evaluateJsSync("if(window.__acidBridge&&window.__acidBridge.enforceDesktopViewport){window.__acidBridge.enforceDesktopViewport(true);}", 500);
+            boolean desktop = mHost != null && mHost.isTargetDesktopMode();
+            String checkExpr = "(function(){"
+                + "if(!window.__acidBridge||!window.__acidBridge.__initialized)return 'missing';"
+                + (desktop ? "if(window.__acidBridge.enforceDesktopViewport)window.__acidBridge.enforceDesktopViewport(true);" : "")
+                + "return 'ok';})()";
+            String check = evaluateJsSync(checkExpr, 800);
+            if ("missing".equals(check)) {
+                injectBridgeScriptSync();
             }
         } catch (Exception e) {
             Log.w(TAG, "Bridge re-injection failed; automation may degrade for this page", e);
@@ -555,7 +642,7 @@ public class WebAutomationDriver {
             "    count++;\n" +
             "    var ref = 'e' + count;\n" +
             "    refs[ref] = el;\n" +
-            "    var label = (el.innerText || el.getAttribute('aria-label') || el.name || el.value || '').replace(/\\s+/g, ' ').trim().substring(0, 60);\n" +
+            "    var label = (el.textContent || el.getAttribute('aria-label') || el.name || el.value || '').replace(/\\s+/g, ' ').trim().substring(0, 60);\n" +
             "    var desc = '  [' + ref + '] ' + tag + (label ? ' \"' + label + '\"' : '');\n" +
             "    if (tag === 'a' && el.href) desc += ' -> ' + el.getAttribute('href');\n" +
             "    lines.push(desc);\n" +
@@ -577,7 +664,10 @@ public class WebAutomationDriver {
         String raw = evaluateJsSync(degradedJs, 2500);
         if (raw != null && raw.startsWith("{")) {
             try {
-                return new JSONObject(raw);
+                JSONObject obj = new JSONObject(raw);
+                if (obj.optBoolean("ok", false)) {
+                    return obj;
+                }
             } catch (Exception e) {
                 Log.w(TAG, "Degraded observation payload is not valid JSON; discarding", e);
             }
@@ -591,7 +681,12 @@ public class WebAutomationDriver {
 
     public JSONObject observeSync(boolean includeSom, boolean viewportOnly, boolean includeScreenshot, JSONObject extraOpts) {
         ensureDesktopOverviewIfZoomedSync();
-        ensureBridgeInjectedSync();
+        if (isTargetTabCongested()) {
+            return buildFallbackObservation(
+                "RENDERER_BUSY",
+                "当前页面渲染主线程正忙，已自动跳过 DOM 扫描以防页面卡死；可稍候重试、使用 screenshot 查看画面或关闭重负载标签页"
+            );
+        }
         try {
             JSONObject jsOpts = new JSONObject();
             if (extraOpts != null) {
@@ -603,9 +698,21 @@ public class WebAutomationDriver {
             }
             jsOpts.put("includeSom", includeSom);
             jsOpts.put("viewportOnly", viewportOnly);
-            String expr = "(function(){ return JSON.stringify(window.__acidBridge.observe(" +
-                jsOpts.toString() + ")); })()";
-            String raw = evaluateJsSync(expr, 6000);
+            boolean desktop = mHost != null && mHost.isTargetDesktopMode();
+            String optsStr = jsOpts.toString();
+            String expr = "(function(){"
+                + "if(!window.__acidBridge||!window.__acidBridge.__initialized)return 'BRIDGE_MISSING';"
+                + (desktop ? "if(window.__acidBridge.enforceDesktopViewport)window.__acidBridge.enforceDesktopViewport(true);" : "")
+                + "return JSON.stringify(window.__acidBridge.observe(" + optsStr + "));"
+                + "})()";
+            String raw = evaluateJsSync(expr, 3500);
+            if ("BRIDGE_MISSING".equals(raw) && injectBridgeScriptSync()) {
+                raw = evaluateJsSync(
+                    "(function(){return (window.__acidBridge&&window.__acidBridge.observe)?JSON.stringify(window.__acidBridge.observe("
+                        + optsStr + ")):'BRIDGE_MISSING';})()",
+                    3500
+                );
+            }
             // No target tab at all (the agent's tab was closed and it has not rebound yet).
             // Report it as such instead of falling through to the "degraded" path, which would
             // blame page loading and mislead the agent into waiting instead of switching tabs.
@@ -614,7 +721,13 @@ public class WebAutomationDriver {
                     "智能体当前没有绑定的标签页（原标签页已被关闭）。请先调用 browser(action='tabs', tab_action='list') "
                     + "查看现有标签页，再用 tab_action='switch' 或 'new' 指定目标后继续。");
             }
-            if (raw != null && !raw.trim().isEmpty() && !"null".equals(raw)) {
+            if (raw != null && (raw.contains("\"RENDERER_BUSY\"") || raw.contains("\"TIMEOUT\""))) {
+                return buildFallbackObservation(
+                    "RENDERER_BUSY",
+                    "当前页面渲染主线程响应超时，已熔断跳过重型 DOM 扫描以防排队卡死；可稍候重试、使用 screenshot 查看画面或关闭重负载标签页"
+                );
+            }
+            if (raw != null && !raw.trim().isEmpty() && !"null".equals(raw) && !"BRIDGE_MISSING".equals(raw)) {
                 JSONObject obj = new JSONObject(raw);
                 if (obj.optBoolean("ok", false)) {
                     AgentOverlayView overlay = mHost.getOverlayView();
@@ -639,15 +752,19 @@ public class WebAutomationDriver {
                     return obj;
                 }
             }
-            JSONObject degraded = buildDegradedObservation();
-            if (degraded != null) {
-                return degraded;
+            if (!isTargetTabCongested()) {
+                JSONObject degraded = buildDegradedObservation();
+                if (degraded != null) {
+                    return degraded;
+                }
             }
             return buildFallbackObservation("SNAPSHOT_EMPTY_RESULT", "页面未返回有效观察数据，可能正在加载");
         } catch (Exception e) {
-            JSONObject degraded = buildDegradedObservation();
-            if (degraded != null) {
-                return degraded;
+            if (!isTargetTabCongested()) {
+                JSONObject degraded = buildDegradedObservation();
+                if (degraded != null) {
+                    return degraded;
+                }
             }
             return buildFallbackObservation("SNAPSHOT_PARSE_ERROR", "快照解析失败: " + e.getMessage());
         }
@@ -745,7 +862,7 @@ public class WebAutomationDriver {
                             errorMsg = "NO_TARGET_TAB".equals(e) ? "no target tab" : "no active tab";
                             break;
                         }
-                        if (!"BRIDGE_NOT_READY".equals(e) && !"TIMEOUT".equals(e)) {
+                        if (!"BRIDGE_NOT_READY".equals(e) && !"TIMEOUT".equals(e) && !"RENDERER_BUSY".equals(e)) {
                             // Deterministic failure (bad selector, unknown condition...): retrying cannot help.
                             errorCode = "selector".equals(cond) ? "INVALID_SELECTOR" : "INVALID_ARGUMENT";
                             errorMsg = e;
@@ -755,7 +872,7 @@ public class WebAutomationDriver {
                 }
                 if (SystemClock.uptimeMillis() >= deadline) break;
                 try {
-                    Thread.sleep(40);
+                    Thread.sleep((raw != null && raw.contains("RENDERER_BUSY")) ? 250 : 150);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     Log.w(TAG, "Wait-condition poll loop interrupted; returning current result", e);
@@ -764,7 +881,11 @@ public class WebAutomationDriver {
                 if (SystemClock.uptimeMillis() >= deadline) break;
             }
             if (!satisfied && errorCode == null) {
-                if (lastCheck == null || "BRIDGE_NOT_READY".equals(lastCheck.optString("error", ""))) {
+                if ((lastCheck == null && isTargetTabCongested())
+                    || (lastCheck != null && "RENDERER_BUSY".equals(lastCheck.optString("error", "")))) {
+                    errorCode = "RENDERER_BUSY";
+                    errorMsg = "renderer main thread remained busy while waiting for '" + cond + "'";
+                } else if (lastCheck == null || "BRIDGE_NOT_READY".equals(lastCheck.optString("error", ""))) {
                     errorCode = "BRIDGE_NOT_READY";
                     errorMsg = "agent bridge never became available on this page within " + effectiveTimeout
                         + "ms (page still loading, or its CSP blocked bridge injection); condition could not be evaluated";
@@ -991,7 +1112,7 @@ public class WebAutomationDriver {
                     try {
                         tapLatch.await(2000, TimeUnit.MILLISECONDS);
                         if (dispatchedRef[0]) {
-                            Thread.sleep(260);
+                            Thread.sleep(120);
                         }
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
@@ -1004,7 +1125,9 @@ public class WebAutomationDriver {
                 ensureDesktopOverviewIfZoomedSync();
 
                 String stateRaw = evaluateJsSync("(function(){ return JSON.stringify(window.__acidBridge.getState()); })()", 2000);
-                JSONObject stateAfter = new JSONObject(stateRaw);
+                JSONObject stateAfter = (stateRaw != null && stateRaw.startsWith("{"))
+                    ? new JSONObject(stateRaw)
+                    : new JSONObject();
                 int revAfter = stateAfter.optInt("revision", revBefore);
                 String urlAfter = stateAfter.optString("url", urlBefore);
                 String activeAfter = stateAfter.optString("activeTag", "") + "#" + stateAfter.optString("activeId", "");
@@ -1127,7 +1250,7 @@ public class WebAutomationDriver {
             try {
                 latch.await(2000, TimeUnit.MILLISECONDS);
                 if (hasTabRef[0]) {
-                    Thread.sleep(200);
+                    Thread.sleep(100);
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Coordinate click wait interrupted", e);
@@ -1299,8 +1422,23 @@ public class WebAutomationDriver {
         }
     }
 
-    public void clearScreenshotFrame(int tabId) {
+    public boolean isTargetTabCongested() {
+        BrowserController.TabSession tab = mHost != null ? mHost.getTargetTab() : null;
+        return tab != null && mRenderGate.isTabCongested(tab.id);
+    }
+
+    public void onTabNavigated(int tabId) {
+        mRenderGate.resetTab(tabId);
+    }
+
+    public void onTabClosed(int tabId) {
+        mRenderGate.removeTab(tabId);
         mScreenshotHelper.clearTab(tabId);
+    }
+
+    public void onAllTabsDestroyed() {
+        mRenderGate.clearAll();
+        mScreenshotHelper.clearAll();
     }
 
     public void clearAllScreenshotFrames() {
@@ -1318,6 +1456,9 @@ public class WebAutomationDriver {
         }
         BrowserController.TabSession tab = mHost.getTargetTab();
         if (tab == null || !tab.isDesktopMode || tab.webView == null || !DesktopViewportManager.isEligibleUrl(tab.url)) {
+            return;
+        }
+        if (mRenderGate.isTabCongested(tab.id)) {
             return;
         }
 
@@ -1451,25 +1592,58 @@ public class WebAutomationDriver {
         return captureScreenshotSync(drawSomOnBitmap, jpegQuality, false);
     }
 
+    private JSONObject readViewportMetaForScreenshotSync() {
+        ensureDesktopOverviewIfZoomedSync();
+        if (isTargetTabCongested()) {
+            return null;
+        }
+        String raw = evaluateJsSync(
+            "(function(){try{var vv=window.visualViewport;var vw=window.innerWidth||0,vh=window.innerHeight||0;"
+                + "return JSON.stringify({ok:true,url:location.href,title:document.title||'',"
+                + "viewport:{width:vw,height:vh,vvWidth:(vv&&vv.width)?vv.width:vw,vvHeight:(vv&&vv.height)?vv.height:vh,"
+                + "vvOffsetLeft:(vv&&typeof vv.offsetLeft==='number')?vv.offsetLeft:0,"
+                + "vvOffsetTop:(vv&&typeof vv.offsetTop==='number')?vv.offsetTop:0}});}catch(e){return null;}})()",
+            450
+        );
+        if (raw != null && raw.contains("NO_TARGET_TAB")) {
+            return buildFallbackObservation("NO_TARGET_TAB", "No bound or active tab available.");
+        }
+        if (raw != null && raw.startsWith("{")) {
+            try {
+                JSONObject obj = new JSONObject(raw);
+                if (obj.optBoolean("ok", false)) {
+                    return obj;
+                }
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
     public ScreenshotCaptureHelper.CaptureResult captureScreenshotSync(
         final boolean drawSomOnBitmap,
         final int jpegQuality,
         final boolean saveAsPng
     ) {
-        JSONObject extraOpts = new JSONObject();
-        try {
-            extraOpts.put("limit", drawSomOnBitmap ? 260 : 1);
-            extraOpts.put("textLimit", drawSomOnBitmap ? 400 : 1);
-        } catch (Exception ignored) {}
+        final JSONObject obsJson;
+        if (isMainLooper()) {
+            obsJson = null;
+        } else if (drawSomOnBitmap) {
+            JSONObject extraOpts = new JSONObject();
+            try {
+                extraOpts.put("limit", 260);
+                extraOpts.put("textLimit", 400);
+            } catch (Exception ignored) {}
+            obsJson = observeSync(false, true, false, extraOpts);
+        } else {
+            obsJson = readViewportMetaForScreenshotSync();
+        }
 
-        final JSONObject obsJson = isMainLooper()
-            ? null
-            : observeSync(false, true, false, extraOpts);
-
-        if (obsJson != null && "NO_TARGET_TAB".equals(obsJson.optString("error"))) {
+        if (obsJson != null
+            && ("NO_TARGET_TAB".equals(obsJson.optString("error_code"))
+                || "NO_TARGET_TAB".equals(obsJson.optString("error")))) {
             return ScreenshotCaptureHelper.CaptureResult.error(
                 "NO_TARGET_TAB",
-                obsJson.optString("message", "No bound or active tab available.")
+                obsJson.optString("error", obsJson.optString("message", "No bound or active tab available."))
             );
         }
 

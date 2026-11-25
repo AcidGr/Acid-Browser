@@ -137,12 +137,20 @@ public class AcidWebView extends WebView {
     }
 
     /**
-     * Enables full-document DisplayList recording for software draw fallbacks (background tabs and
-     * pre-API 26 devices) so CSS/HTML animations outside the active tile cull rect are not clipped.
+     * Only pre-API 26 WebViews (without hardware {@code PixelCopy}) need whole-document
+     * DisplayList recording for software draw; API 26+ keeps Chromium's faster tile culling.
+     */
+    public static boolean shouldEnableSlowWholeDocumentDraw(int sdkInt) {
+        return sdkInt >= 21 && sdkInt < 26;
+    }
+
+    /**
+     * Enables full-document DisplayList recording on legacy devices lacking {@code PixelCopy}
+     * so software draw fallbacks capture off-tile CSS/HTML layers without handicapping API 26+.
      */
     public static void ensureWholeDocumentDrawEnabled() {
         if (sWholeDocDrawInitialized.compareAndSet(false, true)) {
-            if (android.os.Build.VERSION.SDK_INT >= 21) {
+            if (shouldEnableSlowWholeDocumentDraw(android.os.Build.VERSION.SDK_INT)) {
                 try {
                     WebView.enableSlowWholeDocumentDraw();
                 } catch (Throwable ignored) {}

@@ -213,6 +213,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testWebDavSyncAndFullBackupRestore(); }
         });
 
+        // 32. Renderer Single-Flight Gate, Slow-Whole-Doc Guard & Fast Click Download Policy
+        run("32. Renderer Single-Flight & Fast Automation: Queue-Pileup Gate, Recovery Probe Cooldown, Whole-Doc SDK Guard & Download Poll Policy", new TestCase() {
+            @Override public void execute() throws Exception { testRendererSingleFlightAndFastAutomationPolicies(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -5398,5 +5403,128 @@ public final class TestRunner {
             server.stop();
             SkillStorageVault.deleteRecursiveSafe(root);
         }
+    }
+
+    // =========================================================================
+    // 32. Renderer Single-Flight Gate, Whole-Doc Draw SDK Guard & Download Poll
+    // =========================================================================
+
+    private static void testRendererSingleFlightAndFastAutomationPolicies() throws Exception {
+        // 1. RendererSingleFlightGate: untracked tabId <= 0
+        RendererSingleFlightGate gate = new RendererSingleFlightGate(8000L);
+        RendererSingleFlightGate.Ticket untracked = gate.tryBegin(-1);
+        assertTrue(untracked != null && untracked.tabId == -1, "Untracked tabId returns valid sentinel ticket");
+        assertTrue(!gate.isTabCongested(-1), "Untracked tabId is never congested");
+        gate.onTimedOut(untracked, 1000L);
+        assertTrue(!gate.isTabCongested(-1), "Untracked timeout does not mark congested");
+        gate.onCompleted(untracked);
+
+        // 2. Normal acquire & complete
+        RendererSingleFlightGate.Ticket t1 = gate.tryBegin(7);
+        assertTrue(t1 != null, "Fresh tab acquires ticket");
+        assertTrue(!gate.isTabCongested(7), "In-flight non-timed-out tab is not congested");
+        gate.onCompleted(t1);
+        gate.onCompleted(t1); // idempotent duplicate completion
+        assertTrue(!gate.isTabCongested(7), "Completed ticket leaves tab uncongested");
+
+        // 3. Multi-ticket timeout -> congested -> blocks new tickets until ALL in-flight drain
+        RendererSingleFlightGate.Ticket a = gate.tryBegin(10);
+        RendererSingleFlightGate.Ticket b = gate.tryBegin(10);
+        assertTrue(a != null && b != null, "Concurrent non-congested calls acquire tickets");
+        gate.onTimedOut(a, 10000L);
+        assertTrue(gate.isTabCongested(10), "Timeout marks tab congested immediately");
+        assertTrue(gate.tryBegin(10) == null, "Congested tab blocks new tryBegin calls");
+        gate.onCompleted(a);
+        assertTrue(gate.isTabCongested(10), "Tab remains congested while second in-flight ticket is still pending");
+        gate.onCompleted(b);
+        assertTrue(!gate.isTabCongested(10), "Tab unlocks cleanly once all in-flight tickets finish");
+        assertTrue(gate.tryBegin(10) != null, "Unlocked tab accepts new tickets");
+        gate.resetTab(10);
+
+        // 4. Navigation generation reset ignores late completion from old generation
+        RendererSingleFlightGate.Ticket stale = gate.tryBegin(12);
+        gate.onTimedOut(stale, 20000L);
+        assertTrue(gate.isTabCongested(12), "Tab 12 congested after timeout");
+        gate.resetTab(12);
+        assertTrue(!gate.isTabCongested(12), "resetTab clears congestion immediately");
+        RendererSingleFlightGate.Ticket fresh = gate.tryBegin(12);
+        assertTrue(fresh != null && fresh.generation > stale.generation, "resetTab bumps generation");
+        gate.onCompleted(stale);
+        gate.onTimedOut(stale, 25000L);
+        assertTrue(!gate.isTabCongested(12), "Late callbacks from stale generation are ignored");
+        gate.onCompleted(fresh);
+
+        // 5. Recovery probe cooldown & single-flight probe rules
+        RendererSingleFlightGate.Ticket stuck = gate.tryBegin(15);
+        gate.onTimedOut(stuck, 10000L);
+        assertTrue(gate.tryBeginRecoveryProbe(15, 17999L) == null, "Probe denied before 8000ms cooldown");
+        RendererSingleFlightGate.ProbeTicket p1 = gate.tryBeginRecoveryProbe(15, 18000L);
+        assertTrue(p1 != null, "Probe allowed at 8000ms cooldown");
+        assertTrue(gate.tryBeginRecoveryProbe(15, 18100L) == null, "Concurrent second probe denied while p1 in flight");
+        gate.onRecoveryProbeFinished(p1, false);
+        assertTrue(gate.isTabCongested(15), "Failed probe keeps tab congested");
+        assertTrue(gate.tryBeginRecoveryProbe(15, 25999L) == null, "Next cooldown measured from last failed probe");
+        RendererSingleFlightGate.ProbeTicket p2 = gate.tryBeginRecoveryProbe(15, 26000L);
+        assertTrue(p2 != null, "Second probe allowed after cooldown elapses");
+        gate.onRecoveryProbeFinished(p2, true);
+        assertTrue(!gate.isTabCongested(15), "Successful recovery probe unlocks congested tab");
+        assertTrue(gate.tryBegin(15) != null, "Unlocked tab after successful probe accepts work");
+        gate.removeTab(15);
+        assertTrue(!gate.isTabCongested(15), "removeTab clears slot");
+
+        // 5b. Late recovery probe completion (>250ms caller timeout) & 3x stale expiry
+        RendererSingleFlightGate.Ticket stuck2 = gate.tryBegin(16);
+        gate.onTimedOut(stuck2, 10000L);
+        RendererSingleFlightGate.ProbeTicket lateProbe = gate.tryBeginRecoveryProbe(16, 18000L);
+        assertTrue(lateProbe != null, "Initial recovery probe begins after 8000ms cooldown");
+        assertTrue(gate.tryBeginRecoveryProbe(16, 26000L) == null,
+            "Active in-flight probe blocks duplicate probe before 3x stale expiry");
+        gate.onRecoveryProbeFinished(lateProbe, true);
+        assertTrue(!gate.isTabCongested(16), "Late probe alive=true unlocks tab immediately");
+
+        RendererSingleFlightGate.Ticket stuck3 = gate.tryBegin(17);
+        gate.onTimedOut(stuck3, 10000L);
+        RendererSingleFlightGate.ProbeTicket droppedProbe = gate.tryBeginRecoveryProbe(17, 18000L);
+        assertTrue(droppedProbe != null, "Probe begins on tab 17");
+        assertTrue(gate.tryBeginRecoveryProbe(17, 41999L) == null,
+            "Dropped probe stays single-flight before 3x cooldown (24000ms)");
+        RendererSingleFlightGate.ProbeTicket replacementProbe = gate.tryBeginRecoveryProbe(17, 42000L);
+        assertTrue(replacementProbe != null, "Stale dropped probe expires cleanly at 3x cooldown");
+        gate.onRecoveryProbeFinished(droppedProbe, false);
+        assertTrue(gate.tryBeginRecoveryProbe(17, 42100L) == null,
+            "Superseded probe failure does not clear active replacementProbe");
+        gate.onRecoveryProbeFinished(replacementProbe, true);
+        assertTrue(!gate.isTabCongested(17), "Replacement probe unlocks tab 17");
+
+        // 6. AcidWebView.shouldEnableSlowWholeDocumentDraw SDK boundary
+        assertTrue(!AcidWebView.shouldEnableSlowWholeDocumentDraw(19), "Pre-21 SDK skips slow whole-doc draw");
+        assertTrue(AcidWebView.shouldEnableSlowWholeDocumentDraw(21), "API 21 enables whole-doc draw");
+        assertTrue(AcidWebView.shouldEnableSlowWholeDocumentDraw(25), "API 25 enables whole-doc draw");
+        assertTrue(!AcidWebView.shouldEnableSlowWholeDocumentDraw(26), "API 26+ keeps tile culling fast path");
+        assertTrue(!AcidWebView.shouldEnableSlowWholeDocumentDraw(34), "API 34 skips slow whole-doc draw");
+        assertTrue(!AcidWebView.shouldEnableSlowWholeDocumentDraw(35), "API 35 skips slow whole-doc draw");
+
+        // 7. AcidSandboxTools.shouldPollForDownloadAfterAction
+        JSONObject buttonReceipt = new JSONObject("{\"ok\":true,\"hit\":{\"tag\":\"BUTTON\"},\"effect\":{\"url_changed\":false}}");
+        JSONObject linkReceipt = new JSONObject("{\"ok\":true,\"hit\":{\"tag\":\"A\"},\"effect\":{\"url_changed\":false}}");
+        JSONObject navClickReceipt = new JSONObject("{\"ok\":true,\"hit\":{\"tag\":\"DIV\"},\"effect\":{\"url_changed\":true}}");
+        assertTrue(!AcidSandboxTools.shouldPollForDownloadAfterAction("click", new JSONObject(), buttonReceipt, false),
+            "Normal button click skips 500ms download polling");
+        assertTrue(AcidSandboxTools.shouldPollForDownloadAfterAction("click", new JSONObject(), linkReceipt, false),
+            "Anchor tag click polls briefly for download");
+        assertTrue(AcidSandboxTools.shouldPollForDownloadAfterAction("click", new JSONObject(), navClickReceipt, false),
+            "Click causing url_changed polls briefly for download");
+        assertTrue(AcidSandboxTools.shouldPollForDownloadAfterAction("click", new JSONObject(), buttonReceipt, true),
+            "Click on actively loading tab polls briefly for download");
+        assertTrue(!AcidSandboxTools.shouldPollForDownloadAfterAction("eval", new JSONObject("{\"code\":\"location.href\"}"), null, false),
+            "eval reading location.href skips download polling");
+        assertTrue(!AcidSandboxTools.shouldPollForDownloadAfterAction("eval", new JSONObject("{\"code\":\"btn.click()\"}"), null, false),
+            "eval calling .click() skips download polling");
+        assertTrue(AcidSandboxTools.shouldPollForDownloadAfterAction("eval", new JSONObject("{\"code\":\"startDownload()\"}"), null, false),
+            "eval mentioning download triggers short download poll");
+        assertTrue(AcidSandboxTools.shouldPollForDownloadAfterAction("eval", new JSONObject("{\"code\":\"1+1\"}"), null, true),
+            "eval on loading tab triggers short download poll");
+        assertTrue(AcidSandboxTools.shouldPollForDownloadAfterAction("navigate", new JSONObject(), null, false),
+            "navigate allows short download poll");
     }
 }

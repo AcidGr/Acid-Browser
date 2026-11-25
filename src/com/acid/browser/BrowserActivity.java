@@ -239,7 +239,6 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         setContentView(buildContentView());
 
-        AcidWebView.ensureWholeDocumentDrawEnabled();
         mController = new BrowserController(this, mWebViewContainer, mOverlayView, this, mDataStore, mIsDarkMode);
         mDataStore.setOnSettingsChangedListener(new BrowserDataStore.OnSettingsChangedListener() {
             @Override

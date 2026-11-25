@@ -143,7 +143,15 @@
         'treeitem'
     ]);
     const IGNORED_TAGS = new Set([
-        'script', 'style', 'noscript', 'meta', 'link', 'head', 'svg', 'path', 'defs', 'symbol'
+        'script', 'style', 'noscript', 'meta', 'link', 'head', 'svg', 'path', 'defs', 'symbol', 'template'
+    ]);
+    const LABELABLE_TAGS = new Set([
+        'input', 'select', 'textarea', 'button', 'meter', 'output', 'progress'
+    ]);
+    const BLOCK_TEXT_TAGS = new Set([
+        'div', 'p', 'li', 'tr', 'td', 'th', 'dt', 'dd', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'section', 'article', 'header', 'footer', 'nav', 'aside', 'main', 'br', 'hr', 'option',
+        'button', 'label'
     ]);
 
     function isElementVisible(el, rect, style) {
@@ -202,7 +210,7 @@
         return false;
     }
 
-    function isElementInteractive(el, style) {
+    function isElementInteractive(el, style, rect, pointerCapturedByAncestor, hiddenSet) {
         const tag = (el.tagName || '').toLowerCase();
         if (!tag || IGNORED_TAGS.has(tag)) return false;
 
@@ -250,11 +258,10 @@
             return true;
         }
 
-        if (style && style.cursor === 'pointer') {
-            const rect = el.getBoundingClientRect();
+        if (style && style.cursor === 'pointer' && !pointerCapturedByAncestor) {
             // Allow clickable cards, table rows, and list items (avoid huge page wrappers > 280px high)
-            if (rect.height > 0 && rect.height <= 280 && rect.width > 0) {
-                const textLen = (el.innerText || '').trim().length;
+            if (rect && rect.height > 0 && rect.height <= 280 && rect.width > 0) {
+                const textLen = extractVisibleText(el, 360, hiddenSet).length;
                 if (textLen > 0 && textLen <= 350) {
                     return true;
                 }
@@ -284,17 +291,125 @@
         return cleaned;
     }
 
-    function extractElementLabel(el) {
+    function appendCollapsedText(str, state, cap) {
+        if (!str || state.buf.length >= cap) return;
+        for (let i = 0; i < str.length; i++) {
+            const ch = str[i];
+            const code = str.charCodeAt(i);
+            const isWs = code <= 32 || code === 160 || (code >= 0x2000 && /\s/.test(ch));
+            if (isWs) {
+                if (state.buf.length > 0) state.pendingSpace = true;
+            } else {
+                if (state.pendingSpace && state.buf.length > 0) {
+                    state.buf += ' ';
+                    if (state.buf.length >= cap) break;
+                }
+                state.pendingSpace = false;
+                state.buf += ch;
+                if (state.buf.length >= cap) break;
+            }
+        }
+    }
+
+    /**
+     * Zero-reflow visible text extractor: reads textContent/childNodes instead of el.innerText
+     * so Chromium Blink never triggers synchronous layout recalculation while scanning.
+     */
+    function extractVisibleText(root, maxChars, hiddenSet) {
+        if (!root) return '';
+        const cap = (typeof maxChars === 'number' && maxChars > 0) ? Math.floor(maxChars) : 32768;
+        const state = { buf: '', pendingSpace: false };
+
+        if (typeof root.childNodes === 'undefined' &&
+            (!root.children || root.children.length === 0) &&
+            !root.shadowRoot && !root.__acidShadowRoot) {
+            const leafRaw = (typeof root.textContent === 'string' && root.textContent.length > 0)
+                ? root.textContent
+                : (typeof root.innerText === 'string' ? root.innerText : '');
+            appendCollapsedText(leafRaw, state, cap);
+            return state.buf;
+        }
+
+        const maxSteps = Math.min(120000, Math.max(cap * 8, 4096));
+        let steps = 0;
+        const stack = [root];
+        while (stack.length > 0 && state.buf.length < cap && ++steps <= maxSteps) {
+            const cur = stack.pop();
+            if (!cur) continue;
+            if (cur.__spaceAfter) {
+                if (state.buf.length > 0) state.pendingSpace = true;
+                continue;
+            }
+            if (cur.nodeType === 3) {
+                appendCollapsedText(cur.nodeValue || '', state, cap);
+                continue;
+            }
+            if (cur.nodeType === 11 || cur.nodeType === 9 || (!cur.nodeType && (cur.childNodes || cur.children))) {
+                const fcn = cur.childNodes;
+                if (fcn && fcn.length > 0) {
+                    for (let i = fcn.length - 1; i >= 0; i--) stack.push(fcn[i]);
+                } else if (cur.children && cur.children.length > 0) {
+                    for (let i = cur.children.length - 1; i >= 0; i--) stack.push(cur.children[i]);
+                }
+                continue;
+            }
+            if (cur.nodeType !== 1) continue;
+            if (cur.id === SOM_OVERLAY_ID) continue;
+
+            const tag = (cur.tagName || '').toLowerCase();
+            if (IGNORED_TAGS.has(tag)) continue;
+            if (cur.hidden === true || (cur.hasAttribute && cur.hasAttribute('hidden'))) continue;
+            if (hiddenSet && hiddenSet.has(cur)) continue;
+            if (cur.style && (cur.style.display === 'none' || cur.style.visibility === 'hidden')) continue;
+
+            const isBlock = BLOCK_TEXT_TAGS.has(tag);
+            if (isBlock && state.buf.length > 0) {
+                state.pendingSpace = true;
+            }
+            if (isBlock && tag !== 'br' && tag !== 'hr') {
+                stack.push({ __spaceAfter: true });
+            }
+
+            const cn = cur.childNodes;
+            if (cn && cn.length > 0) {
+                for (let i = cn.length - 1; i >= 0; i--) {
+                    stack.push(cn[i]);
+                }
+            } else if (!cn) {
+                if (cur.children && cur.children.length > 0) {
+                    for (let i = cur.children.length - 1; i >= 0; i--) {
+                        stack.push(cur.children[i]);
+                    }
+                } else {
+                    const mockLeaf = (typeof cur.textContent === 'string' && cur.textContent.length > 0)
+                        ? cur.textContent
+                        : (typeof cur.innerText === 'string' ? cur.innerText : '');
+                    if (mockLeaf) stack.push({ nodeType: 3, nodeValue: mockLeaf });
+                }
+            }
+
+            const shadow = cur.shadowRoot || cur.__acidShadowRoot;
+            if (shadow) {
+                stack.push(shadow);
+            }
+        }
+        return state.buf;
+    }
+
+    function extractElementLabel(el, labelLookupFn, hiddenSet) {
         let labelText = '';
+        const doc = el.ownerDocument || document;
         // 1. Check aria-labelledby
         const labelledBy = el.getAttribute('aria-labelledby');
         if (labelledBy) {
             const parts = labelledBy.trim().split(/\s+/);
             const collected = [];
             for (let p = 0; p < parts.length; p++) {
-                const target = document.getElementById(parts[p]);
+                const target = (doc && typeof doc.getElementById === 'function')
+                    ? doc.getElementById(parts[p])
+                    : document.getElementById(parts[p]);
                 if (target) {
-                    const t = cleanText(target.innerText || target.textContent, 50);
+                    const t = cleanText(extractVisibleText(target, 60, hiddenSet), 50);
                     if (t) collected.push(t);
                 }
             }
@@ -305,11 +420,16 @@
 
         // 2. Check native <label>
         if (!labelText && el.labels && el.labels.length > 0) {
-            labelText = cleanText(el.labels[0].innerText || el.labels[0].textContent, 60);
+            labelText = cleanText(extractVisibleText(el.labels[0], 70, hiddenSet), 60);
         } else if (!labelText && el.id) {
             try {
-                const lbl = document.querySelector('label[for="' + el.id.replace(/"/g, '\\"') + '"]');
-                if (lbl) labelText = cleanText(lbl.innerText || lbl.textContent, 60);
+                let lbl = null;
+                if (typeof labelLookupFn === 'function') {
+                    lbl = labelLookupFn(doc, el.id);
+                } else if (LABELABLE_TAGS.has((el.tagName || '').toLowerCase()) && doc && typeof doc.querySelector === 'function') {
+                    lbl = doc.querySelector('label[for="' + el.id.replace(/"/g, '\\"') + '"]');
+                }
+                if (lbl) labelText = cleanText(extractVisibleText(lbl, 70, hiddenSet), 60);
             } catch (e) {}
         }
 
@@ -317,9 +437,10 @@
         const aria = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('alt');
 
         // 4. Check inner text or child SVG title
-        let inner = (el.tagName && el.tagName.toLowerCase() === 'select')
+        const tag = (el.tagName || '').toLowerCase();
+        let inner = tag === 'select'
             ? ''
-            : cleanText(el.innerText || el.textContent, 90);
+            : cleanText(extractVisibleText(el, 100, hiddenSet), 90);
 
         if (!inner && !aria && !labelText) {
             const svgTitle = el.querySelector && el.querySelector('svg title, svg[aria-label]');
@@ -335,12 +456,15 @@
         return cleanText(primary, 90);
     }
 
-    function extractBadge(el) {
+    function extractBadge(el, elementLabel, hiddenSet) {
         try {
-            const badgeEl = el.querySelector && el.querySelector('.badge, .count, .unread, [class*="badge"], [class*="count"], [aria-label*="未读"], [aria-label*="条"]');
+            if (!el.children || el.children.length === 0 || el.children.length > 12 || !el.querySelector) {
+                return undefined;
+            }
+            const badgeEl = el.querySelector('.badge, .count, .unread, [class*="badge"], [class*="count"], [aria-label*="未读"], [aria-label*="条"]');
             if (badgeEl) {
-                const t = cleanText(badgeEl.innerText || badgeEl.textContent, 15);
-                if (t && t.length <= 10 && t !== extractElementLabel(el)) return t;
+                const t = cleanText(extractVisibleText(badgeEl, 20, hiddenSet), 15);
+                if (t && t.length <= 10 && t !== elementLabel) return t;
             }
         } catch (e) {}
         return undefined;
@@ -427,6 +551,41 @@
         lastObserveSignature = currentSig;
         const items = [];
         let totalCandidates = 0;
+        const hiddenSet = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
+        const labelLookupCache = [];
+        function lookupLabelByFor(doc, forId) {
+            if (!doc || !forId) return null;
+            let entry = null;
+            for (let i = 0; i < labelLookupCache.length; i++) {
+                if (labelLookupCache[i].doc === doc) {
+                    entry = labelLookupCache[i];
+                    break;
+                }
+            }
+            if (!entry) {
+                const map = Object.create(null);
+                try {
+                    if (typeof doc.querySelectorAll === 'function') {
+                        const lbls = doc.querySelectorAll('label[for]');
+                        if (lbls) {
+                            for (let j = 0; j < lbls.length; j++) {
+                                const l = lbls[j];
+                                const f = l && l.getAttribute ? l.getAttribute('for') : null;
+                                if (f && !map[f]) map[f] = l;
+                            }
+                        }
+                    }
+                } catch (e) {}
+                entry = { doc: doc, map: map };
+                labelLookupCache.push(entry);
+            }
+            return entry.map[forId] || null;
+        }
+        const maxNodes = (typeof options.maxNodes === 'number' && options.maxNodes > 0) ? Math.floor(options.maxNodes) : 8000;
+        const maxMs = (typeof options.maxMs === 'number' && options.maxMs > 0) ? options.maxMs : 220;
+        const scanStartMs = Date.now();
+        let visitedNodes = 0;
+        let budgetTruncated = false;
 
         function isRedundantChildOf(el, label, rect, parent) {
             if (!parent || !label) return false;
@@ -481,19 +640,34 @@
             return false;
         }
 
-        function walk(node, activeParent, frameOffsetX, frameOffsetY) {
-            if (!node) return;
+        function walk(node, activeParent, frameOffsetX, frameOffsetY, pointerCapturedByAncestor) {
+            if (!node || budgetTruncated) return;
             if (node.nodeType !== Node.ELEMENT_NODE) return;
             if (node.id === SOM_OVERLAY_ID) return;
 
+            visitedNodes++;
+            if (visitedNodes > maxNodes || ((visitedNodes & 63) === 0 && (Date.now() - scanStartMs) > maxMs)) {
+                budgetTruncated = true;
+                return;
+            }
+
             const el = node;
             const tag = (el.tagName || '').toLowerCase();
-            if (IGNORED_TAGS.has(tag)) return;
+            if (!tag || IGNORED_TAGS.has(tag) || el.hidden === true || (el.hasAttribute && el.hasAttribute('hidden'))) {
+                if (hiddenSet) hiddenSet.add(el);
+                return;
+            }
 
             const fx = frameOffsetX || 0;
             const fy = frameOffsetY || 0;
             const ownerWin = (el.ownerDocument && el.ownerDocument.defaultView) ? el.ownerDocument.defaultView : window;
             const style = (ownerWin && typeof ownerWin.getComputedStyle === 'function' ? ownerWin : window).getComputedStyle(el);
+            if (!style || style.display === 'none' || style.contentVisibility === 'hidden') {
+                if (hiddenSet) hiddenSet.add(el);
+                return;
+            }
+            let nextPointerCaptured = !!(pointerCapturedByAncestor && style.cursor === 'pointer');
+
             const localRect = el.getBoundingClientRect();
             const rect = {
                 left: localRect.left + fx,
@@ -509,16 +683,19 @@
                 const inVp = isInViewport(rect, 0);
                 const inExtendedVp = isInViewport(rect, marginPx);
 
-                if ((!viewportOnly || inExtendedVp) && isElementInteractive(el, style)) {
+                if ((!viewportOnly || inExtendedVp) && isElementInteractive(el, style, localRect, pointerCapturedByAncestor, hiddenSet)) {
                     if (!inVp || isTopMostAtCenter(el, localRect)) {
                         const role = (el.getAttribute('role') || '').toLowerCase().trim() || tag;
-                        const label = extractElementLabel(el);
+                        const label = extractElementLabel(el, lookupLabelByFor, hiddenSet);
 
                         const isRedundant = isRedundantChildOf(el, label, rect, activeParent) ||
                                             isGeometricSiblingDuplicate(el, rect);
 
                         if (!isRedundant && (label || tag !== 'div' && tag !== 'span' || role !== tag)) {
                             totalCandidates++;
+                            if (style.cursor === 'pointer') {
+                                nextPointerCaptured = true;
+                            }
 
                             const currentCandidate = {
                                 tag: tag,
@@ -579,13 +756,13 @@
                                 const ariaSel = el.getAttribute('aria-selected');
                                 const expanded = ariaExp !== null ? ariaExp === 'true' : undefined;
                                 const selected = ariaSel !== null ? ariaSel === 'true' : undefined;
-                                const badge = extractBadge(el);
+                                const badge = extractBadge(el, label, hiddenSet);
 
                                 let val = undefined;
                                 if (tag === 'input' || tag === 'textarea' || tag === 'select') {
                                     val = isSensitiveInput(el) ? '***' : cleanText(el.value, 60);
                                 } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
-                                    val = cleanText(el.innerText || el.textContent, 60);
+                                    val = cleanText(extractVisibleText(el, 80, hiddenSet), 60);
                                 } else if (el.hasAttribute('aria-valuenow')) {
                                     val = el.getAttribute('aria-valuenow');
                                 }
@@ -655,18 +832,19 @@
             const shadow = el.shadowRoot || el.__acidShadowRoot;
             if (shadow && shadow.children) {
                 for (let s = 0; s < shadow.children.length; s++) {
-                    walk(shadow.children[s], nextParent, fx, fy);
+                    if (budgetTruncated) break;
+                    walk(shadow.children[s], nextParent, fx, fy, nextPointerCaptured);
                 }
             }
 
             // Traverse same-origin iframe if accessible
-            if (tag === 'iframe') {
+            if (tag === 'iframe' && !budgetTruncated) {
                 try {
                     const doc = el.contentDocument;
                     if (doc && doc.body) {
                         const cl = typeof el.clientLeft === 'number' ? el.clientLeft : 0;
                         const ct = typeof el.clientTop === 'number' ? el.clientTop : 0;
-                        walk(doc.body, nextParent, rect.left + cl, rect.top + ct);
+                        walk(doc.body, nextParent, rect.left + cl, rect.top + ct, false);
                     }
                 } catch (e) {}
             }
@@ -674,7 +852,8 @@
             const children = el.children;
             if (children) {
                 for (let i = 0; i < children.length; i++) {
-                    walk(children[i], nextParent, fx, fy);
+                    if (budgetTruncated) break;
+                    walk(children[i], nextParent, fx, fy, nextPointerCaptured);
                 }
             }
         }
@@ -693,7 +872,7 @@
         }
 
         if (rootNode) {
-            walk(rootNode, null, 0, 0);
+            walk(rootNode, null, 0, 0, false);
         }
 
         // Expose self-healing window.__refs for direct access via eval
@@ -712,10 +891,12 @@
 
         // Clear overlay before extracting body text so SoM badge numbers are not included in page excerpt
         clearSomOverlay();
-        const normalizedBodyText = cleanText(document.body ? (document.body.innerText || '') : '');
-        const totalTextChars = normalizedBodyText.length;
         const textOffset = typeof options.textOffset === 'number' && options.textOffset >= 0 ? Math.floor(options.textOffset) : 0;
         const textLimit = typeof options.textLimit === 'number' && options.textLimit > 0 ? Math.floor(options.textLimit) : 1200;
+        const textCap = Math.max(textOffset + textLimit + 4096, 32768);
+        const effectiveTextCap = budgetTruncated ? Math.min(textCap, textOffset + textLimit + 2048) : textCap;
+        const normalizedBodyText = document.body ? extractVisibleText(document.body, effectiveTextCap, hiddenSet) : '';
+        const totalTextChars = normalizedBodyText.length;
         const slicedText = normalizedBodyText.slice(textOffset, textOffset + textLimit);
 
         if (showSom) {
@@ -795,6 +976,9 @@
             const remaining = totalCandidates - endIdx;
             lines.push('Notice: [COLLAPSED_ELEMENTS] ' + remaining + ' elements omitted (offset=' + offset + ', limit=' + limit + ', total=' + totalCandidates + '). Use observe(offset=' + endIdx + ') to view next slice, or observe(selector="...") to inspect a specific sub-tree.');
         }
+        if (budgetTruncated) {
+            lines.push('Notice: [SCAN_BUDGET_REACHED] DOM scan capped (' + visitedNodes + ' nodes) to keep page responsive. Use observe(selector="...") to inspect a specific container.');
+        }
 
         if (slicedText) {
             let textHeader = 'Page Text Excerpt';
@@ -849,6 +1033,7 @@
                 remaining: Math.max(0, totalCandidates - endIdx),
                 hasMore: totalCandidates > endIdx
             },
+            budgetTruncated: budgetTruncated,
             textExcerpt: {
                 totalChars: totalTextChars,
                 offset: textOffset,
@@ -951,17 +1136,20 @@
         return null;
     }
 
-    function collectDeepText() {
-        const chunks = [];
+    function containsDeepText(needle) {
+        const normNeedle = cleanText(needle);
+        if (!normNeedle) return false;
         const roots = collectAllSearchRoots();
         for (let r = 0; r < roots.length; r++) {
             const root = roots[r];
-            const txt = root && root.body
-                ? (root.body.innerText || root.body.textContent || '')
-                : (root && root.textContent ? root.textContent : '');
-            if (txt) chunks.push(txt);
+            // extractVisibleText already traverses shadowRoot/__acidShadowRoot in one O(N) pass;
+            // only start from document roots so Shadow DOMs are never re-walked quadratically.
+            if (!root || (!root.body && !root.documentElement)) continue;
+            const target = root.body || root.documentElement;
+            const txt = extractVisibleText(target, 150000, null);
+            if (txt && txt.includes(normNeedle)) return true;
         }
-        return chunks.join('\n');
+        return false;
     }
 
     function getDeepActiveElement() {
@@ -1060,7 +1248,7 @@
                 ? el.ownerDocument.defaultView : window;
             const style = elWin.getComputedStyle(el);
             if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
-            const label = (el.innerText || '').trim();
+            const label = extractVisibleText(el, text.length + 60, null);
             if (label === text) {
                 return el;
             }
@@ -1774,8 +1962,7 @@
         }
         if (cond === 'text') {
             if (!target) return { ok: false, error: 'Target text required' };
-            const pageText = collectDeepText();
-            return { ok: true, satisfied: pageText.includes(target) };
+            return { ok: true, satisfied: containsDeepText(target) };
         }
         if (cond === 'gone') {
             if (!target) return { ok: false, error: 'Target required for gone condition' };
@@ -1786,11 +1973,8 @@
                     found = true;
                 }
             } catch (ignored) {}
-            if (!found) {
-                const pageText = collectDeepText();
-                if (pageText.includes(target)) {
-                    found = true;
-                }
+            if (!found && containsDeepText(target)) {
+                found = true;
             }
             return { ok: true, satisfied: !found };
         }

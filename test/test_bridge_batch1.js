@@ -599,4 +599,202 @@ console.log('✓ Case 15: observe() annotates input(file) and label(file-trigger
 }
 console.log('✓ Case 16: observe().viewport exports visualViewport metrics and honors pan offset');
 
-console.log('\n[TestBridgeBatch1] All 16 Batch-1/Batch-2 JS regression checks PASSED!\n');
+// Case 17: display:none and hidden subtrees are pruned before getBoundingClientRect while bound label(file-trigger) resolves
+{
+    let hiddenDescMeasured = 0;
+    const hiddenDescBtn = makeEl('button', { id: 'hidden_desc_btn', text: 'Inside Display None' });
+    hiddenDescBtn.getBoundingClientRect = () => {
+        hiddenDescMeasured++;
+        return { left: 10, top: 10, width: 80, height: 30, right: 90, bottom: 40 };
+    };
+    const displayNoneWrap = makeEl('div', {
+        style: { display: 'none' },
+        children: [hiddenDescBtn]
+    });
+
+    const hiddenAttrChild = makeEl('a', { text: 'Inside Hidden Attr' });
+    hiddenAttrChild.getBoundingClientRect = () => {
+        hiddenDescMeasured++;
+        return { left: 10, top: 10, width: 80, height: 30, right: 90, bottom: 40 };
+    };
+    const hiddenAttrWrap = makeEl('div', {
+        attrs: { hidden: '' },
+        children: [hiddenAttrChild]
+    });
+    hiddenAttrWrap.hidden = true;
+
+    const prunedFileInput = makeEl('input', {
+        id: 'pruned_file_input',
+        type: 'file',
+        attrs: { accept: '.json' },
+        style: { display: 'none' },
+        rect: { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }
+    });
+    const visibleFileLabel = makeEl('label', {
+        id: 'visible_file_label',
+        text: 'Import JSON',
+        attrs: { for: 'pruned_file_input' },
+        control: prunedFileInput,
+        rect: { left: 10, top: 20, width: 120, height: 32, right: 130, bottom: 52 }
+    });
+
+    const prevGetById = global.document.getElementById;
+    global.document.getElementById = (id) => (id === 'pruned_file_input' ? prunedFileInput : null);
+    bodyEl.children = [displayNoneWrap, hiddenAttrWrap, prunedFileInput, visibleFileLabel];
+    try {
+        const obs = bridge.observe({ includeSom: false });
+        assert.strictEqual(obs.ok, true);
+        assert.strictEqual(hiddenDescMeasured, 0, 'Hidden subtree descendants must not trigger getBoundingClientRect');
+        assert.strictEqual(obs.elements.length, 1, 'Only visible bound file label is emitted');
+        assert.strictEqual(obs.elements[0].fileTrigger, true, 'Bound label still resolves hidden file input');
+        assert.strictEqual(obs.elements[0].accept, '.json');
+    } finally {
+        global.document.getElementById = prevGetById;
+        bodyEl.children = [];
+    }
+}
+console.log('✓ Case 17: display:none & hidden subtrees prune cleanly without breaking label(file-trigger)');
+
+// Case 18: Inherited cursor:pointer suppression & zero innerText reflow on childNodes-backed DOM
+{
+    function makeZeroReflowNode(tag, opts = {}) {
+        const node = makeEl(tag, opts);
+        const childNodes = opts.childNodes ? [...opts.childNodes] : [];
+        if (opts.text && childNodes.length === 0 && !opts.children) {
+            childNodes.push({ nodeType: 3, nodeValue: opts.text });
+        }
+        node.childNodes = childNodes;
+        node.children = childNodes.filter(c => c.nodeType === 1);
+        Object.defineProperty(node, 'innerText', {
+            configurable: true,
+            get() {
+                throw new Error('innerText layout-thrashing getter must NOT be accessed on ' + tag);
+            }
+        });
+        return node;
+    }
+
+    const plainDescendants = [];
+    for (let i = 0; i < 50; i++) {
+        plainDescendants.push(makeZeroReflowNode('div', {
+            style: { cursor: 'pointer' },
+            rect: { left: 10, top: 20 + i, width: 180, height: 20, right: 190, bottom: 40 + i },
+            childNodes: [
+                makeZeroReflowNode('span', {
+                    text: 'M' + i,
+                    style: { cursor: 'pointer' },
+                    rect: { left: 12, top: 20 + i, width: 80, height: 18, right: 92, bottom: 38 + i }
+                })
+            ]
+        }));
+    }
+    const realChildBtn = makeZeroReflowNode('button', {
+        id: 'real_child_btn',
+        text: 'Confirm Action',
+        style: { cursor: 'pointer' },
+        rect: { left: 10, top: 140, width: 140, height: 36, right: 150, bottom: 176 }
+    });
+    const pointerCard = makeZeroReflowNode('div', {
+        id: 'pointer_card',
+        style: { cursor: 'pointer' },
+        rect: { left: 10, top: 10, width: 220, height: 180, right: 230, bottom: 190 },
+        childNodes: [...plainDescendants, realChildBtn]
+    });
+    const cardInsideTallWrapper = makeZeroReflowNode('div', {
+        id: 'card_in_tall_wrapper',
+        text: 'Inside Tall Wrapper',
+        style: { cursor: 'pointer' },
+        rect: { left: 10, top: 200, width: 220, height: 60, right: 230, bottom: 260 }
+    });
+    const tallPointerWrapper = makeZeroReflowNode('div', {
+        id: 'tall_pointer_wrapper',
+        style: { cursor: 'pointer' },
+        rect: { left: 0, top: 0, width: 300, height: 600, right: 300, bottom: 600 },
+        childNodes: [pointerCard, cardInsideTallWrapper]
+    });
+    let shadowTextVisits = 0;
+    const shadowBadge = makeZeroReflowNode('div', {
+        id: 'shadow_badge',
+        rect: { left: 10, top: 270, width: 120, height: 24, right: 130, bottom: 294 },
+        childNodes: [{ nodeType: 3, get nodeValue() { shadowTextVisits++; return 'Shadow   Badge'; } }]
+    });
+    const shadowHost = makeZeroReflowNode('custom-panel', {
+        id: 'shadow_host',
+        rect: { left: 10, top: 270, width: 120, height: 24, right: 130, bottom: 294 },
+        childNodes: []
+    });
+    shadowHost.__acidShadowRoot = { children: [shadowBadge], childNodes: [shadowBadge] };
+
+    const prevBodyInnerDesc = Object.getOwnPropertyDescriptor(bodyEl, 'innerText');
+    const prevQsa = global.document.querySelectorAll;
+    bodyEl.childNodes = [tallPointerWrapper, shadowHost];
+    bodyEl.children = [tallPointerWrapper, shadowHost];
+    Object.defineProperty(bodyEl, 'innerText', {
+        configurable: true,
+        get() {
+            throw new Error('body.innerText layout-thrashing getter must NOT be accessed');
+        }
+    });
+    global.document.querySelectorAll = (sel) => {
+        if (sel.includes('button')) return [realChildBtn];
+        if (sel.includes('div') || sel.includes('span')) return plainDescendants;
+        return [];
+    };
+    try {
+        const obs = bridge.observe({ includeSom: false });
+        assert.strictEqual(obs.ok, true);
+        assert.strictEqual(obs.elements.length, 3, 'Accepted pointer cards & real button receive refs while tall rejected wrapper does not suppress sibling card (and 50 inherited cursor children skipped)');
+        assert.ok(obs.elements.some(e => e.label === 'Inside Tall Wrapper'), 'Clickable card inside >280px cursor:pointer wrapper remains observable');
+        assert.ok(obs.elements.some(e => e.tag === 'button' && e.label === 'Confirm Action'), 'Real nested <button> remains observed');
+
+        shadowTextVisits = 0;
+        const condText = bridge.checkCondition('text', 'Confirm   Action', 300, true);
+        assert.strictEqual(condText.ok, true);
+        assert.strictEqual(condText.satisfied, true, 'checkCondition(text) normalizes whitespace and matches without reading innerText');
+        assert.strictEqual(shadowTextVisits, 1, 'containsDeepText visits Shadow DOM subtree once (not quadratically)');
+
+        const condShadowGoneMiss = bridge.checkCondition('text', 'Definitely Missing Token', 300, true);
+        assert.strictEqual(condShadowGoneMiss.satisfied, false);
+        assert.strictEqual(shadowTextVisits, 2, 'containsDeepText missing needle visits Shadow DOM subtree at most once per check');
+
+        const condShadow = bridge.checkCondition('text', 'Shadow Badge', 300, true);
+        assert.strictEqual(condShadow.ok, true);
+        assert.strictEqual(condShadow.satisfied, true, 'checkCondition(text) finds normalized Shadow DOM text');
+
+        const clickRes = bridge.jsClick({ text: 'Confirm Action' });
+        assert.strictEqual(clickRes.ok, true, 'jsClick(text) resolves target without reading innerText');
+        assert.strictEqual(realChildBtn.clickedCount >= 1, true);
+    } finally {
+        if (prevBodyInnerDesc) Object.defineProperty(bodyEl, 'innerText', prevBodyInnerDesc);
+        delete bodyEl.childNodes;
+        bodyEl.children = [];
+        global.document.querySelectorAll = prevQsa;
+    }
+}
+console.log('✓ Case 18: Inherited cursor:pointer descendants suppressed & zero innerText reflow across observe/wait/click');
+
+// Case 19: observe({ maxNodes }) budget caps giant trees fast and emits SCAN_BUDGET_REACHED
+{
+    const giantChildren = [];
+    for (let i = 0; i < 5000; i++) {
+        giantChildren.push(makeEl('span', {
+            text: 'Item ' + i,
+            rect: { left: 10, top: 10, width: 60, height: 20, right: 70, bottom: 30 }
+        }));
+    }
+    bodyEl.children = giantChildren;
+    try {
+        const t0 = Date.now();
+        const obs = bridge.observe({ includeSom: false, maxNodes: 400 });
+        const elapsedMs = Date.now() - t0;
+        assert.strictEqual(obs.ok, true);
+        assert.strictEqual(obs.budgetTruncated, true, 'Observe sets budgetTruncated=true when node budget exceeded');
+        assert.ok(obs.compactText.includes('[SCAN_BUDGET_REACHED]'), 'compactText reports SCAN_BUDGET_REACHED notice');
+        assert.ok(elapsedMs < 50, 'Budget-capped observe finishes fast (<50ms, actual ' + elapsedMs + 'ms)');
+    } finally {
+        bodyEl.children = [];
+    }
+}
+console.log('✓ Case 19: observe() scan budget halts giant 5000-node tree cleanly in <50ms');
+
+console.log('\n[TestBridgeBatch1] All 19 Batch-1/Batch-2 JS regression checks PASSED!\n');

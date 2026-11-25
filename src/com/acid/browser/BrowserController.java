@@ -116,7 +116,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private final List<TabSession> mTabs = new CopyOnWriteArrayList<TabSession>();
     private final List<Integer> mTabHistory = new CopyOnWriteArrayList<Integer>();
     private int mNextTabId = 1;
-    private TabSession mActiveTab = null;
+    private volatile TabSession mActiveTab = null;
     private volatile int mAgentBoundTabId = -1;
     /**
      * True when the agent had a target tab but it disappeared (the user closed it).
@@ -223,7 +223,6 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mListener = listener;
         mDarkMode = isDarkMode;
         mDataStore = dataStore;
-        AcidWebView.ensureWholeDocumentDrawEnabled();
 
         mUserscriptManager = new UserscriptManager(context);
         mUserscriptManager.setHost(new UserscriptHostBridge(this, mUserscriptManager, mMainHandler, context));
@@ -366,7 +365,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 float scale = Math.max((float) thumbW / w, (float) thumbH / h);
                 canvas.scale(scale, scale);
                 wv.draw(canvas);
+                Bitmap prev = mActiveTab.snapshot;
                 mActiveTab.snapshot = thumb;
+                if (prev != null && prev != thumb && !prev.isRecycled()) {
+                    try { prev.recycle(); } catch (Throwable ignored) {}
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to capture tab thumbnail", e);
@@ -462,7 +465,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             cancelPendingFileChooser("tab-closed");
         }
         mUploadManager.cancelForTab(tabId, "tab-closed");
-        mAutomationDriver.clearScreenshotFrame(tabId);
+        mAutomationDriver.onTabClosed(tabId);
         if (mAgentBoundTabId == tabId) {
             // The agent's target is gone when actively driving. Mark it lost rather than merely unbinding:
             // without the flag, getTargetTab() would fall back to mActiveTab and the agent would silently
@@ -541,7 +544,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     continue; // Preserve and protect the active agent-driven tab
                 }
                 mUploadManager.cancelForTab(t.id, "tab-closed");
-                mAutomationDriver.clearScreenshotFrame(t.id);
+                mAutomationDriver.onTabClosed(t.id);
                 if (t.snapshot != null && !t.snapshot.isRecycled()) {
                     try { t.snapshot.recycle(); } catch (Throwable ignored) {}
                     t.snapshot = null;
@@ -1043,6 +1046,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 tab.isLoading = true;
+                mAutomationDriver.onTabNavigated(tab.id);
                 String prevUrl = tab.url;
                 tab.url = url;
                 if (url != null && !url.equals(prevUrl)) {
@@ -1100,7 +1104,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 mMainHandler.postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        if (mActiveTab != null && mActiveTab.id == tab.id) {
+                        if (mActiveTab != null && mActiveTab.id == tab.id
+                            && getControlMode() != AgentOverlayView.MODE_AGENT) {
                             captureActiveTabSnapshot();
                         }
                     }
@@ -2497,7 +2502,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mWindowPixelCopyCapturer = null;
         cancelPendingFileChooser("destroy");
         mUploadManager.cancelAll("destroy");
-        mAutomationDriver.clearAllScreenshotFrames();
+        mAutomationDriver.onAllTabsDestroyed();
         if (isCustomViewShowing()) {
             hideCustomView();
         }
