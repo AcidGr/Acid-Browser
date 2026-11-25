@@ -1,6 +1,7 @@
 package com.acid.browser;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -16,6 +17,7 @@ import org.json.JSONTokener;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -48,6 +50,21 @@ public class WebAutomationDriver {
         /** Normalises a user/LLM-supplied URL (adds https://, resolves acid:// aliases).
          *  Default keeps the raw value so existing test hosts stay valid. */
         default String normalizeUrl(String url) { return url; }
+
+        /**
+         * Attempts hardware-composited viewport capture on the UI thread via {@code PixelCopy}.
+         * Default implementation yields {@code (null, null)} so test hosts and software-only
+         * contexts fall back cleanly to {@link WebView#draw}.
+         */
+        default void captureHardwareViewportBitmapOnUiThread(
+            BrowserController.TabSession targetTab,
+            boolean calledOnMainLooper,
+            WindowPixelCopyCapturer.BitmapCaptureCallback callback
+        ) {
+            if (callback != null) {
+                callback.onCaptureComplete(null, null);
+            }
+        }
     }
 
     /** Outcome of {@link #resolveNavigationTarget}. */
@@ -1456,20 +1473,13 @@ public class WebAutomationDriver {
             );
         }
 
-        final AtomicReference<ScreenshotCaptureHelper.CaptureResult> resRef =
-            new AtomicReference<ScreenshotCaptureHelper.CaptureResult>(
-                ScreenshotCaptureHelper.CaptureResult.error("TIMEOUT", "Timed out waiting for WebView screenshot capture.")
-            );
-
-        Runnable captureTask = new Runnable() {
-            @Override
-            public void run() {
-                BrowserController.TabSession targetTab = mHost != null ? mHost.getTargetTab() : null;
-                if (targetTab == null || targetTab.webView == null) {
-                    resRef.set(ScreenshotCaptureHelper.CaptureResult.error("NO_TARGET_TAB", "Target tab is unavailable."));
-                    return;
-                }
-                resRef.set(mScreenshotHelper.captureOnUiThread(
+        final ScreenshotCaptureHelper.CaptureResult result;
+        if (isMainLooper() || mMainHandler == null) {
+            BrowserController.TabSession targetTab = mHost != null ? mHost.getTargetTab() : null;
+            if (targetTab == null || targetTab.webView == null) {
+                result = ScreenshotCaptureHelper.CaptureResult.error("NO_TARGET_TAB", "Target tab is unavailable.");
+            } else {
+                result = mScreenshotHelper.captureOnUiThread(
                     targetTab.webView,
                     targetTab.id,
                     targetTab.isDesktopMode,
@@ -1477,43 +1487,125 @@ public class WebAutomationDriver {
                     drawSomOnBitmap,
                     jpegQuality,
                     saveAsPng
-                ));
+                );
             }
-        };
-
-        if (isMainLooper() || mMainHandler == null) {
-            captureTask.run();
         } else {
+            final AtomicReference<ScreenshotCaptureHelper.CaptureResult> resRef =
+                new AtomicReference<ScreenshotCaptureHelper.CaptureResult>(
+                    ScreenshotCaptureHelper.CaptureResult.error("TIMEOUT", "Timed out waiting for WebView screenshot capture.")
+                );
             final CountDownLatch latch = new CountDownLatch(1);
-            final Runnable taskRef = captureTask;
+            final AtomicBoolean finished = new AtomicBoolean(false);
+
             mMainHandler.post(new Runnable() {
                 @Override
                 public void run() {
                     try {
-                        taskRef.run();
-                    } finally {
-                        latch.countDown();
+                        final BrowserController.TabSession targetTab = mHost != null ? mHost.getTargetTab() : null;
+                        if (targetTab == null || targetTab.webView == null) {
+                            if (finished.compareAndSet(false, true)) {
+                                resRef.set(ScreenshotCaptureHelper.CaptureResult.error("NO_TARGET_TAB", "Target tab is unavailable."));
+                                latch.countDown();
+                            }
+                            return;
+                        }
+                        final WebView targetWv = targetTab.webView;
+                        final int targetTabId = targetTab.id;
+                        final boolean targetDesktop = targetTab.isDesktopMode;
+                        if (targetWv.getWidth() <= 0 || targetWv.getHeight() <= 0) {
+                            if (finished.compareAndSet(false, true)) {
+                                resRef.set(mScreenshotHelper.captureOnUiThread(
+                                    targetWv, targetTabId, targetDesktop, obsJson, drawSomOnBitmap, jpegQuality, saveAsPng
+                                ));
+                                latch.countDown();
+                            }
+                            return;
+                        }
+
+                        mHost.captureHardwareViewportBitmapOnUiThread(
+                            targetTab,
+                            false,
+                            new WindowPixelCopyCapturer.BitmapCaptureCallback() {
+                                @Override
+                                public void onCaptureComplete(Bitmap capturedBitmap, WindowPixelCopyCapturer.CopyBounds bounds) {
+                                    try {
+                                        if (!finished.compareAndSet(false, true)) {
+                                            recycleBitmapQuietly(capturedBitmap);
+                                            return;
+                                        }
+                                        BrowserController.TabSession liveTab = mHost != null ? mHost.getTargetTab() : null;
+                                        if (liveTab == null || liveTab.webView != targetWv || targetWv.getParent() == null) {
+                                            recycleBitmapQuietly(capturedBitmap);
+                                            resRef.set(ScreenshotCaptureHelper.CaptureResult.error(
+                                                "NO_TARGET_TAB",
+                                                "Target tab changed or closed during screenshot."
+                                            ));
+                                            return;
+                                        }
+                                        resRef.set(mScreenshotHelper.captureFromHardwareOrSoftwareOnUiThread(
+                                            targetWv,
+                                            targetTabId,
+                                            targetDesktop,
+                                            obsJson,
+                                            drawSomOnBitmap,
+                                            jpegQuality,
+                                            saveAsPng,
+                                            capturedBitmap,
+                                            bounds
+                                        ));
+                                    } catch (Throwable t) {
+                                        recycleBitmapQuietly(capturedBitmap);
+                                        resRef.set(ScreenshotCaptureHelper.CaptureResult.error(
+                                            "SCREENSHOT_FAILED",
+                                            t.getMessage() != null ? t.getMessage() : "Screenshot capture failed"
+                                        ));
+                                    } finally {
+                                        latch.countDown();
+                                    }
+                                }
+                            }
+                        );
+                    } catch (Throwable t) {
+                        if (finished.compareAndSet(false, true)) {
+                            resRef.set(ScreenshotCaptureHelper.CaptureResult.error(
+                                "SCREENSHOT_FAILED",
+                                t.getMessage() != null ? t.getMessage() : "Screenshot dispatch failed"
+                            ));
+                            latch.countDown();
+                        }
                     }
                 }
             });
             try {
-                latch.await(3000, TimeUnit.MILLISECONDS);
+                if (!latch.await(3500, TimeUnit.MILLISECONDS)) {
+                    finished.compareAndSet(false, true);
+                }
             } catch (InterruptedException e) {
+                finished.compareAndSet(false, true);
                 Thread.currentThread().interrupt();
                 Log.w(TAG, "Interrupted while waiting for a screenshot", e);
                 return ScreenshotCaptureHelper.CaptureResult.error("INTERRUPTED", "Interrupted while waiting for screenshot.");
             }
+            result = resRef.get();
         }
 
-        ScreenshotCaptureHelper.CaptureResult result = resRef.get();
         if (result != null && result.ok && mHost != null) {
             mHost.emitLog("[SCREENSHOT] " + result.frame.imageWidth + "x" + result.frame.imageHeight
                 + " (" + (result.frame.desktopMode ? "desktop" : "mobile")
+                + ", " + (result.hardwareCaptured ? "gpu" : "sw")
                 + (result.somDrawn ? ", SoM=" + result.somMarks.size() : "") + ")");
         }
         return result != null
             ? result
             : ScreenshotCaptureHelper.CaptureResult.error("SCREENSHOT_FAILED", "Screenshot capture returned null.");
+    }
+
+    private static void recycleBitmapQuietly(Bitmap bmp) {
+        if (bmp != null && !bmp.isRecycled()) {
+            try {
+                bmp.recycle();
+            } catch (Throwable ignored) {}
+        }
     }
 
     public String captureScreenshotBase64Sync(final int jpegQuality) {

@@ -11,6 +11,8 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebView;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
  * Controlled {@link WebView} subclass with explicit View-focus and IME isolation policies.
  *
@@ -128,6 +130,25 @@ public class AcidWebView extends WebView {
     }
 
     private static final long USER_TOUCH_FOCUS_WINDOW_MS = 600L;
+    private static final AtomicBoolean sWholeDocDrawInitialized = new AtomicBoolean(false);
+
+    static {
+        ensureWholeDocumentDrawEnabled();
+    }
+
+    /**
+     * Enables full-document DisplayList recording for software draw fallbacks (background tabs and
+     * pre-API 26 devices) so CSS/HTML animations outside the active tile cull rect are not clipped.
+     */
+    public static void ensureWholeDocumentDrawEnabled() {
+        if (sWholeDocDrawInitialized.compareAndSet(false, true)) {
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                try {
+                    WebView.enableSlowWholeDocumentDraw();
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
 
     private final int mDefaultDescendantFocusability;
     private boolean mAllowFocus = true;

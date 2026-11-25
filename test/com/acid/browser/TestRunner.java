@@ -192,6 +192,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testTakeoverResumeAndRunningSteering(); }
         });
 
+        // 28. GPU Screenshot Capture Eligibility, CopyBounds Geometry, SuppressionGuard & HUD Idle Detection
+        run("28. GPU Screenshot Capture: PixelCopy Eligibility, CopyBounds Non-Stretch Math, Re-entrant Mask Guard & HUD Idle Detection", new TestCase() {
+            @Override public void execute() throws Exception { testGpuScreenshotCaptureAndMasking(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -4134,5 +4139,163 @@ public final class TestRunner {
             "Focused Agent input moves in-app toast to top clear of IME");
         assertTrue(BrowserActivity.shouldPlaceInAppToastAtTop(false, false, true),
             "Focused URL bar moves in-app toast to top clear of IME");
+    }
+
+    static void testGpuScreenshotCaptureAndMasking() {
+        // 1. Hardware PixelCopy eligibility checks
+        assertTrue(WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            26, true, false, true, false, true, true, 1080, 2000, 1080, 2400),
+            "API 26+ foreground shown hardware-accelerated non-main-looper WebView is eligible");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            25, true, false, true, false, true, true, 1080, 2000, 1080, 2400),
+            "Pre-API 26 falls back to software draw");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            33, false, false, true, false, true, true, 1080, 2000, 1080, 2400),
+            "Unavailable PixelCopy reflector falls back cleanly");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            33, true, true, true, false, true, true, 1080, 2000, 1080, 2400),
+            "Never blocks on MainLooper");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            33, true, false, false, false, true, true, 1080, 2000, 1080, 2400),
+            "Background tab falls back to software draw");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            33, true, false, true, true, true, true, 1080, 2000, 1080, 2400),
+            "Fullscreen video CustomView bypasses PixelCopy");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            33, true, false, true, false, false, true, 1080, 2000, 1080, 2400),
+            "Hidden WebView falls back to software draw");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            33, true, false, true, false, true, false, 1080, 2000, 1080, 2400),
+            "Software-rendered WebView skips PixelCopy");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            33, true, false, true, false, true, true, 0, 2000, 1080, 2400),
+            "Zero-width view rejected");
+        assertTrue(!WindowPixelCopyCapturer.isHardwareCaptureEligible(
+            33, true, false, true, false, true, true, 1080, 2000, 1080, 0),
+            "Zero-height decor view rejected");
+
+        // 2. Window CopyBounds geometry & non-stretch offset math
+        WindowPixelCopyCapturer.CopyBounds fullBounds = WindowPixelCopyCapturer.computeWindowCopyBounds(
+            0, 180, 1080, 1980, 1080, 2400);
+        assertTrue(fullBounds.valid && fullBounds.exactFullMatch,
+            "Contained WebView produces exactFullMatch=true");
+        assertEquals(Integer.valueOf(0), Integer.valueOf(fullBounds.srcLeft), "Full match srcLeft");
+        assertEquals(Integer.valueOf(180), Integer.valueOf(fullBounds.srcTop), "Full match srcTop");
+        assertEquals(Integer.valueOf(1080), Integer.valueOf(fullBounds.copyWidth), "Full match width");
+        assertEquals(Integer.valueOf(1980), Integer.valueOf(fullBounds.copyHeight), "Full match height");
+        assertEquals(Integer.valueOf(0), Integer.valueOf(fullBounds.destOffsetX), "Full match destOffsetX");
+        assertEquals(Integer.valueOf(0), Integer.valueOf(fullBounds.destOffsetY), "Full match destOffsetY");
+
+        WindowPixelCopyCapturer.CopyBounds clippedAllSides = WindowPixelCopyCapturer.computeWindowCopyBounds(
+            -40, -25, 1160, 2450, 1080, 2400);
+        assertTrue(clippedAllSides.valid && !clippedAllSides.exactFullMatch,
+            "All-sides clipped WebView sets valid=true, exactFullMatch=false");
+        assertEquals(Integer.valueOf(0), Integer.valueOf(clippedAllSides.srcLeft), "Clipped srcLeft clamped to 0");
+        assertEquals(Integer.valueOf(0), Integer.valueOf(clippedAllSides.srcTop), "Clipped srcTop clamped to 0");
+        assertEquals(Integer.valueOf(1080), Integer.valueOf(clippedAllSides.srcRight), "Clipped srcRight clamped to decorW");
+        assertEquals(Integer.valueOf(2400), Integer.valueOf(clippedAllSides.srcBottom), "Clipped srcBottom clamped to decorH");
+        assertEquals(Integer.valueOf(1080), Integer.valueOf(clippedAllSides.copyWidth), "Clipped copyWidth unstretched");
+        assertEquals(Integer.valueOf(2400), Integer.valueOf(clippedAllSides.copyHeight), "Clipped copyHeight unstretched");
+        assertEquals(Integer.valueOf(40), Integer.valueOf(clippedAllSides.destOffsetX), "Clipped destOffsetX preserves -winX");
+        assertEquals(Integer.valueOf(25), Integer.valueOf(clippedAllSides.destOffsetY), "Clipped destOffsetY preserves -winY");
+
+        WindowPixelCopyCapturer.CopyBounds offscreen = WindowPixelCopyCapturer.computeWindowCopyBounds(
+            1080, 0, 1080, 1980, 1080, 2400);
+        assertTrue(!offscreen.valid, "Completely offscreen WebView returns invalid CopyBounds");
+        WindowPixelCopyCapturer.CopyBounds invalidDims = WindowPixelCopyCapturer.computeWindowCopyBounds(
+            0, 0, -10, 500, 1080, 2400);
+        assertTrue(!invalidDims.valid, "Negative view dimensions return invalid CopyBounds");
+
+        // 3. Re-entrant SuppressionGuard reference counting & idempotency
+        final int[] maskTransitions = new int[] { 0, 0 }; // [0]=maskCount, [1]=unmaskCount
+        final boolean[] maskedState = new boolean[] { false };
+        WindowPixelCopyCapturer.SuppressionGuard guard = new WindowPixelCopyCapturer.SuppressionGuard(
+            new WindowPixelCopyCapturer.OverlayMaskController() {
+                @Override public boolean hasVisibleOverlays() { return true; }
+                @Override public void setOverlaysMasked(boolean masked) {
+                    maskedState[0] = masked;
+                    if (masked) maskTransitions[0]++; else maskTransitions[1]++;
+                }
+                @Override public boolean hasRecordedMaskedFrame() { return true; }
+            }
+        );
+
+        WindowPixelCopyCapturer.SuppressionGuard.ReleaseHandle h1 = guard.acquire();
+        WindowPixelCopyCapturer.SuppressionGuard.ReleaseHandle h2 = guard.acquire();
+        assertEquals(Integer.valueOf(2), Integer.valueOf(guard.activeCount()), "Two acquires yield activeCount=2");
+        assertTrue(maskedState[0], "Guard enables mask on first acquire");
+        assertEquals(Integer.valueOf(1), Integer.valueOf(maskTransitions[0]), "setOverlaysMasked(true) called once on 0->1");
+
+        h1.release();
+        h1.release(); // Duplicate release must be idempotent
+        assertEquals(Integer.valueOf(1), Integer.valueOf(guard.activeCount()), "Duplicate release is idempotent");
+        assertTrue(maskedState[0] && maskTransitions[1] == 0, "Mask stays active until final handle releases");
+
+        h2.release();
+        assertEquals(Integer.valueOf(0), Integer.valueOf(guard.activeCount()), "Second release returns activeCount=0");
+        assertTrue(!maskedState[0] && maskTransitions[1] == 1, "setOverlaysMasked(false) called once on 1->0");
+
+        guard.acquire();
+        guard.acquire();
+        guard.releaseAll();
+        assertEquals(Integer.valueOf(0), Integer.valueOf(guard.activeCount()), "releaseAll resets activeCount to 0");
+        assertTrue(!maskedState[0] && maskTransitions[1] == 2, "releaseAll unmasks exactly once");
+        guard.releaseAll();
+        assertEquals(Integer.valueOf(2), Integer.valueOf(maskTransitions[1]), "releaseAll on 0 count is no-op");
+
+        // 4. AgentOverlayView HUD visual activity detection
+        assertTrue(!AgentOverlayView.shouldDrawHudOverlay(
+            AgentOverlayView.MODE_HUMAN, false, false, true, true, false),
+            "Idle MODE_HUMAN without click pulses draws nothing (0-frame fast path)");
+        assertTrue(AgentOverlayView.shouldDrawHudOverlay(
+            AgentOverlayView.MODE_HUMAN, false, false, true, true, true),
+            "MODE_HUMAN with active click pulse reports visual content");
+        assertTrue(AgentOverlayView.shouldDrawHudOverlay(
+            AgentOverlayView.MODE_AGENT, false, true, false, true, false),
+            "MODE_AGENT with undismissed guidance card reports visual content");
+        assertTrue(!AgentOverlayView.shouldDrawHudOverlay(
+            AgentOverlayView.MODE_AGENT, false, true, true, true, false),
+            "MODE_AGENT with dismissed card and delegated chrome border reports idle viewport HUD");
+        assertTrue(AgentOverlayView.shouldDrawHudOverlay(
+            AgentOverlayView.MODE_AGENT, false, true, true, false, false),
+            "MODE_AGENT with non-delegated inner border reports visual content");
+        assertTrue(!AgentOverlayView.shouldDrawHudOverlay(
+            AgentOverlayView.MODE_AGENT, false, false, false, false, false),
+            "MODE_AGENT on unbound user-browsed tab draws nothing");
+        assertTrue(!AgentOverlayView.shouldDrawHudOverlay(
+            AgentOverlayView.MODE_TAKEOVER_REQUESTED, true, true, false, false, true),
+            "Overview showing suppresses HUD drawing");
+        assertTrue(AgentOverlayView.shouldDrawHudOverlay(
+            AgentOverlayView.MODE_TAKEOVER_REQUESTED, false, true, true, true, false),
+            "Takeover requested draws amber border");
+
+        // 5. AcidWebView whole-doc draw idempotency & AutomationHost default hardware hook
+        AcidWebView.ensureWholeDocumentDrawEnabled();
+        AcidWebView.ensureWholeDocumentDrawEnabled();
+
+        WebAutomationDriver.AutomationHost defaultHost = new WebAutomationDriver.AutomationHost() {
+            @Override public BrowserController.TabSession getActiveTab() { return null; }
+            @Override public BrowserController.TabSession getTargetTab() { return null; }
+            @Override public boolean isTargetTabActive() { return false; }
+            @Override public AgentOverlayView getOverlayView() { return null; }
+            @Override public UserscriptManager getUserscriptManager() { return null; }
+            @Override public void loadUrl(String url) {}
+            @Override public void emitLog(String log) {}
+            @Override public boolean isSomEnabled() { return false; }
+            @Override public boolean isDesktopMode() { return false; }
+            @Override public int getBlockedDeepLinksCount() { return 0; }
+            @Override public String getLastBlockedDeepLink() { return ""; }
+            @Override public int getTriggeredDownloadsCount() { return 0; }
+            @Override public String getLastTriggeredDownloadInfo() { return ""; }
+        };
+        final int[] cbCount = new int[] { 0 };
+        defaultHost.captureHardwareViewportBitmapOnUiThread(null, false, new WindowPixelCopyCapturer.BitmapCaptureCallback() {
+            @Override
+            public void onCaptureComplete(android.graphics.Bitmap capturedBitmap, WindowPixelCopyCapturer.CopyBounds bounds) {
+                cbCount[0]++;
+                assertTrue(capturedBitmap == null && bounds == null, "Default host hook falls back with (null, null)");
+            }
+        });
+        assertEquals(Integer.valueOf(1), Integer.valueOf(cbCount[0]), "Default hardware hook invokes callback once");
     }
 }

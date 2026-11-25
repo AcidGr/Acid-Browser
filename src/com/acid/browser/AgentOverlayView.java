@@ -19,11 +19,38 @@ import java.util.List;
  * 2. Intercepts accidental human touches while AI is actively driving (with gentle toast tip).
  * 3. Renders animated touch pulse ripples + target [eN] badge whenever AI synthesizes a click.
  */
-public class AgentOverlayView extends View {
+public class AgentOverlayView extends View implements WindowPixelCopyCapturer.ConditionalVisualOverlay {
 
     public static final int MODE_HUMAN = 0;
     public static final int MODE_AGENT = 1;
     public static final int MODE_TAKEOVER_REQUESTED = 2;
+
+    /**
+     * Pure decision helper matching {@link #onDraw} to report whether this always-attached HUD
+     * currently paints any visible pixels (guidance card, breathing border, or touch pulse).
+     */
+    public static boolean shouldDrawHudOverlay(
+        int controlMode,
+        boolean isOverviewShowing,
+        boolean isCurrentTabDriven,
+        boolean dismissedTip,
+        boolean delegateAgentBorderToChromeOverlay,
+        boolean hasActivePulses
+    ) {
+        if (isOverviewShowing) {
+            return false;
+        }
+        if (controlMode == MODE_AGENT && isCurrentTabDriven && !dismissedTip) {
+            return true;
+        }
+        boolean drawAgentInnerBorder = (controlMode == MODE_AGENT
+            && isCurrentTabDriven
+            && !delegateAgentBorderToChromeOverlay);
+        if (drawAgentInnerBorder || controlMode == MODE_TAKEOVER_REQUESTED) {
+            return true;
+        }
+        return hasActivePulses;
+    }
 
     public interface TabStateProvider {
         boolean isAgentDrivingCurrentTab();
@@ -124,6 +151,29 @@ public class AgentOverlayView extends View {
 
     public int getControlMode() {
         return mControlMode;
+    }
+
+    @Override
+    public boolean hasVisibleVisualContent() {
+        boolean isCurrentTabDriven = (mTabStateProvider == null || mTabStateProvider.isAgentDrivingCurrentTab());
+        boolean isOverviewShowing = (mTabStateProvider != null && mTabStateProvider.isOverviewShowing());
+        long now = SystemClock.uptimeMillis();
+        boolean hasActivePulses = false;
+        for (int i = 0; i < mPulses.size(); i++) {
+            ClickPulse p = mPulses.get(i);
+            if (p != null && (now - p.startTime) <= ClickPulse.DURATION_MS) {
+                hasActivePulses = true;
+                break;
+            }
+        }
+        return shouldDrawHudOverlay(
+            mControlMode,
+            isOverviewShowing,
+            isCurrentTabDriven,
+            mDismissedTip,
+            mDelegateAgentBorderToChromeOverlay,
+            hasActivePulses
+        );
     }
 
     public void showClickPulse(final float x, final float y, final String label) {

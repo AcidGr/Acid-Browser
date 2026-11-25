@@ -50,8 +50,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private boolean mIncognitoMode = false;
 
     // Root Containers
-    private FrameLayout mRootContainer;
+    private WindowPixelCopyCapturer.MaskingFrameLayout mRootContainer;
     private LinearLayout mMainContentLayout;
+    private WindowPixelCopyCapturer mWindowPixelCopyCapturer;
 
     // Top Bar
     private LinearLayout mTopBar;
@@ -69,7 +70,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     private View mProgressBar;
 
     // Center Viewport
-    private FrameLayout mCenterFrame;
+    private WindowPixelCopyCapturer.MaskingFrameLayout mCenterFrame;
     private FrameLayout mWebViewContainer;
     private AgentOverlayView mOverlayView;
     private AgentLockChromeOverlay mLockBorderOverlay;
@@ -239,6 +240,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
         setContentView(buildContentView());
 
+        AcidWebView.ensureWholeDocumentDrawEnabled();
         mController = new BrowserController(this, mWebViewContainer, mOverlayView, this, mDataStore, mIsDarkMode);
         mDataStore.setOnSettingsChangedListener(new BrowserDataStore.OnSettingsChangedListener() {
             @Override
@@ -276,6 +278,30 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         initViewportOverlays();
         mHttpServer = new HttpControlServer(mController, HttpControlServer.DEFAULT_PORT);
         initModalSheets();
+
+        mWindowPixelCopyCapturer = new WindowPixelCopyCapturer(
+            this,
+            new WindowPixelCopyCapturer.OverlayMaskController() {
+                @Override
+                public boolean hasVisibleOverlays() {
+                    return (mRootContainer != null && mRootContainer.hasVisibleNonPrimaryChild())
+                        || (mCenterFrame != null && mCenterFrame.hasVisibleNonPrimaryChild());
+                }
+
+                @Override
+                public void setOverlaysMasked(boolean masked) {
+                    if (mRootContainer != null) mRootContainer.setMaskOverlays(masked);
+                    if (mCenterFrame != null) mCenterFrame.setMaskOverlays(masked);
+                }
+
+                @Override
+                public boolean hasRecordedMaskedFrame() {
+                    return (mRootContainer == null || mRootContainer.hasRecordedMaskedDraw())
+                        && (mCenterFrame == null || mCenterFrame.hasRecordedMaskedDraw());
+                }
+            }
+        );
+        mController.setWindowPixelCopyCapturer(mWindowPixelCopyCapturer);
 
         if (mDataStore.isMcpServerEnabled()) {
             mHttpServer.start();
@@ -938,7 +964,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     // =========================================================================
 
     private View buildContentView() {
-        mRootContainer = new FrameLayout(this);
+        mRootContainer = new WindowPixelCopyCapturer.MaskingFrameLayout(this);
         mRootContainer.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
@@ -1129,13 +1155,14 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         ));
 
         // --- Center Viewport ---
-        mCenterFrame = new FrameLayout(this);
+        mCenterFrame = new WindowPixelCopyCapturer.MaskingFrameLayout(this);
         mWebViewContainer = new FrameLayout(this);
         mOverlayView = new AgentOverlayView(this);
         mOverlayView.setDelegateAgentBorderToChromeOverlay(true);
         mCenterFrame.addView(mWebViewContainer, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
+        mCenterFrame.setPrimaryChild(mWebViewContainer);
         mCenterFrame.addView(mOverlayView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
@@ -1170,6 +1197,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         mRootContainer.addView(mMainContentLayout, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
+        mRootContainer.setPrimaryChild(mMainContentLayout);
 
         mLockBorderOverlay = new AgentLockChromeOverlay(this);
         mLockBorderOverlay.attachTrackedViews(
@@ -2467,7 +2495,12 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mHttpServer != null) {
             mHttpServer.stop();
         }
+        if (mWindowPixelCopyCapturer != null) {
+            mWindowPixelCopyCapturer.shutdown();
+            mWindowPixelCopyCapturer = null;
+        }
         if (mController != null) {
+            mController.setWindowPixelCopyCapturer(null);
             mController.destroy();
         }
         if (mDataStore != null) {

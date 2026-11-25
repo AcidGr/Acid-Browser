@@ -224,6 +224,7 @@ public class ScreenshotCaptureHelper {
         public final ScreenshotFrame frame;
         public final List<SomMarkRect> somMarks;
         public final boolean somDrawn;
+        public final boolean hardwareCaptured;
         public final String url;
         public final String title;
 
@@ -237,6 +238,7 @@ public class ScreenshotCaptureHelper {
             ScreenshotFrame frame,
             List<SomMarkRect> somMarks,
             boolean somDrawn,
+            boolean hardwareCaptured,
             String url,
             String title
         ) {
@@ -249,6 +251,7 @@ public class ScreenshotCaptureHelper {
             this.frame = frame;
             this.somMarks = somMarks != null ? somMarks : Collections.<SomMarkRect>emptyList();
             this.somDrawn = somDrawn;
+            this.hardwareCaptured = hardwareCaptured;
             this.url = url;
             this.title = title;
         }
@@ -262,11 +265,27 @@ public class ScreenshotCaptureHelper {
             String url,
             String title
         ) {
-            return new CaptureResult(true, null, null, base64, savedBytes, DEFAULT_MIME_TYPE, frame, somMarks, somDrawn, url, title);
+            return success(base64, savedBytes, frame, somMarks, somDrawn, false, url, title);
+        }
+
+        public static CaptureResult success(
+            String base64,
+            byte[] savedBytes,
+            ScreenshotFrame frame,
+            List<SomMarkRect> somMarks,
+            boolean somDrawn,
+            boolean hardwareCaptured,
+            String url,
+            String title
+        ) {
+            return new CaptureResult(
+                true, null, null, base64, savedBytes, DEFAULT_MIME_TYPE,
+                frame, somMarks, somDrawn, hardwareCaptured, url, title
+            );
         }
 
         public static CaptureResult error(String code, String msg) {
-            return new CaptureResult(false, code, msg, null, null, null, null, null, false, null, null);
+            return new CaptureResult(false, code, msg, null, null, null, null, null, false, false, null, null);
         }
     }
 
@@ -531,9 +550,34 @@ public class ScreenshotCaptureHelper {
     }
 
     /**
+     * Captures a software-drawn bitmap of {@code wv}'s current viewport on the UI thread.
+     * Used for background tabs, pre-API 26 devices, and uncovered edges of partially clipped views.
+     */
+    public static Bitmap captureSoftwareBitmapOnUiThread(WebView wv, int viewW, int viewH) {
+        Bitmap rawBmp = Bitmap.createBitmap(viewW, viewH, Bitmap.Config.ARGB_8888);
+        Canvas rawCanvas = new Canvas(rawBmp);
+        rawCanvas.drawColor(Color.WHITE);
+        int sx = wv.getScrollX();
+        int sy = wv.getScrollY();
+        if (sx != 0 || sy != 0) {
+            rawCanvas.translate(-sx, -sy);
+        }
+        wv.draw(rawCanvas);
+        return rawBmp;
+    }
+
+    private static void recycleQuietly(Bitmap bmp) {
+        if (bmp != null && !bmp.isRecycled()) {
+            try {
+                bmp.recycle();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
      * Must run on the Android UI thread. Captures the visible WebView viewport into an appropriately
-     * scaled image, optionally draws SoM element markings onto the bitmap copy, and encodes PNG bytes
-     * if {@code saveAsPng} is requested.
+     * scaled image using software rendering, optionally draws SoM element markings onto the bitmap
+     * copy, and encodes PNG bytes if {@code saveAsPng} is requested.
      */
     public CaptureResult captureOnUiThread(
         WebView wv,
@@ -555,12 +599,36 @@ public class ScreenshotCaptureHelper {
         int jpegQuality,
         boolean saveAsPng
     ) {
+        return captureFromHardwareOrSoftwareOnUiThread(
+            wv, tabId, desktopMode, obsJson, drawSom, jpegQuality, saveAsPng, null, null
+        );
+    }
+
+    /**
+     * Must run on the Android UI thread. Consumes an optional hardware {@code PixelCopy} bitmap
+     * (either 1:1 full viewport or composited at its exact unstretched offset over a software
+     * backing bitmap when partially clipped), otherwise falls back to software drawing, then
+     * performs scaling, off-DOM SoM drawing, and JPEG/PNG encoding.
+     */
+    public CaptureResult captureFromHardwareOrSoftwareOnUiThread(
+        WebView wv,
+        int tabId,
+        boolean desktopMode,
+        JSONObject obsJson,
+        boolean drawSom,
+        int jpegQuality,
+        boolean saveAsPng,
+        Bitmap hwBitmap,
+        WindowPixelCopyCapturer.CopyBounds hwBounds
+    ) {
         if (wv == null) {
+            recycleQuietly(hwBitmap);
             return CaptureResult.error("NO_TARGET_TAB", "Target WebView is unavailable.");
         }
         int viewW = wv.getWidth();
         int viewH = wv.getHeight();
         if (viewW <= 0 || viewH <= 0) {
+            recycleQuietly(hwBitmap);
             return CaptureResult.error(
                 "VIEW_NOT_LAID_OUT",
                 "Target WebView has zero dimensions (" + viewW + "x" + viewH + "); switch the tab to foreground before taking a screenshot."
@@ -568,18 +636,30 @@ public class ScreenshotCaptureHelper {
         }
 
         ImageDimensions imgDims = computeOutputDimensions(viewW, viewH, MAX_IMAGE_LONG_EDGE);
+        Bitmap ownedHwBmp = hwBitmap;
         Bitmap rawBmp = null;
         Bitmap scaledBmp = null;
         try {
-            rawBmp = Bitmap.createBitmap(viewW, viewH, Bitmap.Config.ARGB_8888);
-            Canvas rawCanvas = new Canvas(rawBmp);
-            rawCanvas.drawColor(Color.WHITE);
-            int sx = wv.getScrollX();
-            int sy = wv.getScrollY();
-            if (sx != 0 || sy != 0) {
-                rawCanvas.translate(-sx, -sy);
+            final boolean usedHardware;
+            if (ownedHwBmp != null && !ownedHwBmp.isRecycled() && hwBounds != null && hwBounds.valid) {
+                if (hwBounds.exactFullMatch && ownedHwBmp.getWidth() == viewW && ownedHwBmp.getHeight() == viewH) {
+                    rawBmp = ownedHwBmp;
+                    ownedHwBmp = null;
+                    usedHardware = true;
+                } else {
+                    rawBmp = captureSoftwareBitmapOnUiThread(wv, viewW, viewH);
+                    Canvas compCanvas = new Canvas(rawBmp);
+                    compCanvas.drawBitmap(ownedHwBmp, (float) hwBounds.destOffsetX, (float) hwBounds.destOffsetY, null);
+                    recycleQuietly(ownedHwBmp);
+                    ownedHwBmp = null;
+                    usedHardware = true;
+                }
+            } else {
+                recycleQuietly(ownedHwBmp);
+                ownedHwBmp = null;
+                rawBmp = captureSoftwareBitmapOnUiThread(wv, viewW, viewH);
+                usedHardware = false;
             }
-            wv.draw(rawCanvas);
 
             final Bitmap outBmp;
             if (imgDims.width == viewW && imgDims.height == viewH) {
@@ -658,17 +738,16 @@ public class ScreenshotCaptureHelper {
 
             String url = obsJson != null ? obsJson.optString("url", wv.getUrl()) : wv.getUrl();
             String title = obsJson != null ? obsJson.optString("title", wv.getTitle()) : wv.getTitle();
-            return CaptureResult.success(b64, savedBytes, frame, somMarks, drawSom && !somMarks.isEmpty(), url, title);
+            return CaptureResult.success(
+                b64, savedBytes, frame, somMarks, drawSom && !somMarks.isEmpty(), usedHardware, url, title
+            );
         } catch (Throwable t) {
             Log.e(TAG, "Screenshot capture failed", t);
             return CaptureResult.error("SCREENSHOT_FAILED", t.getMessage() != null ? t.getMessage() : "Bitmap capture failed");
         } finally {
-            if (rawBmp != null && !rawBmp.isRecycled()) {
-                try { rawBmp.recycle(); } catch (Throwable ignored) {}
-            }
-            if (scaledBmp != null && !scaledBmp.isRecycled()) {
-                try { scaledBmp.recycle(); } catch (Throwable ignored) {}
-            }
+            recycleQuietly(ownedHwBmp);
+            recycleQuietly(rawBmp);
+            recycleQuietly(scaledBmp);
         }
     }
 

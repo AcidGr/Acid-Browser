@@ -143,6 +143,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private volatile String mLastTriggeredDownloadInfo = "";
     private View mCustomView = null;
     private WebChromeClient.CustomViewCallback mCustomViewCallback = null;
+    private WindowPixelCopyCapturer mWindowPixelCopyCapturer = null;
 
     /** 文件选择器请求码：宿主 Activity 用它把结果路由回 onFileChooserResult。 */
     public static final int REQUEST_CODE_FILE_CHOOSER = 0x4643;
@@ -222,6 +223,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mListener = listener;
         mDarkMode = isDarkMode;
         mDataStore = dataStore;
+        AcidWebView.ensureWholeDocumentDrawEnabled();
 
         mUserscriptManager = new UserscriptManager(context);
         mUserscriptManager.setHost(new UserscriptHostBridge(this, mUserscriptManager, mMainHandler, context));
@@ -708,6 +710,33 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
      *       silently hijacking whatever the user is looking at.</li>
      * </ul>
      */
+    public void setWindowPixelCopyCapturer(WindowPixelCopyCapturer capturer) {
+        mWindowPixelCopyCapturer = capturer;
+    }
+
+    @Override
+    public void captureHardwareViewportBitmapOnUiThread(
+        TabSession targetTab,
+        boolean calledOnMainLooper,
+        WindowPixelCopyCapturer.BitmapCaptureCallback callback
+    ) {
+        if (callback == null) return;
+        WindowPixelCopyCapturer capturer = mWindowPixelCopyCapturer;
+        if (capturer == null || targetTab == null || targetTab.webView == null
+            || findTabByWebView(targetTab.webView) != targetTab) {
+            callback.onCaptureComplete(null, null);
+            return;
+        }
+        boolean isForegroundTab = (mActiveTab != null && mActiveTab.id == targetTab.id);
+        capturer.captureViewportOnUiThread(
+            targetTab.webView,
+            isForegroundTab,
+            isCustomViewShowing(),
+            calledOnMainLooper,
+            callback
+        );
+    }
+
     @Override
     public TabSession getTargetTab() {
         TabSession bound = mAgentBoundTabId > 0 ? getTabById(mAgentBoundTabId) : null;
@@ -2435,6 +2464,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void destroy() {
+        mWindowPixelCopyCapturer = null;
         cancelPendingFileChooser("destroy");
         mUploadManager.cancelAll("destroy");
         mAutomationDriver.clearAllScreenshotFrames();
