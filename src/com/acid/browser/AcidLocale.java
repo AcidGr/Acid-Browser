@@ -234,6 +234,7 @@ public final class AcidLocale {
                 if ("全部书签".equals(prefix)) return "All Bookmarks" + tail;
                 if ("未分类".equals(prefix)) return "Uncategorized" + tail;
                 if ("搜索结果".equals(prefix)) return "Search Results" + tail;
+                if ("删除".equals(prefix)) return "Delete" + tail;
                 if ("今天".equals(prefix)) return "Today" + tail;
                 if ("昨天".equals(prefix)) return "Yesterday" + tail;
                 if ("最近 7 天".equals(prefix)) return "Last 7 Days" + tail;
@@ -507,6 +508,42 @@ public final class AcidLocale {
         }
         if (s.startsWith("确定移除下载记录「") && s.endsWith("」吗？")) {
             return "Remove download record \"" + s.substring(9, s.length() - 3) + "\"?";
+        }
+        if (s.startsWith("已选择 ") && s.endsWith(" 项")) {
+            return "Selected " + s.substring(4, s.length() - 2).trim() + " items";
+        }
+        if (s.startsWith("确定要删除选中的 ") && s.endsWith(" 条书签吗？此操作无法撤销。")) {
+            return "Delete " + s.substring(9, s.length() - 14).trim() + " selected bookmarks? This cannot be undone.";
+        }
+        if (s.startsWith("已删除 ") && s.endsWith(" 条书签")) {
+            return "Deleted " + s.substring(4, s.length() - 4).trim() + " bookmarks";
+        }
+        if (s.startsWith("将选中的 ") && s.endsWith(" 条书签移至目标文件夹（留空则移至未分类）：")) {
+            return "Move " + s.substring(5, s.length() - 22).trim() + " selected bookmarks to folder (leave empty for Uncategorized):";
+        }
+        if (s.startsWith("已将 ") && s.endsWith(" 条书签移至未分类")) {
+            return "Moved " + s.substring(3, s.length() - 9).trim() + " bookmarks to Uncategorized";
+        }
+        if (s.startsWith("已将 ") && s.contains(" 条书签移至「") && s.endsWith("」")) {
+            int idx = s.indexOf(" 条书签移至「");
+            String n = s.substring(3, idx).trim();
+            String folder = s.substring(idx + 7, s.length() - 1);
+            return "Moved " + n + " bookmarks to \"" + folder + "\"";
+        }
+        if (s.startsWith("确定要删除选中的 ") && s.endsWith(" 条历史浏览记录吗？")) {
+            return "Delete " + s.substring(9, s.length() - 10).trim() + " selected history items?";
+        }
+        if (s.startsWith("已删除 ") && s.endsWith(" 条历史记录")) {
+            return "Deleted " + s.substring(4, s.length() - 6).trim() + " history items";
+        }
+        if (s.startsWith("确定移除选中的 ") && s.endsWith(" 个下载任务吗？")) {
+            return "Remove " + s.substring(8, s.length() - 8).trim() + " selected download tasks?";
+        }
+        if (s.startsWith("已删除 ") && s.endsWith(" 个任务及本地源文件")) {
+            return "Deleted " + s.substring(4, s.length() - 10).trim() + " tasks and local files";
+        }
+        if (s.startsWith("已移除 ") && s.endsWith(" 个下载任务记录")) {
+            return "Removed " + s.substring(4, s.length() - 8).trim() + " download records";
         }
         if (s.startsWith("[") && s.contains("] ")) {
             int close = s.indexOf("] ");
@@ -1020,8 +1057,22 @@ public final class AcidLocale {
         EN_MAP.put("收藏当前页", "Bookmark Page");
         EN_MAP.put("已收藏当前网页", "Page bookmarked");
         EN_MAP.put("清空历史", "Clear History");
+        EN_MAP.put("暂无书签收藏", "No bookmarks yet");
         EN_MAP.put("暂无书签收藏，点击右上角可收藏当前页", "No bookmarks yet. Tap top-right to bookmark current page.");
         EN_MAP.put("暂无历史浏览记录", "No browsing history yet");
+        EN_MAP.put("全选", "Select All");
+        EN_MAP.put("取消全选", "Deselect All");
+        EN_MAP.put("批量选择", "Select Multiple");
+        EN_MAP.put("移至文件夹", "Move to...");
+        EN_MAP.put("批量移至文件夹", "Move Bookmarks");
+        EN_MAP.put("移动", "Move");
+        EN_MAP.put("批量删除书签", "Delete Bookmarks");
+        EN_MAP.put("批量删除历史", "Delete History");
+        EN_MAP.put("删除此条记录", "Delete Record");
+        EN_MAP.put("已删除历史记录", "History item deleted");
+        EN_MAP.put("管理 / 清空", "Manage / Clear");
+        EN_MAP.put("历史操作", "History Actions");
+        EN_MAP.put("清空全部历史", "Clear All History");
         EN_MAP.put("新标签页打开", "Open in New Tab");
         EN_MAP.put("后台打开", "Open in Background Tab");
         EN_MAP.put("已在后台打开新标签", "Opened in background tab");
@@ -1101,6 +1152,10 @@ public final class AcidLocale {
         EN_MAP.put("删除任务", "Delete Task");
         EN_MAP.put("同时删除本地已下载的源文件", "Also delete downloaded file from disk");
         EN_MAP.put("删除下载任务", "Delete Download Task");
+        EN_MAP.put("批量删除下载任务", "Delete Download Tasks");
+        EN_MAP.put("管理 / 目录", "Manage / Folder");
+        EN_MAP.put("下载操作", "Download Actions");
+        EN_MAP.put("打开下载目录", "Open Download Folder");
         EN_MAP.put("已删除任务及本地源文件", "Deleted task and local file");
         EN_MAP.put("已移除下载任务记录", "Removed download record");
         EN_MAP.put("新建下载", "New Download");

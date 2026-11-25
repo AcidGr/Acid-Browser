@@ -499,18 +499,9 @@ public final class AcidDialog {
         int padV = AcidTheme.dp(ctx, 10);
         row.setPadding(padH, padV, padH, padV);
 
-        final LinearLayout box = new LinearLayout(ctx);
-        box.setGravity(Gravity.CENTER);
-        int boxSize = AcidTheme.dp(ctx, 20);
-        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(boxSize, boxSize);
-        bLp.rightMargin = AcidTheme.dp(ctx, 10);
-        box.setLayoutParams(bLp);
-
-        final AcidIcons.SvgIconView checkIcon = new AcidIcons.SvgIconView(
-            ctx, AcidIcons.ICON_CHECK, AcidTheme.onColor(AcidTheme.accent(dark)), 13
-        );
-        box.addView(checkIcon);
-        row.addView(box);
+        final AcidWidgets.CheckIndicator indicator = new AcidWidgets.CheckIndicator(ctx, dark, initialChecked);
+        ((LinearLayout.LayoutParams) indicator.view.getLayoutParams()).rightMargin = AcidTheme.dp(ctx, 10);
+        row.addView(indicator.view);
 
         final TextView tv = new TextView(ctx);
         tv.setText(AcidLocale.tr(label));
@@ -524,10 +515,9 @@ public final class AcidDialog {
             @Override
             public void run() {
                 boolean checked = state[0];
+                indicator.setChecked(ctx, dark, checked);
                 int accent = AcidTheme.accent(dark);
                 if (checked) {
-                    box.setBackground(AcidTheme.pillBg(ctx, accent, 0, AcidTheme.RADIUS_BADGE));
-                    checkIcon.setVisibility(View.VISIBLE);
                     row.setBackground(AcidTheme.interactiveBg(
                         ctx,
                         AcidTheme.softTint(accent, dark ? 30 : 20),
@@ -536,10 +526,6 @@ public final class AcidDialog {
                         AcidTheme.RADIUS_CONTROL
                     ));
                 } else {
-                    box.setBackground(AcidTheme.pillBg(
-                        ctx, AcidTheme.formInputBg(dark), AcidTheme.muted(dark), AcidTheme.RADIUS_BADGE
-                    ));
-                    checkIcon.setVisibility(View.INVISIBLE);
                     row.setBackground(AcidTheme.interactiveBg(
                         ctx,
                         AcidTheme.menuItemBg(dark),

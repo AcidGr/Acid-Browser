@@ -26,10 +26,14 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -47,6 +51,7 @@ public class DownloadCoordinator {
     }
 
     private final Context mContext;
+    private final File mDownloadDirOverride;
     private final AcidDownloader mDownloader;
     private final AcidDownloader.DownloaderListener mDownloaderListener;
     private final List<DownloadItem> mDownloads = new ArrayList<DownloadItem>();
@@ -58,8 +63,13 @@ public class DownloadCoordinator {
     private long mLastPersistTimeMs = 0L;
 
     public DownloadCoordinator(Context context, BrowserDataStore dataStore) {
+        this(context, dataStore, null);
+    }
+
+    public DownloadCoordinator(Context context, BrowserDataStore dataStore, File downloadDirOverride) {
         Context appCtx = (context != null) ? context.getApplicationContext() : null;
         mContext = (appCtx != null) ? appCtx : context;
+        mDownloadDirOverride = downloadDirOverride;
         mDataStore = dataStore;
         Handler h = null;
         try {
@@ -337,6 +347,12 @@ public class DownloadCoordinator {
     }
 
     public File getDownloadDestinationDir() {
+        if (mDownloadDirOverride != null) {
+            if (!mDownloadDirOverride.exists()) {
+                mDownloadDirOverride.mkdirs();
+            }
+            return mDownloadDirOverride;
+        }
         File publicDir = null;
         try {
             publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
@@ -1476,53 +1492,82 @@ public class DownloadCoordinator {
     }
 
     public boolean deleteDownload(long downloadId, boolean deletePhysicalFile) {
-        boolean removed = false;
-        DownloadItem target = null;
+        return deleteDownloads(Collections.singletonList(Long.valueOf(downloadId)), deletePhysicalFile) > 0;
+    }
+
+    /**
+     * Deletes multiple download records in one batch lock/persist transaction, optionally removing
+     * physical files that are no longer referenced by any surviving record.
+     */
+    public int deleteDownloads(Collection<Long> downloadIds, boolean deletePhysicalFile) {
+        if (downloadIds == null || downloadIds.isEmpty()) return 0;
+        Set<Long> idSet = new HashSet<Long>();
+        for (Long id : downloadIds) {
+            if (id != null) {
+                idSet.add(id);
+            }
+        }
+        if (idSet.isEmpty()) return 0;
 
         // Inspect live builtin task ownership and .part.cfg BEFORE cancelling (cancel removes task & .part.cfg)
-        DownloadTask activeTask = mDownloader.getTask(downloadId);
-        boolean ownsActiveTask = (activeTask != null);
-        boolean ownsActiveUnfinished = (activeTask != null && activeTask.status != DownloadTask.STATUS_SUCCESSFUL);
-        File activeDestFile = (activeTask != null) ? activeTask.destinationFile : null;
-
-        synchronized (mDownloads) {
-            for (int i = 0; i < mDownloads.size(); i++) {
-                DownloadItem it = mDownloads.get(i);
-                if (it.downloadId == downloadId) {
-                    target = it;
-                    mDownloads.remove(i);
-                    removed = true;
-                    break;
-                }
+        Map<Long, DownloadTask> activeTasks = new HashMap<Long, DownloadTask>();
+        for (Long id : idSet) {
+            DownloadTask task = mDownloader.getTask(id.longValue());
+            if (task != null) {
+                activeTasks.put(id, task);
             }
         }
 
-        File resolvedFile = null;
-        File cfg = null;
-        boolean hasMatchingCheckpoint = false;
-        if (target != null) {
-            resolvedFile = resolveExistingDownloadFile(target.fileName, activeDestFile);
+        List<DownloadItem> removedItems = new ArrayList<DownloadItem>();
+        synchronized (mDownloads) {
+            List<DownloadItem> remaining = new ArrayList<DownloadItem>(mDownloads.size());
+            for (int i = 0; i < mDownloads.size(); i++) {
+                DownloadItem it = mDownloads.get(i);
+                if (it != null && idSet.contains(Long.valueOf(it.downloadId))) {
+                    removedItems.add(it);
+                } else {
+                    remaining.add(it);
+                }
+            }
+            if (removedItems.isEmpty()) {
+                return 0;
+            }
+            mDownloads.clear();
+            mDownloads.addAll(remaining);
+        }
+
+        for (int i = 0; i < removedItems.size(); i++) {
+            DownloadItem target = removedItems.get(i);
+            DownloadTask activeTask = activeTasks.get(Long.valueOf(target.downloadId));
+            boolean ownsActiveTask = (activeTask != null);
+            boolean ownsActiveUnfinished = (activeTask != null && activeTask.status != DownloadTask.STATUS_SUCCESSFUL);
+            File activeDestFile = (activeTask != null) ? activeTask.destinationFile : null;
+
+            File resolvedFile = resolveExistingDownloadFile(target.fileName, activeDestFile);
+            File cfg = null;
+            boolean hasMatchingCheckpoint = false;
             File cfgParent = resolvedFile.getParentFile();
-            if (cfgParent != null) {
+            if (cfgParent != null && target.fileName != null && !target.fileName.isEmpty()) {
                 cfg = new File(cfgParent, target.fileName + ".part.cfg");
                 hasMatchingCheckpoint = cfg.exists() && isCheckpointMatchingUrl(cfg, target.url);
             }
-        }
 
-        // Cancel active builtin task without delegating physical file deletion to AcidDownloader
-        mDownloader.cancel(downloadId, false);
+            // Cancel active builtin task without delegating physical file deletion to AcidDownloader
+            mDownloader.cancel(target.downloadId, false);
 
-        if (target != null) {
             boolean wasSuccessful = (target.status == DownloadTask.STATUS_SUCCESSFUL
-                || target.status == DownloadManager.STATUS_SUCCESSFUL);
+                || target.status == DownloadManager.STATUS_SUCCESSFUL
+                || (activeTask != null && activeTask.status == DownloadTask.STATUS_SUCCESSFUL));
             if (deletePhysicalFile) {
                 try {
                     boolean otherRecordReferencesFileName = false;
-                    synchronized (mDownloads) {
-                        for (DownloadItem it : mDownloads) {
-                            if (target.fileName.equalsIgnoreCase(it.fileName)) {
-                                otherRecordReferencesFileName = true;
-                                break;
+                    if (target.fileName != null && !target.fileName.isEmpty()) {
+                        synchronized (mDownloads) {
+                            for (DownloadItem it : mDownloads) {
+                                if (it != null && target.fileName.equalsIgnoreCase(it.fileName)) {
+                                    otherRecordReferencesFileName = true;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1539,26 +1584,24 @@ public class DownloadCoordinator {
                         }
                     }
                 } catch (Exception e) {
-                    Log.w(TAG, "Failed to delete downloaded file for id " + downloadId, e);
+                    Log.w(TAG, "Failed to delete downloaded file for id " + target.downloadId, e);
                 }
             }
 
             boolean unfinished = !wasSuccessful && target.status != DownloadItem.STATUS_SAVED;
-            if (mContext != null && downloadId > 0
-                && (target.isSystemDownload || (!ownsActiveTask && querySystemDownloadStatus(downloadId) != -1))
-                && (deletePhysicalFile || unfinished)) {
-                removeSystemDownloadQuietly(downloadId);
+            if ((deletePhysicalFile || unfinished)
+                && mContext != null && target.downloadId > 0
+                && (target.isSystemDownload || (!ownsActiveTask && querySystemDownloadStatus(target.downloadId) != -1))) {
+                removeSystemDownloadQuietly(target.downloadId);
             }
         }
 
-        if (removed) {
-            synchronized (mDownloads) {
-                if (mDataStore != null) {
-                    mDataStore.saveDownloads(mDownloads);
-                }
+        synchronized (mDownloads) {
+            if (mDataStore != null) {
+                mDataStore.saveDownloads(mDownloads);
             }
         }
-        return removed;
+        return removedItems.size();
     }
 
     public void clearDownloads() {

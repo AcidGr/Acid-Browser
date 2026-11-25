@@ -19,8 +19,10 @@ import com.acid.browser.download.DownloadItem;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Download Manager Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage} template,
@@ -44,14 +46,24 @@ public class DownloadsSheet extends AcidBottomSheetView {
     };
 
     private static final class DownloadRowHolder {
+        final LinearLayout rootCard;
         final TextView infoView;
         final ProgressBar progressBar;
         final AcidIcons.SvgIconView iconView;
+        final AcidWidgets.CheckIndicator checkIndicator;
 
-        DownloadRowHolder(TextView infoView, ProgressBar progressBar, AcidIcons.SvgIconView iconView) {
+        DownloadRowHolder(
+            LinearLayout rootCard,
+            TextView infoView,
+            ProgressBar progressBar,
+            AcidIcons.SvgIconView iconView,
+            AcidWidgets.CheckIndicator checkIndicator
+        ) {
+            this.rootCard = rootCard;
             this.infoView = infoView;
             this.progressBar = progressBar;
             this.iconView = iconView;
+            this.checkIndicator = checkIndicator;
         }
     }
 
@@ -81,6 +93,11 @@ public class DownloadsSheet extends AcidBottomSheetView {
     private String mSearchKeyword = "";
     private final Map<Long, DownloadRowHolder> mDownloadRows = new LinkedHashMap<Long, DownloadRowHolder>();
 
+    private boolean mMultiSelectMode = false;
+    private final Set<Long> mSelectedDownloadIds = new LinkedHashSet<Long>();
+    private List<DownloadItem> mCurrentVisibleDownloads = new ArrayList<DownloadItem>();
+    private AcidWidgets.MultiSelectBar mMultiSelectBar = null;
+
     public DownloadsSheet(Context context, DownloadCoordinator downloads) {
         super(context);
         mDownloads = downloads;
@@ -90,12 +107,29 @@ public class DownloadsSheet extends AcidBottomSheetView {
     @Override
     public void dismiss() {
         stopProgressPolling();
+        resetMultiSelectState();
         super.dismiss();
     }
 
     @Override
     protected void onResetToRootPage() {
+        resetMultiSelectState();
         setRootPage(buildDownloadsPage());
+    }
+
+    @Override
+    public boolean handleBackPressed() {
+        if (mMultiSelectMode) {
+            exitMultiSelectMode();
+            return true;
+        }
+        return super.handleBackPressed();
+    }
+
+    private void resetMultiSelectState() {
+        mMultiSelectMode = false;
+        mSelectedDownloadIds.clear();
+        mMultiSelectBar = null;
     }
 
     @Override
@@ -118,6 +152,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
             @Override
             public void render(LinearLayout pinned, LinearLayout container) {
                 final Context ctx = getContext();
+                mMultiSelectBar = null;
 
                 // 1. Pinned Search Bar
                 final EditText etSearch = new EditText(ctx);
@@ -136,6 +171,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
                         @Override
                         public void onTabSelected(int index) {
                             mSelectedCategoryIndex = index;
+                            if (getScrollView() != null) getScrollView().scrollTo(0, 0);
                             updateDownloadListRows();
                         }
                     }
@@ -148,7 +184,10 @@ public class DownloadsSheet extends AcidBottomSheetView {
                     @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
                     @Override
                     public void afterTextChanged(Editable s) {
-                        mSearchKeyword = s != null ? s.toString().trim() : "";
+                        String nextKw = s != null ? s.toString().trim() : "";
+                        if (mSearchKeyword.equals(nextKw)) return;
+                        mSearchKeyword = nextKw;
+                        if (getScrollView() != null) getScrollView().scrollTo(0, 0);
                         updateDownloadListRows();
                     }
                 });
@@ -156,14 +195,6 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 updateDownloadListRows();
             }
         })
-            .withAction(AcidIcons.ICON_FILE, "打开目录", new OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (mDownloads != null) {
-                        mDownloads.openDownloadFolder();
-                    }
-                }
-            })
             .withMinContentHeightDp(280f)
             .withOnPause(new Runnable() {
                 @Override
@@ -253,8 +284,22 @@ public class DownloadsSheet extends AcidBottomSheetView {
             : DownloadItem.CAT_ALL;
 
         List<DownloadItem> allList = mDownloads != null ? mDownloads.getDownloads() : null;
-        List<DownloadItem> list = new ArrayList<DownloadItem>();
+        if (mMultiSelectMode) {
+            if (allList == null || allList.isEmpty()) {
+                resetMultiSelectState();
+            } else {
+                Set<Long> liveIds = new LinkedHashSet<Long>();
+                for (int i = 0; i < allList.size(); i++) {
+                    DownloadItem it = allList.get(i);
+                    if (it != null) {
+                        liveIds.add(Long.valueOf(it.downloadId));
+                    }
+                }
+                mSelectedDownloadIds.retainAll(liveIds);
+            }
+        }
 
+        List<DownloadItem> list = new ArrayList<DownloadItem>();
         if (allList != null) {
             for (DownloadItem it : allList) {
                 if (selectedCat != DownloadItem.CAT_ALL && it.getCategory() != selectedCat) {
@@ -269,6 +314,8 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 list.add(it);
             }
         }
+        mCurrentVisibleDownloads = list;
+        syncDownloadsChrome(allList);
 
         if (list.isEmpty()) {
             itemsContainer.addView(AcidWidgets.emptyState(
@@ -281,11 +328,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
         }
 
         for (final DownloadItem it : list) {
-            int iconTint = (it.status == DownloadManager.STATUS_FAILED)
-                ? AcidTheme.COLOR_RED
-                : (it.status == DownloadItem.STATUS_SAVED
-                    ? AcidTheme.accent(mIsDarkMode)
-                    : AcidTheme.muted(mIsDarkMode));
+            int iconTint = downloadIconTint(it);
 
             ProgressBar pb = null;
             if (it.status == DownloadManager.STATUS_RUNNING || it.status == DownloadManager.STATUS_PENDING) {
@@ -301,6 +344,16 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 .subtitle(buildDownloadSubtitle(it))
                 .subtitleColor(downloadSubtitleColor(it));
 
+            final AcidWidgets.CheckIndicator checkIndicator;
+            if (mMultiSelectMode) {
+                boolean selected = mSelectedDownloadIds.contains(Long.valueOf(it.downloadId));
+                checkIndicator = new AcidWidgets.CheckIndicator(ctx, mIsDarkMode, selected);
+                rowBuilder.selected(selected, AcidTheme.accent(mIsDarkMode))
+                    .trailingView(checkIndicator.view);
+            } else {
+                checkIndicator = null;
+            }
+
             if (pb != null) {
                 rowBuilder.bottomView(pb, 30f);
             }
@@ -308,12 +361,16 @@ public class DownloadsSheet extends AcidBottomSheetView {
             final LinearLayout row = rowBuilder.build(ctx, mIsDarkMode);
             mDownloadRows.put(
                 rowKey(it),
-                new DownloadRowHolder(rowBuilder.subtitleView, pb, rowBuilder.iconView)
+                new DownloadRowHolder(row, rowBuilder.subtitleView, pb, rowBuilder.iconView, checkIndicator)
             );
 
             row.setOnClickListener(new OnClickListener() {
                 @Override
                 public void onClick(View v) {
+                    if (mMultiSelectMode) {
+                        toggleDownloadSelection(it);
+                        return;
+                    }
                     if (mDownloads == null) return;
                     if (it.status == DownloadManager.STATUS_RUNNING) {
                         String speed = it.getFormattedSpeed();
@@ -338,6 +395,10 @@ public class DownloadsSheet extends AcidBottomSheetView {
             row.setOnLongClickListener(new OnLongClickListener() {
                 @Override
                 public boolean onLongClick(View v) {
+                    if (mMultiSelectMode) {
+                        toggleDownloadSelection(it);
+                        return true;
+                    }
                     showDownloadContextMenu(row, it);
                     return true;
                 }
@@ -354,6 +415,181 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 }
             });
         }
+    }
+
+    private void syncDownloadsChrome(List<DownloadItem> allList) {
+        final Context ctx = getContext();
+        if (mMultiSelectMode) {
+            setTitle("已选择 " + mSelectedDownloadIds.size() + " 项");
+            setAction(AcidIcons.ICON_CHECK, "完成", 0, new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    exitMultiSelectMode();
+                }
+            });
+            LinearLayout footer = getPinnedFooterContainer();
+            if (mMultiSelectBar == null || footer.getChildCount() == 0) {
+                footer.removeAllViews();
+                mMultiSelectBar = new AcidWidgets.MultiSelectBar(
+                    ctx,
+                    mIsDarkMode,
+                    new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            toggleSelectAllVisible();
+                        }
+                    },
+                    null,
+                    null,
+                    new OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            if (!mSelectedDownloadIds.isEmpty()) {
+                                showDeleteDownloadsConfirmDialog(
+                                    new ArrayList<Long>(mSelectedDownloadIds),
+                                    null
+                                );
+                            }
+                        }
+                    }
+                );
+                footer.addView(mMultiSelectBar.view);
+            }
+            updateMultiSelectBarState();
+            refreshScrollCeiling();
+        } else {
+            setTitle("下载管理");
+            clearPinnedFooter();
+            mMultiSelectBar = null;
+            refreshScrollCeiling();
+            if (allList != null && !allList.isEmpty()) {
+                setAction(AcidIcons.ICON_MENU, "管理 / 目录", 0, new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        showDownloadsHeaderActionMenu(v);
+                    }
+                });
+            } else {
+                setAction(AcidIcons.ICON_FILE, "打开目录", 0, new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (mDownloads != null) {
+                            mDownloads.openDownloadFolder();
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    private void showDownloadsHeaderActionMenu(View anchor) {
+        final Context ctx = getContext();
+        List<AcidContextMenu.ActionItem> actions = new ArrayList<AcidContextMenu.ActionItem>();
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_CHECK, "批量选择", new Runnable() {
+            @Override
+            public void run() {
+                enterMultiSelectMode(null);
+            }
+        }));
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_FILE, "打开下载目录", new Runnable() {
+            @Override
+            public void run() {
+                if (mDownloads != null) {
+                    mDownloads.openDownloadFolder();
+                }
+            }
+        }));
+        AcidContextMenu.showForAnchor(ctx, anchor, mIsDarkMode, AcidLocale.tr("下载操作"), actions);
+    }
+
+    private void enterMultiSelectMode(Long preselectDownloadId) {
+        List<DownloadItem> allList = mDownloads != null ? mDownloads.getDownloads() : null;
+        if (allList == null || allList.isEmpty()) {
+            AcidFeedback.info(getContext(), "暂无下载任务记录");
+            return;
+        }
+        mMultiSelectMode = true;
+        mSelectedDownloadIds.clear();
+        if (preselectDownloadId != null) {
+            mSelectedDownloadIds.add(preselectDownloadId);
+        }
+        mMultiSelectBar = null;
+        updateDownloadListRows();
+    }
+
+    private void exitMultiSelectMode() {
+        if (!mMultiSelectMode) return;
+        resetMultiSelectState();
+        updateDownloadListRows();
+    }
+
+    private void toggleDownloadSelection(DownloadItem it) {
+        if (!mMultiSelectMode || it == null) return;
+        final Context ctx = getContext();
+        Long key = Long.valueOf(it.downloadId);
+        boolean nextSelected = !mSelectedDownloadIds.contains(key);
+        if (nextSelected) {
+            mSelectedDownloadIds.add(key);
+        } else {
+            mSelectedDownloadIds.remove(key);
+        }
+        DownloadRowHolder holder = mDownloadRows.get(rowKey(it));
+        if (holder != null) {
+            if (holder.checkIndicator != null) {
+                holder.checkIndicator.setChecked(ctx, mIsDarkMode, nextSelected);
+            }
+            AcidWidgets.updateListItemCardSelection(
+                ctx, mIsDarkMode, holder.rootCard, nextSelected, AcidTheme.accent(mIsDarkMode)
+            );
+        }
+        setTitle("已选择 " + mSelectedDownloadIds.size() + " 项");
+        updateMultiSelectBarState();
+    }
+
+    private boolean areAllVisibleSelected() {
+        if (mCurrentVisibleDownloads.isEmpty()) return false;
+        for (int i = 0; i < mCurrentVisibleDownloads.size(); i++) {
+            DownloadItem it = mCurrentVisibleDownloads.get(i);
+            if (!mSelectedDownloadIds.contains(Long.valueOf(it.downloadId))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void toggleSelectAllVisible() {
+        if (!mMultiSelectMode || mCurrentVisibleDownloads.isEmpty()) return;
+        final Context ctx = getContext();
+        int accent = AcidTheme.accent(mIsDarkMode);
+        boolean selectTarget = !areAllVisibleSelected();
+
+        for (int i = 0; i < mCurrentVisibleDownloads.size(); i++) {
+            DownloadItem it = mCurrentVisibleDownloads.get(i);
+            Long key = Long.valueOf(it.downloadId);
+            if (selectTarget) {
+                mSelectedDownloadIds.add(key);
+            } else {
+                mSelectedDownloadIds.remove(key);
+            }
+            DownloadRowHolder holder = mDownloadRows.get(rowKey(it));
+            if (holder != null) {
+                if (holder.checkIndicator != null) {
+                    holder.checkIndicator.setChecked(ctx, mIsDarkMode, selectTarget);
+                }
+                AcidWidgets.updateListItemCardSelection(
+                    ctx, mIsDarkMode, holder.rootCard, selectTarget, accent
+                );
+            }
+        }
+        setTitle("已选择 " + mSelectedDownloadIds.size() + " 项");
+        updateMultiSelectBarState();
+    }
+
+    private void updateMultiSelectBarState() {
+        if (mMultiSelectBar == null) return;
+        boolean hasVisible = !mCurrentVisibleDownloads.isEmpty();
+        boolean allVisibleSelected = hasVisible && areAllVisibleSelected();
+        mMultiSelectBar.updateState(mSelectedDownloadIds.size(), allVisibleSelected, hasVisible);
     }
 
     private void showDownloadContextMenu(View anchor, final DownloadItem it) {
@@ -426,6 +662,12 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 }
             }
         }));
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_CHECK, "批量选择", new Runnable() {
+            @Override
+            public void run() {
+                enterMultiSelectMode(Long.valueOf(it.downloadId));
+            }
+        }));
         actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_TRASH, "删除任务", true, new Runnable() {
             @Override
             public void run() {
@@ -436,8 +678,17 @@ public class DownloadsSheet extends AcidBottomSheetView {
     }
 
     private void showDeleteConfirmDialog(final DownloadItem it) {
+        if (it == null) return;
+        List<Long> ids = new ArrayList<Long>(1);
+        ids.add(Long.valueOf(it.downloadId));
+        showDeleteDownloadsConfirmDialog(ids, it.fileName);
+    }
+
+    private void showDeleteDownloadsConfirmDialog(final List<Long> targetIds, final String singleFileName) {
+        if (targetIds == null || targetIds.isEmpty()) return;
         final Context ctx = getContext();
         final boolean[] deletePhysical = new boolean[]{false};
+        final boolean isSingle = (singleFileName != null && targetIds.size() == 1);
 
         LinearLayout extraBox = new LinearLayout(ctx);
         extraBox.setOrientation(LinearLayout.VERTICAL);
@@ -451,19 +702,34 @@ public class DownloadsSheet extends AcidBottomSheetView {
             }
         ));
 
+        String title = isSingle ? "删除下载任务" : "批量删除下载任务";
+        String msg = isSingle
+            ? ("确定移除下载记录「" + singleFileName + "」吗？")
+            : ("确定移除选中的 " + targetIds.size() + " 个下载任务吗？");
+
         new AcidDialog(ctx, mIsDarkMode)
-            .setTitle("删除下载任务")
-            .setMessage("确定移除下载记录「" + it.fileName + "」吗？")
+            .setTitle(title)
+            .setMessage(msg)
             .setCustomView(extraBox)
             .setDangerButton("删除", new AcidDialog.OnActionListener() {
                 @Override
                 public boolean onAction(Dialog dialog) {
                     boolean delFile = deletePhysical[0];
-                    if (mDownloads != null) {
-                        mDownloads.deleteDownload(it.downloadId, delFile);
+                    int removed = mDownloads != null ? mDownloads.deleteDownloads(targetIds, delFile) : 0;
+                    if (mMultiSelectMode) {
+                        resetMultiSelectState();
                     }
                     updateDownloadListRows();
-                    AcidFeedback.info(ctx, delFile ? "已删除任务及本地源文件" : "已移除下载任务记录");
+                    if (isSingle) {
+                        AcidFeedback.info(ctx, delFile ? "已删除任务及本地源文件" : "已移除下载任务记录");
+                    } else {
+                        AcidFeedback.info(
+                            ctx,
+                            delFile
+                                ? ("已删除 " + removed + " 个任务及本地源文件")
+                                : ("已移除 " + removed + " 个下载任务记录")
+                        );
+                    }
                     return true;
                 }
             })
@@ -507,9 +773,14 @@ public class DownloadsSheet extends AcidBottomSheetView {
         return AcidTheme.muted(mIsDarkMode);
     }
 
+    private int downloadIconTint(DownloadItem it) {
+        if (it.status == DownloadManager.STATUS_FAILED) return AcidTheme.COLOR_RED;
+        if (it.status == DownloadItem.STATUS_SAVED) return AcidTheme.accent(mIsDarkMode);
+        return AcidTheme.muted(mIsDarkMode);
+    }
+
     private void refreshDownloadProgressInPlace() {
         if (mDownloads == null || mDownloadRows.isEmpty()) return;
-        int mutedTint = AcidTheme.muted(mIsDarkMode);
         List<DownloadItem> allList = mDownloads.getDownloads();
 
         for (DownloadItem it : allList) {
@@ -529,8 +800,7 @@ public class DownloadsSheet extends AcidBottomSheetView {
                 }
             }
             if (holder.iconView != null) {
-                holder.iconView.setColor(it.status == DownloadManager.STATUS_FAILED
-                    ? AcidTheme.COLOR_RED : mutedTint);
+                holder.iconView.setColor(downloadIconTint(it));
             }
         }
     }

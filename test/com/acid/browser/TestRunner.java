@@ -202,6 +202,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testNetscapeBookmarkImportExportAndFolders(); }
         });
 
+        // 30. Multi-Select Batch Operations & Bilingual Localization
+        run("30. Multi-Select Batch Ops: Bookmark Batch Move/Delete, History Single/Batch Delete, Download Shared-File Safe Batch Delete & Locale", new TestCase() {
+            @Override public void execute() throws Exception { testMultiSelectBatchOperationsAndLocale(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -4670,6 +4675,200 @@ public final class TestRunner {
             assertEquals("搜索结果 (1)", searchByFolder.get(0).sectionHeader,
                 "Search uses Search Results header");
         } finally {
+            SkillStorageVault.deleteRecursiveSafe(tmpDir);
+        }
+    }
+
+    // =========================================================================
+    // 30. Multi-Select Batch Operations & Bilingual Localization
+    // =========================================================================
+
+    private static void testMultiSelectBatchOperationsAndLocale() throws Exception {
+        File tmpDir = File.createTempFile("acid_multiselect_test_", "_dir");
+        tmpDir.delete();
+        tmpDir.mkdirs();
+        DownloadCoordinator dc = null;
+        try {
+            File settingsFile = new File(tmpDir, "settings.json");
+            File bookmarksFile = new File(tmpDir, "bookmarks.json");
+            File historyFile = new File(tmpDir, "history.json");
+            File dlDir = new File(tmpDir, "dl");
+            dlDir.mkdirs();
+
+            InMemoryPrefs prefs = new InMemoryPrefs();
+            BrowserDataStore store = new BrowserDataStore(
+                prefs, new InMemoryPrefs(), settingsFile, bookmarksFile, historyFile
+            );
+
+            final int[] bmMutatedCount = new int[]{0};
+            store.setOnBookmarksMutatedListener(new Runnable() {
+                @Override
+                public void run() {
+                    bmMutatedCount[0]++;
+                }
+            });
+            final int[] histChangedCount = new int[]{0};
+            store.setOnHistoryChangedListener(new BrowserDataStore.OnHistoryChangedListener() {
+                @Override
+                public void onHistoryChanged() {
+                    histChangedCount[0]++;
+                }
+            });
+
+            // 1. Bookmarks batch move & non-contiguous batch delete
+            // Defaults: [Google(0), GitHub(1), Bilibili(2), 知乎(3), Hacker News(4), 百度(5)]
+            List<BrowserDataStore.EntryItem> initialBm = store.loadBookmarks();
+            assertEquals(Integer.valueOf(6), Integer.valueOf(initialBm.size()), "Initial default bookmark count");
+
+            Set<Integer> moveTargets = new HashSet<Integer>(Arrays.asList(
+                Integer.valueOf(1), Integer.valueOf(3), Integer.valueOf(5)
+            ));
+            int beforeMutateMoves = bmMutatedCount[0];
+            int movedCount = store.moveBookmarksToFolder(moveTargets, "Work/Docs");
+            assertEquals(Integer.valueOf(3), Integer.valueOf(movedCount), "Batch move returns matched count");
+            assertEquals(Integer.valueOf(beforeMutateMoves + 1), Integer.valueOf(bmMutatedCount[0]),
+                "Batch move triggers one single transaction mutation callback");
+
+            List<BrowserDataStore.EntryItem> afterMove = store.loadBookmarks();
+            assertEquals("Work/Docs", afterMove.get(1).folder, "Bookmark 1 moved to Work/Docs");
+            assertEquals("Work/Docs", afterMove.get(3).folder, "Bookmark 3 moved to Work/Docs");
+            assertEquals("Work/Docs", afterMove.get(5).folder, "Bookmark 5 moved to Work/Docs");
+            assertEquals("", afterMove.get(0).folder, "Bookmark 0 remains uncategorized");
+
+            // Move two entries back to uncategorized ""
+            int uncatCount = store.moveBookmarksToFolder(
+                new HashSet<Integer>(Arrays.asList(Integer.valueOf(1), Integer.valueOf(5))),
+                ""
+            );
+            assertEquals(Integer.valueOf(2), Integer.valueOf(uncatCount), "Moves subset back to uncategorized");
+            assertEquals("", store.loadBookmarks().get(1).folder, "Bookmark 1 is uncategorized again");
+            assertEquals("Work/Docs", store.loadBookmarks().get(3).folder, "Bookmark 3 stays in Work/Docs");
+
+            // Reload from JSON and verify persistence
+            assertTrue(store.reloadBookmarksFromJsonFile(true), "Bookmarks JSON saved cleanly after batch move");
+            assertEquals("Work/Docs", store.loadBookmarks().get(3).folder, "Moved folder survives JSON reload");
+
+            // Remove non-contiguous indices {0, 2, 4} -> [GitHub, 知乎, 百度] survive
+            int beforeDeleteMoves = bmMutatedCount[0];
+            int removedBm = store.removeBookmarks(new HashSet<Integer>(Arrays.asList(
+                Integer.valueOf(0), Integer.valueOf(2), Integer.valueOf(4)
+            )));
+            assertEquals(Integer.valueOf(3), Integer.valueOf(removedBm), "Removes all 3 non-contiguous indices");
+            assertEquals(Integer.valueOf(beforeDeleteMoves + 1), Integer.valueOf(bmMutatedCount[0]),
+                "Batch delete triggers one single transaction mutation callback");
+
+            List<BrowserDataStore.EntryItem> afterBmDelete = store.loadBookmarks();
+            assertEquals(Integer.valueOf(3), Integer.valueOf(afterBmDelete.size()), "3 bookmarks remain");
+            assertEquals("GitHub", afterBmDelete.get(0).title, "Surviving bookmark 0 without index shift");
+            assertEquals("知乎", afterBmDelete.get(1).title, "Surviving bookmark 1 without index shift");
+            assertEquals("百度", afterBmDelete.get(2).title, "Surviving bookmark 2 without index shift");
+            assertTrue(store.reloadBookmarksFromJsonFile(true), "Reloads post-delete bookmarks.json cleanly");
+            assertEquals(Integer.valueOf(3), Integer.valueOf(store.loadBookmarks().size()),
+                "Post-delete count matches bookmarks.json");
+
+            // 2. History single & batch delete
+            store.recordHistory("https://h1.test", "H1", false);
+            store.recordHistory("https://h2.test", "H2", false);
+            store.recordHistory("https://h3.test", "H3", false);
+            store.recordHistory("https://h4.test", "H4", false);
+            store.recordHistory("https://h5.test", "H5", false);
+            assertEquals(Integer.valueOf(5), Integer.valueOf(store.loadHistory().size()), "Recorded 5 history entries");
+
+            int beforeSingleHist = histChangedCount[0];
+            assertTrue(store.removeHistoryItem("https://h3.test"), "Single history delete returns true");
+            assertTrue(!store.removeHistoryItem("https://h3.test"), "Deleting already-removed URL returns false");
+            assertEquals(Integer.valueOf(beforeSingleHist + 1), Integer.valueOf(histChangedCount[0]),
+                "Single history delete notifies listener once");
+
+            int batchHistRemoved = store.removeHistoryItems(new HashSet<String>(Arrays.asList(
+                "https://h1.test", "https://h5.test", "https://missing.test"
+            )));
+            assertEquals(Integer.valueOf(2), Integer.valueOf(batchHistRemoved), "Batch history delete removes 2 matching URLs");
+
+            List<BrowserDataStore.EntryItem> remHist = store.loadHistory();
+            assertEquals(Integer.valueOf(2), Integer.valueOf(remHist.size()), "2 history items remain");
+            assertEquals("https://h4.test", remHist.get(0).url, "Newest remaining history entry preserved");
+            assertEquals("https://h2.test", remHist.get(1).url, "Older remaining history entry preserved");
+            assertTrue(store.reloadHistoryFromJsonFile(true), "history.json synced cleanly after batch delete");
+            assertEquals(Integer.valueOf(2), Integer.valueOf(store.loadHistory().size()),
+                "history.json matches remaining count");
+
+            // 3. Downloads batch delete & shared-filename physical protection
+            File keepFile = new File(dlDir, "keep.zip");
+            File sharedFile = new File(dlDir, "shared.apk");
+            File loneFile = new File(dlDir, "lone.pdf");
+            File partialFile = new File(dlDir, "partial.bin");
+            File partialCfg = new File(dlDir, "partial.bin.part.cfg");
+
+            AcidIo.writeFileUtf8Safe(keepFile, "keep-data");
+            AcidIo.writeFileUtf8Safe(sharedFile, "shared-apk-data");
+            AcidIo.writeFileUtf8Safe(loneFile, "lone-pdf-data");
+            AcidIo.writeFileUtf8Safe(partialFile, "partial-bytes");
+            AcidIo.writeFileUtf8Safe(partialCfg, "{\"url\":\"https://dl.test/partial.bin\"}");
+
+            long now = System.currentTimeMillis();
+            List<DownloadItem> seedDownloads = new ArrayList<DownloadItem>();
+            seedDownloads.add(new DownloadItem(101L, "keep.zip", "https://dl.test/keep.zip", "application/zip", 9, 9, DownloadTask.STATUS_SUCCESSFUL, now));
+            seedDownloads.add(new DownloadItem(102L, "shared.apk", "https://dl.test/shared1.apk", "application/vnd.android.package-archive", 15, 15, DownloadTask.STATUS_SUCCESSFUL, now));
+            seedDownloads.add(new DownloadItem(103L, "shared.apk", "https://dl.test/shared2.apk", "application/vnd.android.package-archive", 15, 15, DownloadTask.STATUS_SUCCESSFUL, now));
+            seedDownloads.add(new DownloadItem(104L, "lone.pdf", "https://dl.test/lone.pdf", "application/pdf", 13, 13, DownloadTask.STATUS_SUCCESSFUL, now));
+            seedDownloads.add(new DownloadItem(105L, "partial.bin", "https://dl.test/partial.bin", "application/octet-stream", 100, 13, DownloadTask.STATUS_PAUSED, now));
+            store.saveDownloads(seedDownloads);
+
+            dc = new DownloadCoordinator(null, store, dlDir);
+            assertEquals(Integer.valueOf(5), Integer.valueOf(dc.getDownloads().size()), "DownloadCoordinator loaded 5 items");
+
+            // Delete keep.zip + ONE shared.apk record WITH deletePhysicalFile=false -> files stay
+            // Delete 101L with deletePhysicalFile=false
+            int delNoFile = dc.deleteDownloads(Collections.singletonList(Long.valueOf(101L)), false);
+            assertEquals(Integer.valueOf(1), Integer.valueOf(delNoFile), "Deleted 1 record without deleting file");
+            assertTrue(keepFile.exists(), "Physical keep.zip retained when deletePhysicalFile=false");
+
+            // Delete ONE shared.apk (102L) WITH deletePhysicalFile=true while 103L still references shared.apk
+            int delOneShared = dc.deleteDownloads(Collections.singletonList(Long.valueOf(102L)), true);
+            assertEquals(Integer.valueOf(1), Integer.valueOf(delOneShared), "Deleted 102L record");
+            assertTrue(sharedFile.exists(), "shared.apk preserved while sibling record 103L still exists");
+
+            // Batch delete 103L (last shared.apk) + 104L (lone.pdf) + 105L (paused checkpoint) WITH deletePhysicalFile=true
+            int delBatchFiles = dc.deleteDownloads(Arrays.asList(
+                Long.valueOf(103L), Long.valueOf(104L), Long.valueOf(105L), Long.valueOf(999L)
+            ), true);
+            assertEquals(Integer.valueOf(3), Integer.valueOf(delBatchFiles), "Batch deleted remaining 3 matching records");
+            assertTrue(!sharedFile.exists(), "shared.apk removed once no surviving record references it");
+            assertTrue(!loneFile.exists(), "lone.pdf removed on batch delete");
+            assertTrue(!partialFile.exists(), "partial.bin removed on unfinished batch delete");
+            assertTrue(!partialCfg.exists(), "partial.bin.part.cfg removed on unfinished batch delete");
+            assertEquals(Integer.valueOf(0), Integer.valueOf(dc.getDownloads().size()), "In-memory downloads list empty");
+            assertEquals(Integer.valueOf(0), Integer.valueOf(store.loadDownloads().size()), "Persisted downloads list empty");
+
+            // 4. Bilingual AcidLocale verification for multi-select labels and patterns
+            AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_EN);
+            try {
+                assertEquals("Select All", AcidLocale.tr("全选"), "Select All EN translation");
+                assertEquals("Deselect All", AcidLocale.tr("取消全选"), "Deselect All EN translation");
+                assertEquals("Select Multiple", AcidLocale.tr("批量选择"), "Select Multiple EN translation");
+                assertEquals("Move to...", AcidLocale.tr("移至文件夹"), "Move to folder EN translation");
+                assertEquals("Delete Record", AcidLocale.tr("删除此条记录"), "Delete single history EN translation");
+                assertEquals("Delete (5)", AcidLocale.tr("删除 (5)"), "Delete count dynamic translation");
+                assertEquals("Selected 4 items", AcidLocale.tr("已选择 4 项"), "Selected count title translation");
+                assertEquals("Deleted 3 bookmarks", AcidLocale.tr("已删除 3 条书签"), "Deleted bookmarks feedback translation");
+                assertEquals("Moved 2 bookmarks to \"Work/Docs\"", AcidLocale.tr("已将 2 条书签移至「Work/Docs」"),
+                    "Moved bookmarks feedback translation");
+                assertEquals("Moved 2 bookmarks to Uncategorized", AcidLocale.tr("已将 2 条书签移至未分类"),
+                    "Moved bookmarks to Uncategorized feedback translation");
+                assertEquals("Deleted 3 history items", AcidLocale.tr("已删除 3 条历史记录"),
+                    "Deleted history items feedback translation");
+                assertEquals("Deleted 2 tasks and local files", AcidLocale.tr("已删除 2 个任务及本地源文件"),
+                    "Deleted downloads + files feedback translation");
+                assertEquals("Removed 2 download records", AcidLocale.tr("已移除 2 个下载任务记录"),
+                    "Removed download records feedback translation");
+            } finally {
+                AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_ZH);
+            }
+        } finally {
+            if (dc != null) {
+                dc.destroy();
+            }
             SkillStorageVault.deleteRecursiveSafe(tmpDir);
         }
     }

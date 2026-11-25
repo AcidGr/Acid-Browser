@@ -491,12 +491,7 @@ public final class AcidWidgets {
      */
     public static LinearLayout listItemCard(Context ctx, boolean dark, boolean selected, int selectedBorderColor) {
         LinearLayout row = new LinearLayout(ctx);
-        int fill = selected ? AcidTheme.selectedBg(dark) : AcidTheme.menuItemBg(dark);
-        int pressed = AcidTheme.rowPressed(dark);
-        int stroke = selected
-            ? (selectedBorderColor != 0 ? selectedBorderColor : AcidTheme.accent(dark))
-            : AcidTheme.border(dark);
-        row.setBackground(AcidTheme.interactiveBg(ctx, fill, pressed, stroke, AcidTheme.RADIUS_CONTROL));
+        updateListItemCardSelection(ctx, dark, row, selected, selectedBorderColor);
         int padH = AcidTheme.dp(ctx, 12);
         int padV = AcidTheme.dp(ctx, 10);
         row.setPadding(padH, padV, padH, padV);
@@ -508,6 +503,25 @@ public final class AcidWidgets {
         lp.bottomMargin = AcidTheme.dp(ctx, 6);
         row.setLayoutParams(lp);
         return row;
+    }
+
+    /**
+     * Updates a {@link #listItemCard} border and background tint in-place for selection toggling.
+     */
+    public static void updateListItemCardSelection(
+        Context ctx,
+        boolean dark,
+        LinearLayout rowCard,
+        boolean selected,
+        int selectedBorderColor
+    ) {
+        if (rowCard == null || ctx == null) return;
+        int fill = selected ? AcidTheme.selectedBg(dark) : AcidTheme.menuItemBg(dark);
+        int pressed = AcidTheme.rowPressed(dark);
+        int stroke = selected
+            ? (selectedBorderColor != 0 ? selectedBorderColor : AcidTheme.accent(dark))
+            : AcidTheme.border(dark);
+        rowCard.setBackground(AcidTheme.interactiveBg(ctx, fill, pressed, stroke, AcidTheme.RADIUS_CONTROL));
     }
 
     /**
@@ -1257,6 +1271,170 @@ public final class AcidWidgets {
         rLp.leftMargin = AcidTheme.dp(ctx, 6);
         row.addView(rightButton, rLp);
         return row;
+    }
+
+    /**
+     * Compact 20x20dp checkbox indicator for in-place row selection toggling inside sheets.
+     */
+    public static final class CheckIndicator {
+        public final LinearLayout view;
+        private final AcidIcons.SvgIconView mCheckIcon;
+
+        public CheckIndicator(Context ctx, boolean dark, boolean checked) {
+            view = new LinearLayout(ctx);
+            view.setGravity(Gravity.CENTER);
+            int size = AcidTheme.dp(ctx, 20);
+            view.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+            mCheckIcon = new AcidIcons.SvgIconView(
+                ctx, AcidIcons.ICON_CHECK, AcidTheme.onColor(AcidTheme.accent(dark)), 13
+            );
+            view.addView(mCheckIcon);
+            setChecked(ctx, dark, checked);
+        }
+
+        public void setChecked(Context ctx, boolean dark, boolean checked) {
+            if (ctx == null) return;
+            if (checked) {
+                int accent = AcidTheme.accent(dark);
+                view.setBackground(AcidTheme.pillBg(ctx, accent, 0, AcidTheme.RADIUS_BADGE));
+                mCheckIcon.setColor(AcidTheme.onColor(accent));
+                mCheckIcon.setVisibility(View.VISIBLE);
+            } else {
+                view.setBackground(AcidTheme.pillBg(
+                    ctx, AcidTheme.formInputBg(dark), AcidTheme.muted(dark), AcidTheme.RADIUS_BADGE
+                ));
+                mCheckIcon.setVisibility(View.INVISIBLE);
+            }
+        }
+    }
+
+    /**
+     * Reusable pinned-footer toolbar for multi-select batch actions in bottom sheets.
+     */
+    public static final class MultiSelectBar {
+        public final LinearLayout view;
+        private final TextView mBtnSelectAll;
+        private final TextView mBtnSecondary;
+        private final TextView mBtnDelete;
+
+        public MultiSelectBar(
+            Context ctx,
+            boolean dark,
+            View.OnClickListener onToggleSelectAll,
+            String secondaryActionLabel,
+            View.OnClickListener onSecondaryAction,
+            View.OnClickListener onDeleteAction
+        ) {
+            view = new LinearLayout(ctx);
+            view.setOrientation(LinearLayout.VERTICAL);
+
+            View divider = new View(ctx);
+            divider.setBackgroundColor(AcidTheme.border(dark));
+            LinearLayout.LayoutParams divLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, AcidTheme.dp(ctx, 1))
+            );
+            divLp.bottomMargin = AcidTheme.dp(ctx, 8);
+            view.addView(divider, divLp);
+
+            LinearLayout bar = new LinearLayout(ctx);
+            bar.setOrientation(LinearLayout.HORIZONTAL);
+            bar.setGravity(Gravity.CENTER_VERTICAL);
+
+            boolean hasSecondary = !TextUtils.isEmpty(secondaryActionLabel);
+            float fontSp = hasSecondary ? AcidTheme.SP_FIELD_LABEL : AcidTheme.SP_BODY;
+
+            mBtnSelectAll = buildBarButton(
+                ctx, dark, "全选", fontSp,
+                AcidTheme.subtle(dark), AcidTheme.rowPressed(dark), AcidTheme.border(dark),
+                AcidTheme.text(dark), onToggleSelectAll
+            );
+            LinearLayout.LayoutParams selLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            );
+            selLp.rightMargin = AcidTheme.dp(ctx, 6);
+            bar.addView(mBtnSelectAll, selLp);
+
+            if (hasSecondary) {
+                mBtnSecondary = buildBarButton(
+                    ctx, dark, secondaryActionLabel, fontSp,
+                    AcidTheme.subtle(dark), AcidTheme.rowPressed(dark), AcidTheme.border(dark),
+                    AcidTheme.accent(dark), onSecondaryAction
+                );
+                LinearLayout.LayoutParams secLp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                );
+                secLp.rightMargin = AcidTheme.dp(ctx, 6);
+                bar.addView(mBtnSecondary, secLp);
+            } else {
+                mBtnSecondary = null;
+            }
+
+            int dangerFill = AcidTheme.COLOR_RED;
+            mBtnDelete = buildBarButton(
+                ctx, dark, "删除", fontSp,
+                dangerFill, AcidTheme.adjustPressFill(dangerFill, dark), 0,
+                AcidTheme.onColor(dangerFill), onDeleteAction
+            );
+            bar.addView(mBtnDelete, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            ));
+
+            view.addView(bar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ));
+            updateState(0, false, true);
+        }
+
+        private static TextView buildBarButton(
+            Context ctx,
+            boolean dark,
+            String label,
+            float textSizeSp,
+            int fillColor,
+            int pressedColor,
+            int strokeColor,
+            int textColor,
+            View.OnClickListener onClick
+        ) {
+            TextView btn = new TextView(ctx);
+            btn.setText(AcidLocale.tr(label));
+            btn.setTextColor(textColor);
+            btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp);
+            btn.setTypeface(Typeface.DEFAULT_BOLD);
+            btn.setGravity(Gravity.CENTER);
+            btn.setSingleLine(true);
+            btn.setEllipsize(TextUtils.TruncateAt.END);
+            int padH = AcidTheme.dp(ctx, 10);
+            int padV = AcidTheme.dp(ctx, 10);
+            btn.setPadding(padH, padV, padH, padV);
+            btn.setBackground(AcidTheme.interactiveBg(
+                ctx, fillColor, pressedColor, strokeColor, AcidTheme.RADIUS_CONTROL
+            ));
+            btn.setClickable(true);
+            btn.setFocusable(true);
+            if (onClick != null) {
+                btn.setOnClickListener(onClick);
+            }
+            return btn;
+        }
+
+        public void updateState(int selectedCount, boolean allVisibleSelected, boolean hasVisibleItems) {
+            mBtnSelectAll.setText(AcidLocale.tr(hasVisibleItems && allVisibleSelected ? "取消全选" : "全选"));
+            mBtnSelectAll.setEnabled(hasVisibleItems);
+            mBtnSelectAll.setAlpha(hasVisibleItems ? 1f : 0.45f);
+
+            if (mBtnSecondary != null) {
+                boolean canAct = selectedCount > 0;
+                mBtnSecondary.setEnabled(canAct);
+                mBtnSecondary.setAlpha(canAct ? 1f : 0.45f);
+            }
+
+            boolean canDel = selectedCount > 0;
+            String delLabel = canDel ? ("删除 (" + selectedCount + ")") : "删除";
+            mBtnDelete.setText(AcidLocale.tr(delLabel));
+            mBtnDelete.setEnabled(canDel);
+            mBtnDelete.setAlpha(canDel ? 1f : 0.45f);
+        }
     }
 
     /**

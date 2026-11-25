@@ -388,6 +388,66 @@ public class BookmarkRepository {
         dispatchFlush(flush, true);
     }
 
+    /**
+     * Removes multiple bookmarks by their backing indices in one atomic persistence transaction.
+     */
+    public int removeBookmarksByIndices(Set<Integer> indices) {
+        if (indices == null || indices.isEmpty()) return 0;
+        int removed = 0;
+        PendingFlush flush = null;
+        synchronized (this) {
+            List<BrowserDataStore.EntryItem> list = loadBookmarks();
+            List<BrowserDataStore.EntryItem> remaining = new ArrayList<BrowserDataStore.EntryItem>(list.size());
+            for (int i = 0; i < list.size(); i++) {
+                BrowserDataStore.EntryItem item = list.get(i);
+                if (indices.contains(Integer.valueOf(i))) {
+                    removed++;
+                } else if (item != null) {
+                    remaining.add(item);
+                }
+            }
+            if (removed > 0) {
+                flush = commitListLocked(remaining, true);
+            }
+        }
+        dispatchFlush(flush, true);
+        return removed;
+    }
+
+    /**
+     * Moves multiple bookmarks identified by backing indices into {@code targetFolder}
+     * (or uncategorized when empty) in a single atomic transaction.
+     */
+    public int moveBookmarksToFolder(Set<Integer> indices, String targetFolder) {
+        if (indices == null || indices.isEmpty()) return 0;
+        String normFolder = NetscapeBookmarkCodec.normalizeFolderPath(targetFolder);
+        long now = System.currentTimeMillis();
+        int matched = 0;
+        int mutated = 0;
+        PendingFlush flush = null;
+
+        synchronized (this) {
+            List<BrowserDataStore.EntryItem> list = loadBookmarks();
+            for (int i = 0; i < list.size(); i++) {
+                if (!indices.contains(Integer.valueOf(i))) continue;
+                BrowserDataStore.EntryItem existing = list.get(i);
+                if (existing == null) continue;
+                matched++;
+                String curFolder = existing.folder != null ? existing.folder : "";
+                if (!normFolder.equals(curFolder)) {
+                    long time = existing.time > 0L ? existing.time : now;
+                    list.set(i, new BrowserDataStore.EntryItem(existing.title, existing.url, time, normFolder));
+                    mutated++;
+                }
+            }
+            if (mutated > 0) {
+                flush = commitListLocked(list, true);
+            }
+        }
+        dispatchFlush(flush, true);
+        return matched;
+    }
+
     public boolean updateBookmark(int index, String title, String url) {
         return updateBookmarkInternal(index, title, url, null, false);
     }

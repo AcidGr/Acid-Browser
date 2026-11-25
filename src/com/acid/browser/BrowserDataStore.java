@@ -15,6 +15,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
@@ -903,6 +904,14 @@ public class BrowserDataStore {
         mBookmarkRepo.removeBookmark(index);
     }
 
+    public int removeBookmarks(Set<Integer> indices) {
+        return mBookmarkRepo.removeBookmarksByIndices(indices);
+    }
+
+    public int moveBookmarksToFolder(Set<Integer> indices, String targetFolder) {
+        return mBookmarkRepo.moveBookmarksToFolder(indices, targetFolder);
+    }
+
     public boolean updateBookmark(int index, String title, String url) {
         return mBookmarkRepo.updateBookmark(index, title, url);
     }
@@ -945,6 +954,14 @@ public class BrowserDataStore {
 
     public void clearHistory() {
         mHistoryRepo.clearHistory();
+    }
+
+    public boolean removeHistoryItem(String url) {
+        return mHistoryRepo.removeHistoryItem(url);
+    }
+
+    public int removeHistoryItems(Set<String> urls) {
+        return mHistoryRepo.removeHistoryByUrls(urls);
     }
 
     public boolean saveHistoryToJsonFile() {

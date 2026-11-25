@@ -249,7 +249,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onBookmarksChanged() {
                 if (mBookmarksHistorySheet != null && mBookmarksHistorySheet.isShowing()) {
-                    mBookmarksHistorySheet.refreshActivePage();
+                    mBookmarksHistorySheet.onBookmarksStoreChanged();
                 }
             }
         });
@@ -257,7 +257,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             @Override
             public void onHistoryChanged() {
                 if (mBookmarksHistorySheet != null && mBookmarksHistorySheet.isShowing()) {
-                    mBookmarksHistorySheet.refreshActivePage();
+                    mBookmarksHistorySheet.onHistoryStoreChanged();
                 }
             }
         });

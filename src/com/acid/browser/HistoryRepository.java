@@ -10,7 +10,9 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -150,6 +152,67 @@ public class HistoryRepository {
                 }
             }
         });
+    }
+
+    public boolean removeHistoryItem(String url) {
+        if (TextUtils.isEmpty(url)) return false;
+        return removeHistoryByUrls(Collections.singleton(url)) > 0;
+    }
+
+    /**
+     * Removes all history entries whose URL appears in {@code urls} in one atomic rewrite.
+     */
+    public int removeHistoryByUrls(Set<String> urls) {
+        if (urls == null || urls.isEmpty()) return 0;
+        int removed = 0;
+        final JSONArray snapshot;
+        final long rev;
+
+        synchronized (this) {
+            SharedPreferences prefs = prefs();
+            String raw = prefs.getString(PREF_HISTORY, null);
+            if (raw == null) return 0;
+            JSONArray next = new JSONArray();
+            try {
+                JSONArray arr = new JSONArray(raw);
+                for (int i = 0; i < arr.length(); i++) {
+                    BrowserDataStore.EntryItem item = decodeHistoryEntry(arr.optJSONObject(i), i);
+                    if (item == null) continue;
+                    if (urls.contains(item.url)) {
+                        removed++;
+                        continue;
+                    }
+                    JSONObject o = new JSONObject();
+                    o.put("title", item.title);
+                    o.put("url", item.url);
+                    o.put("time", item.time);
+                    next.put(o);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to remove history entries: " + e.getMessage(), e);
+                return 0;
+            }
+            if (removed == 0) return 0;
+
+            rev = mHistoryRevision.incrementAndGet();
+            prefs
+                .edit()
+                .putString(PREF_HISTORY, next.toString())
+                .putBoolean(PREF_HISTORY_PENDING_SYNC, true)
+                .apply();
+            snapshot = next;
+        }
+
+        dispatchJsonSave(snapshot, rev);
+        dispatchCallback(new Runnable() {
+            @Override
+            public void run() {
+                if (mHistoryChangedListener != null) {
+                    mHistoryChangedListener.onHistoryChanged();
+                }
+            }
+        });
+        return removed;
     }
 
     public boolean saveHistoryToJsonFile() {

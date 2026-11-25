@@ -463,6 +463,14 @@ public class AcidBottomSheetView extends FrameLayout implements AcidOverlay {
         mScrollView.setMaxHeightPx(maxScroll);
     }
 
+    /**
+     * Recomputes the scrollable body ceiling after a subclass dynamically populates or clears
+     * {@link #getPinnedFooterContainer()} outside a full page render.
+     */
+    protected void refreshScrollCeiling() {
+        updateScrollCeiling();
+    }
+
     public void setOnScrollNearBottomListener(OnScrollNearBottomListener listener) {
         mScrollView.setOnScrollNearBottomListener(
             listener,
