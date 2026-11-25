@@ -711,16 +711,19 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         }
     }
 
-    public void updateToolCard(AcidSessionStore.UiMessageItem item) {
-        updateUiMessageItem(item);
+    private static String resolveToolHolderKey(AcidSessionStore.UiMessageItem item) {
+        if (item == null) return null;
+        if (item.id != null && !item.id.isEmpty()) return item.id;
+        return item.toolCallId;
     }
 
     public void updateUiMessageItem(AcidSessionStore.UiMessageItem item) {
         if (item == null) return;
         String type = item.type != null ? item.type : "";
         if (AcidSessionStore.TYPE_TOOL.equals(type)) {
-            if (item.toolCallId != null) {
-                ToolCardHolder holder = mToolCardHolders.get(item.toolCallId);
+            String key = resolveToolHolderKey(item);
+            if (key != null) {
+                ToolCardHolder holder = mToolCardHolders.get(key);
                 if (holder != null) {
                     holder.bind(item, mIsDarkMode);
                 }
@@ -729,7 +732,7 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             if (item.id != null) {
                 ThinkingViewHolder holder = mThinkingHolders.get(item.id);
                 if (holder != null) {
-                    holder.update(item, mIsDarkMode);
+                    holder.bind(item);
                 }
             }
         } else if (AcidSessionStore.TYPE_ASSISTANT.equals(type)) {
@@ -836,8 +839,9 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         } else if (AcidSessionStore.TYPE_TOOL.equals(type)) {
             ToolCardHolder holder = new ToolCardHolder(getContext());
             holder.bind(item, mIsDarkMode);
-            if (item.toolCallId != null && !item.toolCallId.isEmpty()) {
-                mToolCardHolders.put(item.toolCallId, holder);
+            String key = resolveToolHolderKey(item);
+            if (key != null && !key.isEmpty()) {
+                mToolCardHolders.put(key, holder);
             }
             return holder.rootView;
         } else if (AcidSessionStore.TYPE_ERROR.equals(type)) {
@@ -988,10 +992,6 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         head.addView(icon);
 
         final TextView title = new TextView(ctx);
-        String preview = item.text != null ? item.text.replace("\n", " ").trim() : "";
-        if ("null".equals(preview)) preview = "";
-        if (preview.length() > 36) preview = preview.substring(0, 36) + "...";
-        title.setText(AcidLocale.tr(item.isRunning ? ("思考中 · " + preview) : ("思考过程 · " + preview)));
         title.setTextColor(muted);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
         title.setSingleLine(true);
@@ -1002,38 +1002,31 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
 
         final AcidIcons.SvgIconView chevron = new AcidIcons.SvgIconView(
             ctx,
-            item.isRunning ? AcidIcons.ICON_CHEVRON_UP : AcidIcons.ICON_CHEVRON_DOWN,
+            AcidIcons.ICON_CHEVRON_DOWN,
             muted,
             14
         );
         head.addView(chevron);
         card.addView(head);
 
-        String bodyText = item.text != null ? item.text : "";
-        if ("null".equals(bodyText)) bodyText = "";
         final TextView body = new TextView(ctx);
-        body.setText(bodyText);
         body.setTextColor(muted);
         body.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_FIELD_LABEL);
         body.setPadding(0, AcidTheme.dp(ctx, 6), 0, AcidTheme.dp(ctx, 2));
         body.setTextIsSelectable(true);
-        body.setVisibility(item.isRunning ? View.VISIBLE : View.GONE);
         card.addView(body);
 
-        if (!item.isRunning && (bodyText.trim().isEmpty() || "null".equals(bodyText.trim()))) {
-            card.setVisibility(View.GONE);
-        }
+        final ThinkingViewHolder holder = new ThinkingViewHolder(card, title, body, chevron, item.isRunning);
+        holder.bind(item);
 
         head.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
-                boolean expand = (body.getVisibility() != View.VISIBLE);
-                body.setVisibility(expand ? View.VISIBLE : View.GONE);
-                chevron.setIcon(expand ? AcidIcons.ICON_CHEVRON_UP : AcidIcons.ICON_CHEVRON_DOWN);
+                holder.toggleExpanded();
             }
         });
 
-        return new ThinkingViewHolder(card, title, body, chevron);
+        return holder;
     }
 
     private AssistantViewHolder buildAssistantViewHolder(AcidSessionStore.UiMessageItem item) {
@@ -1118,38 +1111,94 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
         return row;
     }
 
+    static final class ThinkingCollapseState {
+        boolean wasRunning;
+        boolean expanded;
+        boolean userCollapsedWhileRunning;
+
+        ThinkingCollapseState(boolean initialRunning) {
+            this.wasRunning = initialRunning;
+            this.expanded = initialRunning;
+            this.userCollapsedWhileRunning = false;
+        }
+
+        void onUserToggle() {
+            expanded = !expanded;
+            if (wasRunning) {
+                userCollapsedWhileRunning = !expanded;
+            }
+        }
+
+        void onBind(boolean isRunning) {
+            if (isRunning) {
+                if (!wasRunning) {
+                    wasRunning = true;
+                    userCollapsedWhileRunning = false;
+                    expanded = true;
+                } else if (!userCollapsedWhileRunning) {
+                    expanded = true;
+                }
+            } else {
+                if (wasRunning) {
+                    wasRunning = false;
+                    userCollapsedWhileRunning = false;
+                    expanded = false;
+                }
+            }
+        }
+    }
+
     private static class ThinkingViewHolder {
         public final View rootView;
         private final TextView mTitleView;
         private final TextView mBodyView;
         private final AcidIcons.SvgIconView mChevron;
+        private final ThinkingCollapseState mState;
 
-        public ThinkingViewHolder(View root, TextView title, TextView body, AcidIcons.SvgIconView chevron) {
+        public ThinkingViewHolder(
+            View root,
+            TextView title,
+            TextView body,
+            AcidIcons.SvgIconView chevron,
+            boolean initialRunning
+        ) {
             this.rootView = root;
             this.mTitleView = title;
             this.mBodyView = body;
             this.mChevron = chevron;
+            this.mState = new ThinkingCollapseState(initialRunning);
         }
 
-        public void update(AcidSessionStore.UiMessageItem item, boolean isDarkMode) {
-            String text = item.text != null ? item.text : "";
-            if (text.trim().isEmpty() || "null".equals(text.trim())) {
+        public void toggleExpanded() {
+            mState.onUserToggle();
+            applyExpandedVisual();
+        }
+
+        public void bind(AcidSessionStore.UiMessageItem item) {
+            String rawText = item.text != null ? item.text : "";
+            if ("null".equals(rawText.trim())) {
+                rawText = "";
+            }
+            mState.onBind(item.isRunning);
+            if (!item.isRunning && rawText.trim().isEmpty()) {
                 rootView.setVisibility(View.GONE);
                 return;
             }
             rootView.setVisibility(View.VISIBLE);
-            mBodyView.setText(text);
-            String preview = text.replace("\n", " ").trim();
-            if (preview.length() > 36) preview = preview.substring(0, 36) + "...";
+            mBodyView.setText(rawText);
             if (item.isRunning) {
-                mTitleView.setText(AcidLocale.tr("思考中 · " + preview));
-                if (mBodyView.getVisibility() != View.VISIBLE) {
-                    mBodyView.setVisibility(View.VISIBLE);
-                    mChevron.setIcon(AcidIcons.ICON_CHEVRON_UP);
-                }
+                String preview = AgentBannerView.extractSingleLineTail(rawText, 36);
+                mTitleView.setText(AcidLocale.tr(preview.isEmpty() ? "思考中..." : ("思考中 · " + preview)));
             } else {
+                String preview = AgentBannerView.extractSingleLineHead(rawText, 36);
                 mTitleView.setText(AcidLocale.tr("思考过程 · " + preview));
             }
+            applyExpandedVisual();
+        }
+
+        private void applyExpandedVisual() {
+            mBodyView.setVisibility(mState.expanded ? View.VISIBLE : View.GONE);
+            mChevron.setIcon(mState.expanded ? AcidIcons.ICON_CHEVRON_UP : AcidIcons.ICON_CHEVRON_DOWN);
         }
     }
 
@@ -1337,7 +1386,9 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mTvToolName.setTextColor(toolColor);
 
             String summaryText = item.toolSummary != null ? item.toolSummary : "";
-            if (summaryText.startsWith("加载技能 · ")) {
+            if (summaryText.startsWith("加载技能 · ")
+                    || summaryText.startsWith("生成参数中 (")
+                    || "正在准备参数...".equals(summaryText)) {
                 summaryText = AcidLocale.tr(summaryText);
             }
             mTvSummary.setText(summaryText);
@@ -1372,6 +1423,8 @@ public class AgentFloatingView extends FrameLayout implements AcidOverlay {
             mTvArgsCode.setText(item.toolArgsJson != null ? item.toolArgsJson : "{}");
             String resText = item.toolResult != null ? item.toolResult : "";
             if ("正在执行...".equals(resText)
+                || "正在生成调用参数...".equals(resText)
+                || "[流式传输中断]".equals(resText)
                 || "[任务已由用户手动停止]".equals(resText)
                 || "[用户接管，任务等待]".equals(resText)
                 || "[已收到新指令]".equals(resText)

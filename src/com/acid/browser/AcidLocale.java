@@ -290,6 +290,19 @@ public final class AcidLocale {
         if (s.startsWith("加载技能 · ")) {
             return "Load skill · " + s.substring(7);
         }
+        if (s.startsWith("生成参数中 (") && s.endsWith(" 字符)")) {
+            String count = s.substring(7, s.length() - 4).trim();
+            return "Streaming args (" + count + " chars)";
+        }
+        int streamGenIdx = s.indexOf(" · 生成参数中 (");
+        if (streamGenIdx > 0 && s.endsWith(" 字符)")) {
+            String toolPrefix = s.substring(0, streamGenIdx);
+            String count = s.substring(streamGenIdx + 10, s.length() - 4).trim();
+            return toolPrefix + " · Streaming args (" + count + " chars)";
+        }
+        if (s.endsWith(" · 正在准备参数...")) {
+            return s.substring(0, s.length() - 12) + " · Preparing arguments...";
+        }
         if (s.startsWith("当前供应商 [") && s.contains("] 尚未配置 API Key！")) {
             int close = s.indexOf("] 尚未配置 API Key！");
             String pName = s.substring(7, close);
@@ -305,7 +318,11 @@ public final class AcidLocale {
         }
         if (s.startsWith("请人工协助: ")) {
             String r = s.substring(7);
-            return "Human Takeover: " + ("请完成页面操作".equals(r) ? "Please complete the action on page" : r);
+            if ("请完成页面操作".equals(r)) {
+                return "Human Takeover: Please complete the action on page";
+            }
+            String mapped = EN_MAP.get(r);
+            return "Human Takeover: " + (mapped != null ? mapped : r);
         }
         if (s.startsWith("已拦截 ") && s.endsWith(" 次")) {
             return "Blocked " + s.substring(4, s.length() - 2).trim() + " times";
@@ -823,7 +840,13 @@ public final class AcidLocale {
         EN_MAP.put("点击查看", "View Tab");
         EN_MAP.put("自动化运行中 · 页面触控已锁定", "Agent running · Touch locked");
         EN_MAP.put("后台自动化进行中 · 当前页可自由浏览", "Agent running in background · Free to browse");
+        EN_MAP.put("Agent 运行中 · 正在思考准备...", "Agent running · Preparing...");
+        EN_MAP.put("查看对话", "View Chat");
+        EN_MAP.put("正在准备参数...", "Preparing arguments...");
+        EN_MAP.put("正在生成调用参数...", "Streaming tool arguments...");
+        EN_MAP.put("[流式传输中断]", "[Stream interrupted]");
         EN_MAP.put("用户主动接管", "User took over manually");
+        EN_MAP.put("需要人工协助完成当前页面操作（如登录或验证码）", "Manual action required on page (e.g. login or CAPTCHA)");
         EN_MAP.put("思考中...", "Thinking...");
         EN_MAP.put("正在回答...", "Replying...");
         EN_MAP.put("[AI LOCK] AI 正在操作此网页，如需手动操作请点击顶部 [点此接管]", "[AI LOCK] Agent is controlling this page. Tap [Take Over] at top for manual control.");

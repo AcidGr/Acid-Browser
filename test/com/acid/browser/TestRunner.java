@@ -4297,5 +4297,165 @@ public final class TestRunner {
             }
         });
         assertEquals(Integer.valueOf(1), Integer.valueOf(cbCount[0]), "Default hardware hook invokes callback once");
+
+        // 6. AgentThinkingCollapseState, AgentBannerView tail-following & full takeover presentation
+        AgentFloatingView.ThinkingCollapseState liveThink = new AgentFloatingView.ThinkingCollapseState(true);
+        assertTrue(liveThink.expanded, "Live thinking block starts expanded while streaming");
+        liveThink.onBind(true);
+        assertTrue(liveThink.expanded, "Live thinking stays expanded across streaming updates");
+        liveThink.onUserToggle();
+        assertTrue(!liveThink.expanded, "User can collapse thinking block mid-stream");
+        liveThink.onBind(true);
+        assertTrue(!liveThink.expanded, "Mid-stream user collapse is preserved across streaming updates");
+        liveThink.onUserToggle();
+        assertTrue(liveThink.expanded, "User can re-expand thinking block mid-stream");
+        liveThink.onBind(false);
+        assertTrue(!liveThink.expanded, "Thinking block auto-collapses once streaming finishes");
+        liveThink.onUserToggle();
+        assertTrue(liveThink.expanded, "User can reopen finished thinking block");
+        liveThink.onBind(false);
+        assertTrue(liveThink.expanded, "Subsequent non-running binds keep user-opened finished block open");
+
+        AgentFloatingView.ThinkingCollapseState historyThink = new AgentFloatingView.ThinkingCollapseState(false);
+        assertTrue(!historyThink.expanded, "Historical finished thinking block starts collapsed");
+
+        assertEquals("hello world", AgentBannerView.extractSingleLineTail("  hello \n  world  ", 20),
+            "Short tail preserves full normalized text without ellipsis");
+        assertEquals("\u2026latest words", AgentBannerView.extractSingleLineTail("first part then\n  latest   words ", 12),
+            "Long tail trims from start and preserves newest trailing characters");
+        assertEquals("", AgentBannerView.extractSingleLineTail("  null \n ", 20),
+            "Null placeholder collapses to empty tail");
+        assertEquals("first part...", AgentBannerView.extractSingleLineHead("  first\n  part   and more", 10),
+            "Head summary preserves leading characters with trailing ellipsis");
+
+        AcidSessionStore.UiMessageItem thinkItem = new AcidSessionStore.UiMessageItem();
+        thinkItem.id = "think_1";
+        thinkItem.type = AcidSessionStore.TYPE_THINKING;
+        thinkItem.isRunning = true;
+        thinkItem.text = "Analyzing step one.\nNow inspecting checkout button at bottom";
+        AgentBannerView.ActivitySummary thinkSummary = AgentBannerView.summarizeUiItem(thinkItem);
+        assertEquals("思考: ", thinkSummary.prefix, "Thinking summary splits prefix");
+        assertEquals(Integer.valueOf(AgentBannerView.ELLIPSIZE_START), Integer.valueOf(thinkSummary.ellipsizeMode),
+            "Thinking summary uses start ellipsizing to keep newest tail visible");
+        assertTrue(thinkSummary.body.endsWith("checkout button at bottom"),
+            "Thinking summary keeps trailing phrase");
+
+        AcidSessionStore.UiMessageItem replyItem = new AcidSessionStore.UiMessageItem();
+        replyItem.id = "reply_1";
+        replyItem.type = AcidSessionStore.TYPE_ASSISTANT;
+        replyItem.isRunning = true;
+        replyItem.text = "Done checking.\nHere is the final answer.";
+        AgentBannerView.ActivitySummary replySummary = AgentBannerView.summarizeUiItem(replyItem);
+        assertEquals("回答: ", replySummary.prefix, "Assistant summary splits prefix");
+        assertEquals(Integer.valueOf(AgentBannerView.ELLIPSIZE_START), Integer.valueOf(replySummary.ellipsizeMode),
+            "Assistant summary uses start ellipsizing");
+        assertTrue(replySummary.body.endsWith("Here is the final answer."),
+            "Assistant summary keeps trailing phrase");
+
+        AcidSessionStore.UiMessageItem toolItem = new AcidSessionStore.UiMessageItem();
+        toolItem.id = "tool_1";
+        toolItem.type = AcidSessionStore.TYPE_TOOL;
+        toolItem.isRunning = true;
+        toolItem.toolName = "browser";
+        toolItem.toolSummary = "navigate · https://example.com";
+        AgentBannerView.ActivitySummary toolSummary = AgentBannerView.summarizeUiItem(toolItem);
+        assertEquals("[工具] ", toolSummary.prefix, "Tool summary keeps tool prefix");
+        assertEquals(Integer.valueOf(AgentBannerView.ELLIPSIZE_END), Integer.valueOf(toolSummary.ellipsizeMode),
+            "Tool summary keeps end ellipsizing");
+
+        thinkItem.isRunning = false;
+        assertTrue(!AgentBannerView.shouldAcceptItemUpdate("reply_1", thinkItem),
+            "Closing earlier thinking item does not overwrite newer active reply in banner");
+        assertTrue(AgentBannerView.shouldAcceptItemUpdate("think_1", thinkItem),
+            "Final update for active item is still accepted when no newer item replaced it");
+
+        AgentBannerView.BannerPresentation agentBanner = AgentBannerView.resolvePresentation(
+            AgentOverlayView.MODE_AGENT, true, true, "", replySummary, false, false
+        );
+        assertTrue(agentBanner.visible && agentBanner.singleLine && agentBanner.maxLines == 1,
+            "Running agent banner stays single-line");
+        assertEquals("回答: ", agentBanner.prefixText, "Running agent banner retains separate prefix");
+        assertEquals(Integer.valueOf(AgentBannerView.ELLIPSIZE_START), Integer.valueOf(agentBanner.ellipsizeMode),
+            "Running agent banner passes start ellipsize for reply stream");
+
+        AgentBannerView.BannerPresentation runningUnlockedFgBanner = AgentBannerView.resolvePresentation(
+            AgentOverlayView.MODE_HUMAN, true, true, "", null, false, false
+        );
+        assertTrue(runningUnlockedFgBanner.visible,
+            "Top banner shows immediately when agent is running in MODE_HUMAN");
+        assertEquals("查看对话", runningUnlockedFgBanner.actionLabel,
+            "Foreground MODE_HUMAN running banner offers View Chat button");
+
+        AgentBannerView.BannerPresentation runningUnlockedBgBanner = AgentBannerView.resolvePresentation(
+            AgentOverlayView.MODE_HUMAN, true, false, "", null, false, false
+        );
+        assertTrue(runningUnlockedBgBanner.visible,
+            "Background MODE_HUMAN running banner is also visible");
+        assertEquals("点击查看", runningUnlockedBgBanner.actionLabel,
+            "Background MODE_HUMAN running banner offers View Tab button");
+
+        AgentBannerView.BannerPresentation idleHiddenBanner = AgentBannerView.resolvePresentation(
+            AgentOverlayView.MODE_HUMAN, false, true, "", replySummary, false, false
+        );
+        assertTrue(!idleHiddenBanner.visible,
+            "Banner hides once agent stops running in MODE_HUMAN");
+
+        String longTakeoverReason = "当前页面需要进行滑块验证码并输入短信动态码。\n\n"
+            + "请手动完成登录后再点击右侧「交还AI」，我会继续帮你提交表单并下载最终附件。";
+        AgentBannerView.BannerPresentation takeoverBanner = AgentBannerView.resolvePresentation(
+            AgentOverlayView.MODE_TAKEOVER_REQUESTED, false, true, longTakeoverReason, replySummary, false, false
+        );
+        assertTrue(takeoverBanner.visible && !takeoverBanner.singleLine,
+            "Takeover banner disables single-line restriction");
+        assertEquals(Integer.valueOf(AgentBannerView.TAKEOVER_COLLAPSED_MAX_LINES), Integer.valueOf(takeoverBanner.maxLines),
+            "Takeover banner defaults to generous multi-line cap");
+        assertEquals("", takeoverBanner.prefixText, "Takeover banner leaves prefix empty for clean wrapping");
+        assertTrue(takeoverBanner.statusText.contains(longTakeoverReason),
+            "Takeover banner preserves entire multi-sentence reason without truncation");
+        assertTrue(takeoverBanner.statusClickable, "Takeover banner text is clickable for extra-long expansion");
+
+        AgentBannerView.BannerPresentation takeoverExpandedBanner = AgentBannerView.resolvePresentation(
+            AgentOverlayView.MODE_TAKEOVER_REQUESTED, false, true, longTakeoverReason, replySummary, true, false
+        );
+        assertEquals(Integer.valueOf(Integer.MAX_VALUE), Integer.valueOf(takeoverExpandedBanner.maxLines),
+            "Expanded takeover banner shows unlimited lines");
+        assertEquals(Integer.valueOf(AgentBannerView.ELLIPSIZE_NONE), Integer.valueOf(takeoverExpandedBanner.ellipsizeMode),
+            "Expanded takeover banner clears ellipsize");
+
+        AcidAgentLoop.ThinkStreamParser flushParser = new AcidAgentLoop.ThinkStreamParser();
+        flushParser.feedContentDelta("好的，现在开始写脚本<");
+        assertEquals("好的，现在开始写脚本", flushParser.contentSb.toString(),
+            "Partial '<' suffix is held while streaming content");
+        flushParser.flushPendingBeforeToolCalls();
+        assertEquals("好的，现在开始写脚本<", flushParser.contentSb.toString(),
+            "flushPendingBeforeToolCalls flushes held-back trailing chars before tool calls start");
+
+        AcidSessionStore.UiMessageItem streamingToolItem = new AcidSessionStore.UiMessageItem();
+        streamingToolItem.id = "tool_stream_1";
+        streamingToolItem.type = AcidSessionStore.TYPE_TOOL;
+        streamingToolItem.isRunning = true;
+        streamingToolItem.toolName = "write";
+        streamingToolItem.toolSummary = AcidAgentLoop.formatStreamingToolSummary(1280);
+        AgentBannerView.ActivitySummary streamingToolSummary = AgentBannerView.summarizeUiItem(streamingToolItem);
+        assertEquals("[工具] ", streamingToolSummary.prefix, "Streaming tool summary uses tool prefix");
+        assertEquals("write · 生成参数中 (1280 字符)", streamingToolSummary.body,
+            "Streaming tool summary includes tool name and arg character progress");
+        AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_EN);
+        try {
+            assertEquals("write · Streaming args (1280 chars)",
+                AcidLocale.tr(streamingToolSummary.body),
+                "Streaming tool summary translates cleanly to English");
+        } finally {
+            AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_ZH);
+        }
+
+        try {
+            org.json.JSONObject takeoverArgs = new org.json.JSONObject();
+            takeoverArgs.put("action", "request_takeover");
+            takeoverArgs.put("reason", "需要完成图形验证码");
+            assertEquals("request_takeover · 需要完成图形验证码",
+                AcidAgentLoop.summarizeToolArgs("browser", takeoverArgs),
+                "request_takeover tool summary includes reason");
+        } catch (org.json.JSONException ignored) {}
     }
 }

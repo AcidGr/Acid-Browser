@@ -1,6 +1,13 @@
 package android.text;
 
 public final class TextUtils {
+    public enum TruncateAt {
+        START,
+        MIDDLE,
+        END,
+        MARQUEE
+    }
+
     private TextUtils() {}
 
     public static boolean isEmpty(CharSequence str) {
