@@ -67,15 +67,25 @@ public class BrowserDataStore {
         public final String title;
         public final String url;
         public final long time;
+        public final String folder;
 
         public EntryItem(String title, String url) {
-            this(title, url, 0);
+            this(title, url, 0L, "");
         }
 
         public EntryItem(String title, String url, long time) {
+            this(title, url, time, "");
+        }
+
+        public EntryItem(String title, String url, String folder) {
+            this(title, url, 0L, folder);
+        }
+
+        public EntryItem(String title, String url, long time, String folder) {
             this.title = title != null ? title : "";
             this.url = url != null ? url : "";
             this.time = time;
+            this.folder = NetscapeBookmarkCodec.normalizeFolderPath(folder);
         }
     }
 
@@ -885,12 +895,40 @@ public class BrowserDataStore {
         mBookmarkRepo.addBookmark(title, url);
     }
 
+    public void addBookmark(String title, String url, String folder) {
+        mBookmarkRepo.addBookmark(title, url, folder);
+    }
+
     public void removeBookmark(int index) {
         mBookmarkRepo.removeBookmark(index);
     }
 
     public boolean updateBookmark(int index, String title, String url) {
         return mBookmarkRepo.updateBookmark(index, title, url);
+    }
+
+    public boolean updateBookmark(int index, String title, String url, String folder) {
+        return mBookmarkRepo.updateBookmark(index, title, url, folder);
+    }
+
+    public BookmarkRepository.ImportSummary importBookmarks(List<EntryItem> incoming) {
+        return mBookmarkRepo.importBookmarks(incoming);
+    }
+
+    public List<String> listBookmarkFolders() {
+        return mBookmarkRepo.listFolders();
+    }
+
+    public int renameBookmarkFolder(String oldFolder, String newFolder) {
+        return mBookmarkRepo.renameFolder(oldFolder, newFolder);
+    }
+
+    public int dissolveBookmarkFolder(String targetFolder) {
+        return mBookmarkRepo.dissolveFolder(targetFolder);
+    }
+
+    public int deleteBookmarkFolder(String targetFolder) {
+        return mBookmarkRepo.deleteFolderBookmarks(targetFolder);
     }
 
     // =========================================================================

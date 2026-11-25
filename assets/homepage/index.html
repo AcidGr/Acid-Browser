@@ -120,7 +120,50 @@
         /* 搜索栏（固定在顶部区域底部） */
         .search-container {
             width: 100%;
-            margin-bottom: 16px;
+            margin-bottom: 12px;
+        }
+
+        /* 文件夹过滤胶囊栏（无分类目录时自动隐藏，保持原主页极简外观） */
+        .folder-bar {
+            width: 100%;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            padding: 2px 2px 10px;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        .folder-bar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .folder-pill {
+            flex-shrink: 0;
+            border: 1px solid var(--card-border);
+            background: var(--card-bg);
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.2;
+            padding: 6px 12px;
+            border-radius: 999px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: transform 0.12s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .folder-pill:active {
+            transform: scale(0.94);
+        }
+
+        .folder-pill.active {
+            background: #2563EB;
+            border-color: #2563EB;
+            color: #FFFFFF;
         }
 
         .search-form {
@@ -319,6 +362,8 @@
                     </button>
                 </form>
             </div>
+
+            <div class="folder-bar" id="folder-bar" style="display:none"></div>
         </div>
 
         <!-- 独立可向下滚动的实时书签收藏网格 -->
@@ -360,44 +405,97 @@
         }
 
         const BOOKMARKS_SNAP_KEY = 'acid_bookmarks_snap_v2';
-        const ICON_DATA_CACHE_KEY = 'acid_favicon_data_v2';
+        const FOLDER_TAB_SESSION_KEY = 'acid_home_folder_v1';
+        const MAX_LOCAL_ICON_CACHE = 40;
+        const RENDER_CHUNK_SIZE = 80;
+        const FOLDER_UNCATEGORIZED = '__uncategorized__';
+        const FOLDER_ALL = '__all__';
 
-        let iconDataMap = {};
+        let isEnglishUi = false;
+        const iconDataMap = {};
         try {
-            const raw = localStorage.getItem(ICON_DATA_CACHE_KEY);
-            if (raw) iconDataMap = JSON.parse(raw) || {};
+            localStorage.removeItem('acid_favicon_data_v2');
         } catch (e) {}
 
         function saveIconDataToCache(host, dataUri) {
             if (!host || !dataUri) return;
             if (iconDataMap[host] === dataUri) return;
             iconDataMap[host] = dataUri;
-            try {
-                localStorage.setItem(ICON_DATA_CACHE_KEY, JSON.stringify(iconDataMap));
-            } catch (e) {}
+            const keys = Object.keys(iconDataMap);
+            if (keys.length > MAX_LOCAL_ICON_CACHE) {
+                for (let i = 0; i < keys.length - MAX_LOCAL_ICON_CACHE; i++) {
+                    delete iconDataMap[keys[i]];
+                }
+            }
         }
 
         // 离屏静默加载尚未缓存的站点图标（使用 new Image 避免 file:// 下 fetch 跨域限制）：
-        // - 默认保持彩色首字母状态稳态显示（绝不留白、绝不闪烁）
-        // - 仅当后台真正加载出有效图标时才无感替换，同时由原生层自动写入 cache/favicons/ 持久化
+        // - 同域名多个书签共享同一探测队列，加载成功后一次性刷新全部同域名磁贴
+        // - 结合 IntersectionObserver 按需加载，避免批量导入数百书签时瞬间并发挤爆探测队列
         const pendingFetches = {};
-        function revalidateFaviconSilently(host, wrapper, title) {
+        const hostWrappersMap = {};
+        const loadedHostIconUrl = {};
+
+        function applyLoadedIconToEntry(entry, iconSrc) {
+            if (!entry || !entry.wrapper || !iconSrc) return;
+            const existing = entry.wrapper.querySelector('img.tile-favicon');
+            if (existing && existing.getAttribute('src') === iconSrc) return;
+            const img = document.createElement('img');
+            img.className = 'tile-favicon';
+            img.alt = entry.title || '';
+            img.src = iconSrc;
+            entry.wrapper.innerHTML = '';
+            entry.wrapper.appendChild(img);
+        }
+
+        function revalidateFaviconSilently(host) {
             if (!host || pendingFetches[host]) return;
+            if (loadedHostIconUrl[host]) {
+                const list = hostWrappersMap[host] || [];
+                for (let i = 0; i < list.length; i++) {
+                    applyLoadedIconToEntry(list[i], loadedHostIconUrl[host]);
+                }
+                return;
+            }
             pendingFetches[host] = true;
+            const iconUrl = 'https://acid-favicon.local/icon?host=' + encodeURIComponent(host);
             const probeImg = new Image();
-            probeImg.className = 'tile-favicon';
-            probeImg.alt = title || host;
             probeImg.onload = function() {
                 delete pendingFetches[host];
-                if (probeImg.naturalWidth > 1 && probeImg.naturalHeight > 1 && wrapper) {
-                    wrapper.innerHTML = '';
-                    wrapper.appendChild(probeImg);
+                if (probeImg.naturalWidth > 1 && probeImg.naturalHeight > 1) {
+                    loadedHostIconUrl[host] = iconUrl;
+                    const targets = hostWrappersMap[host] || [];
+                    for (let i = 0; i < targets.length; i++) {
+                        applyLoadedIconToEntry(targets[i], iconUrl);
+                    }
                 }
             };
             probeImg.onerror = function() {
                 delete pendingFetches[host];
             };
-            probeImg.src = 'https://acid-favicon.local/icon?host=' + encodeURIComponent(host);
+            probeImg.src = iconUrl;
+        }
+
+        let tileObserver = null;
+        function resetTileObserver() {
+            if (tileObserver) {
+                tileObserver.disconnect();
+                tileObserver = null;
+            }
+            const scrollRoot = document.getElementById('bookmark-scroll');
+            if (typeof IntersectionObserver !== 'undefined' && scrollRoot) {
+                tileObserver = new IntersectionObserver(function(entries) {
+                    for (let i = 0; i < entries.length; i++) {
+                        const ent = entries[i];
+                        if (!ent.isIntersecting) continue;
+                        const host = ent.target.getAttribute('data-favicon-host');
+                        tileObserver.unobserve(ent.target);
+                        if (host) {
+                            revalidateFaviconSilently(host);
+                        }
+                    }
+                }, { root: scrollRoot, rootMargin: '160px 0px' });
+            }
         }
 
         function getHostKey(url) {
@@ -410,34 +508,202 @@
         }
 
         let lastRenderedSignature = null;
-        const hostWrapperMap = {};
+        let currentAllBookmarks = FALLBACK_BOOKMARKS;
+        let activeFolderKey = null;
+        try {
+            activeFolderKey = sessionStorage.getItem(FOLDER_TAB_SESSION_KEY);
+        } catch (e) {}
+        let filteredBookmarks = [];
+        let renderedTileCount = 0;
 
-        function applyIconToWrapper(wrapper, dataUri, title) {
-            if (!wrapper || !dataUri) return;
-            const currentImg = wrapper.querySelector('img.tile-favicon');
-            if (currentImg && currentImg.getAttribute('src') === dataUri) return;
-            const testImg = new Image();
-            testImg.className = 'tile-favicon';
-            testImg.alt = title || '';
-            testImg.onload = function() {
-                if (testImg.naturalWidth > 1 && testImg.naturalHeight > 1) {
-                    wrapper.innerHTML = '';
-                    wrapper.appendChild(testImg);
+        function computeFolderTabs(items) {
+            const folders = [];
+            const seen = {};
+            let hasUncategorized = false;
+            for (let i = 0; i < items.length; i++) {
+                const it = items[i];
+                if (!it || !it.url) continue;
+                const f = (it.folder && typeof it.folder === 'string') ? it.folder.trim() : '';
+                if (f) {
+                    if (!seen[f]) {
+                        seen[f] = true;
+                        folders.push(f);
+                    }
+                } else {
+                    hasUncategorized = true;
                 }
-            };
-            testImg.src = dataUri;
+            }
+            if (folders.length === 0) {
+                return null;
+            }
+            const tabs = [];
+            if (hasUncategorized) {
+                tabs.push({ key: FOLDER_UNCATEGORIZED, label: isEnglishUi ? 'Pinned' : '常用' });
+            }
+            for (let i = 0; i < folders.length; i++) {
+                tabs.push({ key: folders[i], label: folders[i] });
+            }
+            tabs.push({ key: FOLDER_ALL, label: isEnglishUi ? 'All' : '全部' });
+            return tabs;
         }
 
+        function renderFolderBar(tabs) {
+            const bar = document.getElementById('folder-bar');
+            if (!bar) return;
+            if (!tabs || tabs.length === 0) {
+                bar.style.display = 'none';
+                bar.innerHTML = '';
+                activeFolderKey = null;
+                return;
+            }
+            const validKeys = {};
+            for (let i = 0; i < tabs.length; i++) {
+                validKeys[tabs[i].key] = true;
+            }
+            if (!activeFolderKey || !validKeys[activeFolderKey]) {
+                activeFolderKey = tabs[0].key;
+            }
+            bar.style.display = 'flex';
+            bar.innerHTML = '';
+            tabs.forEach(tab => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'folder-pill' + (tab.key === activeFolderKey ? ' active' : '');
+                btn.textContent = tab.label;
+                btn.onclick = function() {
+                    if (activeFolderKey === tab.key) return;
+                    activeFolderKey = tab.key;
+                    try {
+                        sessionStorage.setItem(FOLDER_TAB_SESSION_KEY, activeFolderKey);
+                    } catch (e) {}
+                    const scrollRoot = document.getElementById('bookmark-scroll');
+                    if (scrollRoot) scrollRoot.scrollTop = 0;
+                    renderFolderBar(tabs);
+                    rebuildGridForActiveFolder();
+                };
+                bar.appendChild(btn);
+            });
+        }
+
+        function createBookmarkTileElement(item) {
+            const tile = document.createElement('a');
+            tile.className = 'bookmark-tile';
+            tile.href = item.url;
+            tile.title = item.title;
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tile-icon-wrapper';
+
+            const host = getHostKey(item.url);
+            if (host) {
+                if (!hostWrappersMap[host]) {
+                    hostWrappersMap[host] = [];
+                }
+                hostWrappersMap[host].push({ wrapper: wrapper, title: item.title });
+            }
+
+            const makeAvatar = () => {
+                const avatar = document.createElement('div');
+                avatar.className = 'tile-avatar';
+                avatar.style.background = getDeterministicColor(item.title);
+                avatar.textContent = (item.title.trim()[0] || 'A').toUpperCase();
+                return avatar;
+            };
+
+            const cachedDataUri = item.cachedIcon || item.icon || (host ? (iconDataMap[host] || loadedHostIconUrl[host]) : null);
+            if (cachedDataUri) {
+                const img = document.createElement('img');
+                img.className = 'tile-favicon';
+                img.alt = item.title;
+                img.src = cachedDataUri;
+                img.onerror = function() {
+                    wrapper.innerHTML = '';
+                    wrapper.appendChild(makeAvatar());
+                };
+                wrapper.appendChild(img);
+            } else {
+                wrapper.appendChild(makeAvatar());
+                if (host) {
+                    if (tileObserver) {
+                        wrapper.setAttribute('data-favicon-host', host);
+                        tileObserver.observe(wrapper);
+                    } else {
+                        revalidateFaviconSilently(host);
+                    }
+                }
+            }
+
+            const label = document.createElement('div');
+            label.className = 'tile-title';
+            label.textContent = item.title;
+
+            tile.appendChild(wrapper);
+            tile.appendChild(label);
+            return tile;
+        }
+
+        function appendNextTileChunk() {
+            const grid = document.getElementById('bookmark-grid');
+            if (!grid || renderedTileCount >= filteredBookmarks.length) return;
+            const frag = document.createDocumentFragment();
+            const end = Math.min(filteredBookmarks.length, renderedTileCount + RENDER_CHUNK_SIZE);
+            for (let i = renderedTileCount; i < end; i++) {
+                frag.appendChild(createBookmarkTileElement(filteredBookmarks[i]));
+            }
+            renderedTileCount = end;
+            grid.appendChild(frag);
+            if (renderedTileCount < filteredBookmarks.length && typeof requestAnimationFrame !== 'undefined') {
+                requestAnimationFrame(function() {
+                    const scrollRoot = document.getElementById('bookmark-scroll');
+                    if (scrollRoot && renderedTileCount < filteredBookmarks.length
+                        && scrollRoot.scrollHeight <= scrollRoot.clientHeight + 120) {
+                        appendNextTileChunk();
+                    }
+                });
+            }
+        }
+
+        function rebuildGridForActiveFolder() {
+            const grid = document.getElementById('bookmark-grid');
+            if (!grid) return;
+            grid.innerHTML = '';
+            Object.keys(hostWrappersMap).forEach(k => { delete hostWrappersMap[k]; });
+            resetTileObserver();
+
+            filteredBookmarks = currentAllBookmarks.filter(item => {
+                if (!item || !item.url || !item.title) return false;
+                if (!activeFolderKey || activeFolderKey === FOLDER_ALL) return true;
+                const f = (item.folder && typeof item.folder === 'string') ? item.folder.trim() : '';
+                if (activeFolderKey === FOLDER_UNCATEGORIZED) return !f;
+                return f === activeFolderKey;
+            });
+            renderedTileCount = 0;
+            appendNextTileChunk();
+        }
+
+        (function setupScrollPagination() {
+            const scrollRoot = document.getElementById('bookmark-scroll');
+            if (!scrollRoot) return;
+            scrollRoot.addEventListener('scroll', function() {
+                if (renderedTileCount < filteredBookmarks.length) {
+                    if (scrollRoot.scrollTop + scrollRoot.clientHeight >= scrollRoot.scrollHeight - 240) {
+                        appendNextTileChunk();
+                    }
+                }
+            }, { passive: true });
+        })();
+
         function renderBookmarks(list, persistSnap) {
-            const items = (Array.isArray(list) && list.length > 0) ? list : FALLBACK_BOOKMARKS;
+            const items = Array.isArray(list) ? list : FALLBACK_BOOKMARKS;
             const cleanItems = items.map(it => ({
                 title: (it && it.title) ? it.title : '',
                 url: (it && it.url) ? it.url : '',
-                icon: (it && it.icon) ? it.icon : ''
+                folder: (it && it.folder) ? it.folder : ''
             }));
             const sig = JSON.stringify(cleanItems);
             if (sig === lastRenderedSignature) return;
             lastRenderedSignature = sig;
+            currentAllBookmarks = items;
 
             if (persistSnap) {
                 try {
@@ -445,65 +711,15 @@
                 } catch (e) {}
             }
 
-            const grid = document.getElementById('bookmark-grid');
-            if (!grid) return;
-            grid.innerHTML = '';
-
-            items.forEach(item => {
-                if (!item || !item.url || !item.title) return;
-                const tile = document.createElement('a');
-                tile.className = 'bookmark-tile';
-                tile.href = item.url;
-                tile.title = item.title;
-
-                const wrapper = document.createElement('div');
-                wrapper.className = 'tile-icon-wrapper';
-
-                let host = getHostKey(item.url);
-                if (host) hostWrapperMap[host] = wrapper;
-
-                const makeAvatar = () => {
-                    const avatar = document.createElement('div');
-                    avatar.className = 'tile-avatar';
-                    avatar.style.background = getDeterministicColor(item.title);
-                    avatar.textContent = (item.title.trim()[0] || 'A').toUpperCase();
-                    return avatar;
-                };
-
-                const cachedDataUri = item.icon || (host ? iconDataMap[host] : null);
-                if (cachedDataUri) {
-                    // 已缓存图标：第 0 毫秒直接同步渲染，零网络请求、零闪烁
-                    const img = document.createElement('img');
-                    img.className = 'tile-favicon';
-                    img.alt = item.title;
-                    img.src = cachedDataUri;
-                    img.onerror = function() {
-                        wrapper.innerHTML = '';
-                        wrapper.appendChild(makeAvatar());
-                    };
-                    wrapper.appendChild(img);
-                } else {
-                    // 尚未缓存图标：第 0 毫秒先稳稳展示默认首字母状态（绝不留白、绝不闪烁），后台静默探测
-                    wrapper.appendChild(makeAvatar());
-                }
-
-                if (host && !cachedDataUri) {
-                    revalidateFaviconSilently(host, wrapper, item.title);
-                }
-
-                const label = document.createElement('div');
-                label.className = 'tile-title';
-                label.textContent = item.title;
-
-                tile.appendChild(wrapper);
-                tile.appendChild(label);
-                grid.appendChild(tile);
-            });
+            const tabs = computeFolderTabs(items);
+            renderFolderBar(tabs);
+            rebuildGridForActiveFolder();
         }
 
         // 1. 首屏第 0 毫秒同步渲染 <head> 中 preload.js 注入的真实书签与本地已缓存的 Base64 图标（0 延迟、0 闪烁）
         window.__updateAcidLanguage = function(lang) {
             const isEn = (lang === 'en') || (!lang && (navigator.language || '').toLowerCase().indexOf('en') === 0);
+            isEnglishUi = isEn;
             if (document.documentElement) {
                 document.documentElement.lang = isEn ? 'en' : 'zh-CN';
             }
@@ -519,15 +735,18 @@
             if (btn) {
                 btn.setAttribute('aria-label', isEn ? 'Search' : '搜索');
             }
+            if (Array.isArray(currentAllBookmarks)) {
+                renderFolderBar(computeFolderTabs(currentAllBookmarks));
+            }
         };
         window.__updateAcidLanguage(window.__ACID_LANG);
 
         (function initFirstPaint() {
-            if (Array.isArray(window.__INITIAL_BOOKMARKS) && window.__INITIAL_BOOKMARKS.length > 0) {
+            if (Array.isArray(window.__INITIAL_BOOKMARKS)) {
                 window.__INITIAL_BOOKMARKS.forEach(it => {
                     if (it && it.url && it.cachedIcon) {
                         const h = getHostKey(it.url);
-                        if (h) iconDataMap[h] = it.cachedIcon;
+                        if (h) saveIconDataToCache(h, it.cachedIcon);
                     }
                 });
                 renderBookmarks(window.__INITIAL_BOOKMARKS, true);
@@ -537,7 +756,7 @@
                 const saved = localStorage.getItem(BOOKMARKS_SNAP_KEY);
                 if (saved) {
                     const parsed = JSON.parse(saved);
-                    if (Array.isArray(parsed) && parsed.length > 0) {
+                    if (Array.isArray(parsed)) {
                         renderBookmarks(parsed, false);
                     }
                 }
@@ -553,8 +772,10 @@
                         if (h) {
                             const prev = iconDataMap[h];
                             saveIconDataToCache(h, it.cachedIcon);
-                            if (prev !== it.cachedIcon && hostWrapperMap[h]) {
-                                applyIconToWrapper(hostWrapperMap[h], it.cachedIcon, it.title);
+                            if (prev !== it.cachedIcon && hostWrappersMap[h]) {
+                                hostWrappersMap[h].forEach(entry => {
+                                    applyLoadedIconToEntry(entry, it.cachedIcon);
+                                });
                             }
                         }
                     }
@@ -595,7 +816,9 @@
             }
         }
 
-        pollWorkspaceBookmarks();
+        if (!Array.isArray(window.__INITIAL_BOOKMARKS)) {
+            pollWorkspaceBookmarks();
+        }
         document.addEventListener('visibilitychange', function() {
             if (!document.hidden) pollWorkspaceBookmarks();
         });

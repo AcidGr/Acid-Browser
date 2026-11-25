@@ -1933,21 +1933,29 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
         return FaviconManager.getInstance(mContext).interceptFaviconWebRequest(reqUri);
     }
+    public static final int MAX_INLINE_HOMEPAGE_ICONS = 36;
+
     private org.json.JSONArray buildBookmarksJsonWithCachedIcons() {
         org.json.JSONArray arr = new org.json.JSONArray();
         if (mDataStore == null) return arr;
         List<BrowserDataStore.EntryItem> items = mDataStore.loadBookmarks();
         FaviconManager fm = FaviconManager.getInstance(mContext);
         if (items != null) {
-            for (BrowserDataStore.EntryItem it : items) {
+            for (int i = 0; i < items.size(); i++) {
+                BrowserDataStore.EntryItem it = items.get(i);
                 if (it == null) continue;
                 try {
                     org.json.JSONObject o = new org.json.JSONObject();
                     o.put("title", it.title);
                     o.put("url", it.url);
-                    String dataUri = fm.getFaviconDataUriFast(it.url);
-                    if (dataUri != null) {
-                        o.put("cachedIcon", dataUri);
+                    if (it.folder != null && !it.folder.isEmpty()) {
+                        o.put("folder", it.folder);
+                    }
+                    if (i < MAX_INLINE_HOMEPAGE_ICONS) {
+                        String dataUri = fm.getFaviconDataUriFast(it.url);
+                        if (dataUri != null) {
+                            o.put("cachedIcon", dataUri);
+                        }
                     }
                     arr.put(o);
                 } catch (Exception ignored) {}
@@ -1958,22 +1966,28 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void pushBookmarksToActiveHomeTabs() {
         if (mDataStore == null) return;
-        org.json.JSONArray arr = buildBookmarksJsonWithCachedIcons();
-        final String lang = AcidLocale.isEn() ? "en" : "zh";
-        final String js = "try{if(window.__updateAcidLanguage){window.__updateAcidLanguage('" + lang + "');}if(window.__updateAcidBookmarks){window.__updateAcidBookmarks(" + arr.toString() + ");}}catch(e){}";
-        mMainHandler.post(new Runnable() {
+        AcidAsync.run(new Runnable() {
             @Override
             public void run() {
-                for (TabSession t : mTabs) {
-                    if (t != null && t.webView != null
-                            && isTrustedLocalHomepageFileUrl(t.url, getWorkspaceDir())) {
-                        if (Build.VERSION.SDK_INT >= 19) {
-                            t.webView.evaluateJavascript(js, null);
-                        } else {
-                            t.webView.loadUrl("javascript:" + js);
+                if (mDataStore == null) return;
+                org.json.JSONArray arr = buildBookmarksJsonWithCachedIcons();
+                final String lang = AcidLocale.isEn() ? "en" : "zh";
+                final String js = "try{if(window.__updateAcidLanguage){window.__updateAcidLanguage('" + lang + "');}if(window.__updateAcidBookmarks){window.__updateAcidBookmarks(" + arr.toString() + ");}}catch(e){}";
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        for (TabSession t : mTabs) {
+                            if (t != null && t.webView != null
+                                    && isTrustedLocalHomepageFileUrl(t.url, getWorkspaceDir())) {
+                                if (Build.VERSION.SDK_INT >= 19) {
+                                    t.webView.evaluateJavascript(js, null);
+                                } else {
+                                    t.webView.loadUrl("javascript:" + js);
+                                }
+                            }
                         }
                     }
-                }
+                });
             }
         });
     }

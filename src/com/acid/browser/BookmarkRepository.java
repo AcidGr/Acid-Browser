@@ -10,7 +10,10 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -18,6 +21,16 @@ import java.util.concurrent.atomic.AtomicLong;
  * and two-way sync with workspace `bookmarks.json`.
  */
 public class BookmarkRepository {
+
+    public static final class ImportSummary {
+        public final int addedCount;
+        public final int skippedDuplicateCount;
+
+        public ImportSummary(int addedCount, int skippedDuplicateCount) {
+            this.addedCount = addedCount;
+            this.skippedDuplicateCount = skippedDuplicateCount;
+        }
+    }
 
     private static final String TAG = "AcidBookmarkRepo";
     public static final String PREF_BOOKMARKS = "bookmarks";
@@ -153,6 +166,12 @@ public class BookmarkRepository {
                 try {
                     o.put("title", item.title);
                     o.put("url", item.url);
+                    if (item.folder != null && !item.folder.isEmpty()) {
+                        o.put("folder", item.folder);
+                    }
+                    if (item.time > 0L) {
+                        o.put("time", item.time);
+                    }
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to encode bookmark: " + item.url, e);
                     continue;
@@ -187,24 +206,44 @@ public class BookmarkRepository {
         }
     }
 
+    private static final class PendingFlush {
+        final JSONArray arr;
+        final long rev;
+        final Runnable mutated;
+
+        PendingFlush(JSONArray arr, long rev, Runnable mutated) {
+            this.arr = arr;
+            this.rev = rev;
+            this.mutated = mutated;
+        }
+    }
+
+    private PendingFlush commitListLocked(List<BrowserDataStore.EntryItem> list, boolean pendingSync) {
+        JSONArray arr = encodeBookmarksArray(list);
+        long rev = commitBookmarksToPrefsLocked(arr, pendingSync);
+        return new PendingFlush(arr, rev, mBookmarksMutatedListener);
+    }
+
+    private void dispatchFlush(PendingFlush flush, boolean syncFile) {
+        if (flush == null) return;
+        if (syncFile && mBookmarksJsonFile != null) {
+            dispatchJsonSave(flush.arr, flush.rev);
+        }
+        if (flush.mutated != null) {
+            dispatchCallback(flush.mutated);
+        }
+    }
+
     public void saveBookmarks(List<BrowserDataStore.EntryItem> list) {
         saveBookmarks(list, true);
     }
 
     public void saveBookmarks(List<BrowserDataStore.EntryItem> list, boolean syncFile) {
-        JSONArray arr = encodeBookmarksArray(list);
-        final long rev;
-        Runnable mutated;
+        final PendingFlush flush;
         synchronized (this) {
-            rev = commitBookmarksToPrefsLocked(arr, syncFile);
-            mutated = mBookmarksMutatedListener;
+            flush = commitListLocked(list, syncFile);
         }
-        if (syncFile && mBookmarksJsonFile != null) {
-            dispatchJsonSave(arr, rev);
-        }
-        if (mutated != null) {
-            dispatchCallback(mutated);
-        }
+        dispatchFlush(flush, syncFile);
     }
 
     public boolean saveBookmarksToJsonFile() {
@@ -315,57 +354,237 @@ public class BookmarkRepository {
     }
 
     public void addBookmark(String title, String url) {
+        addBookmark(title, url, "");
+    }
+
+    public void addBookmark(String title, String url, String folder) {
         if (TextUtils.isEmpty(url)) return;
-        JSONArray arr;
-        long rev;
-        Runnable mutated;
+        String trimmedUrl = url.trim();
+        if (trimmedUrl.isEmpty()) return;
+        String trimmedTitle = !TextUtils.isEmpty(title) && !title.trim().isEmpty()
+            ? title.trim()
+            : trimmedUrl;
+        String normFolder = NetscapeBookmarkCodec.normalizeFolderPath(folder);
+        long now = System.currentTimeMillis();
+
+        PendingFlush flush;
         synchronized (this) {
             List<BrowserDataStore.EntryItem> list = loadBookmarks();
-            list.add(0, new BrowserDataStore.EntryItem(TextUtils.isEmpty(title) ? url : title, url));
-            arr = encodeBookmarksArray(list);
-            rev = commitBookmarksToPrefsLocked(arr, true);
-            mutated = mBookmarksMutatedListener;
+            list.add(0, new BrowserDataStore.EntryItem(trimmedTitle, trimmedUrl, now, normFolder));
+            flush = commitListLocked(list, true);
         }
-        dispatchJsonSave(arr, rev);
-        if (mutated != null) dispatchCallback(mutated);
+        dispatchFlush(flush, true);
     }
 
     public void removeBookmark(int index) {
-        JSONArray arr = null;
-        long rev = 0;
-        Runnable mutated = null;
+        PendingFlush flush = null;
         synchronized (this) {
             List<BrowserDataStore.EntryItem> list = loadBookmarks();
             if (index >= 0 && index < list.size()) {
                 list.remove(index);
-                arr = encodeBookmarksArray(list);
-                rev = commitBookmarksToPrefsLocked(arr, true);
-                mutated = mBookmarksMutatedListener;
+                flush = commitListLocked(list, true);
             }
         }
-        if (arr != null) {
-            dispatchJsonSave(arr, rev);
-            if (mutated != null) dispatchCallback(mutated);
-        }
+        dispatchFlush(flush, true);
     }
 
     public boolean updateBookmark(int index, String title, String url) {
+        return updateBookmarkInternal(index, title, url, null, false);
+    }
+
+    public boolean updateBookmark(int index, String title, String url, String folder) {
+        return updateBookmarkInternal(index, title, url, folder, true);
+    }
+
+    private boolean updateBookmarkInternal(
+        int index,
+        String title,
+        String url,
+        String folder,
+        boolean replaceFolder
+    ) {
         if (TextUtils.isEmpty(url)) return false;
-        JSONArray arr;
-        long rev;
-        Runnable mutated;
+        String trimmedUrl = url.trim();
+        if (trimmedUrl.isEmpty()) return false;
+        String trimmedTitle = !TextUtils.isEmpty(title) && !title.trim().isEmpty()
+            ? title.trim()
+            : trimmedUrl;
+
+        PendingFlush flush;
         synchronized (this) {
             List<BrowserDataStore.EntryItem> list = loadBookmarks();
             if (index < 0 || index >= list.size()) return false;
-            String trimmedUrl = url.trim();
-            list.set(index, new BrowserDataStore.EntryItem(TextUtils.isEmpty(title) ? trimmedUrl : title.trim(), trimmedUrl));
-            arr = encodeBookmarksArray(list);
-            rev = commitBookmarksToPrefsLocked(arr, true);
-            mutated = mBookmarksMutatedListener;
+            BrowserDataStore.EntryItem existing = list.get(index);
+            String targetFolder = replaceFolder
+                ? NetscapeBookmarkCodec.normalizeFolderPath(folder)
+                : (existing != null ? existing.folder : "");
+            long time = (existing != null && existing.time > 0L)
+                ? existing.time
+                : System.currentTimeMillis();
+            list.set(index, new BrowserDataStore.EntryItem(trimmedTitle, trimmedUrl, time, targetFolder));
+            flush = commitListLocked(list, true);
         }
-        dispatchJsonSave(arr, rev);
-        if (mutated != null) dispatchCallback(mutated);
+        dispatchFlush(flush, true);
         return true;
+    }
+
+    /**
+     * Appends non-duplicate imported bookmarks to the end of the list so existing
+     * homepage/pinned entries remain intact at the top, preserving folder metadata.
+     */
+    public ImportSummary importBookmarks(List<BrowserDataStore.EntryItem> incoming) {
+        if (incoming == null || incoming.isEmpty()) {
+            return new ImportSummary(0, 0);
+        }
+        int added = 0;
+        int skipped = 0;
+        PendingFlush flush = null;
+
+        synchronized (this) {
+            List<BrowserDataStore.EntryItem> list = loadBookmarks();
+            Set<String> seenUrls = new HashSet<String>(list.size() + incoming.size());
+            for (int i = 0; i < list.size(); i++) {
+                BrowserDataStore.EntryItem item = list.get(i);
+                if (item != null && item.url != null) {
+                    String u = item.url.trim();
+                    if (!u.isEmpty()) {
+                        seenUrls.add(u);
+                    }
+                }
+            }
+            long now = System.currentTimeMillis();
+            for (int i = 0; i < incoming.size(); i++) {
+                BrowserDataStore.EntryItem item = incoming.get(i);
+                if (item == null || item.url == null) continue;
+                String trimmedUrl = item.url.trim();
+                if (trimmedUrl.isEmpty()) continue;
+                if (seenUrls.contains(trimmedUrl)) {
+                    skipped++;
+                    continue;
+                }
+                seenUrls.add(trimmedUrl);
+                String title = !TextUtils.isEmpty(item.title) && !item.title.trim().isEmpty()
+                    ? item.title.trim()
+                    : trimmedUrl;
+                long time = item.time > 0L ? item.time : now;
+                String folder = NetscapeBookmarkCodec.normalizeFolderPath(item.folder);
+                list.add(new BrowserDataStore.EntryItem(title, trimmedUrl, time, folder));
+                added++;
+            }
+            if (added > 0) {
+                flush = commitListLocked(list, true);
+            }
+        }
+        dispatchFlush(flush, true);
+        return new ImportSummary(added, skipped);
+    }
+
+    public List<String> listFolders() {
+        List<BrowserDataStore.EntryItem> list = loadBookmarks();
+        Set<String> folders = new LinkedHashSet<String>();
+        for (int i = 0; i < list.size(); i++) {
+            BrowserDataStore.EntryItem item = list.get(i);
+            if (item != null && item.folder != null && !item.folder.isEmpty()) {
+                folders.add(item.folder);
+            }
+        }
+        return new ArrayList<String>(folders);
+    }
+
+    public int renameFolder(String oldFolder, String newFolder) {
+        String oldNorm = NetscapeBookmarkCodec.normalizeFolderPath(oldFolder);
+        String newNorm = NetscapeBookmarkCodec.normalizeFolderPath(newFolder);
+        if (oldNorm.isEmpty() || newNorm.isEmpty() || oldNorm.equals(newNorm)) {
+            return 0;
+        }
+        int changed = 0;
+        PendingFlush flush = null;
+        String oldPrefix = oldNorm + "/";
+
+        synchronized (this) {
+            List<BrowserDataStore.EntryItem> list = loadBookmarks();
+            for (int i = 0; i < list.size(); i++) {
+                BrowserDataStore.EntryItem item = list.get(i);
+                if (item == null || item.folder == null || item.folder.isEmpty()) continue;
+                String nextFolder = null;
+                if (item.folder.equals(oldNorm)) {
+                    nextFolder = newNorm;
+                } else if (item.folder.startsWith(oldPrefix)) {
+                    nextFolder = NetscapeBookmarkCodec.normalizeFolderPath(
+                        newNorm + item.folder.substring(oldNorm.length())
+                    );
+                }
+                if (nextFolder != null && !nextFolder.equals(item.folder)) {
+                    list.set(i, new BrowserDataStore.EntryItem(item.title, item.url, item.time, nextFolder));
+                    changed++;
+                }
+            }
+            if (changed > 0) {
+                flush = commitListLocked(list, true);
+            }
+        }
+        dispatchFlush(flush, true);
+        return changed;
+    }
+
+    public int dissolveFolder(String targetFolder) {
+        String norm = NetscapeBookmarkCodec.normalizeFolderPath(targetFolder);
+        if (norm.isEmpty()) return 0;
+        int changed = 0;
+        PendingFlush flush = null;
+        String prefix = norm + "/";
+
+        synchronized (this) {
+            List<BrowserDataStore.EntryItem> list = loadBookmarks();
+            for (int i = 0; i < list.size(); i++) {
+                BrowserDataStore.EntryItem item = list.get(i);
+                if (item == null || item.folder == null || item.folder.isEmpty()) continue;
+                String nextFolder = null;
+                if (item.folder.equals(norm)) {
+                    nextFolder = "";
+                } else if (item.folder.startsWith(prefix)) {
+                    nextFolder = NetscapeBookmarkCodec.normalizeFolderPath(
+                        item.folder.substring(prefix.length())
+                    );
+                }
+                if (nextFolder != null && !nextFolder.equals(item.folder)) {
+                    list.set(i, new BrowserDataStore.EntryItem(item.title, item.url, item.time, nextFolder));
+                    changed++;
+                }
+            }
+            if (changed > 0) {
+                flush = commitListLocked(list, true);
+            }
+        }
+        dispatchFlush(flush, true);
+        return changed;
+    }
+
+    public int deleteFolderBookmarks(String targetFolder) {
+        String norm = NetscapeBookmarkCodec.normalizeFolderPath(targetFolder);
+        if (norm.isEmpty()) return 0;
+        int removed = 0;
+        PendingFlush flush = null;
+        String prefix = norm + "/";
+
+        synchronized (this) {
+            List<BrowserDataStore.EntryItem> list = loadBookmarks();
+            List<BrowserDataStore.EntryItem> remaining = new ArrayList<BrowserDataStore.EntryItem>(list.size());
+            for (int i = 0; i < list.size(); i++) {
+                BrowserDataStore.EntryItem item = list.get(i);
+                if (item == null) continue;
+                if (item.folder != null && (item.folder.equals(norm) || item.folder.startsWith(prefix))) {
+                    removed++;
+                } else {
+                    remaining.add(item);
+                }
+            }
+            if (removed > 0) {
+                flush = commitListLocked(remaining, true);
+            }
+        }
+        dispatchFlush(flush, true);
+        return removed;
     }
 
     private static BrowserDataStore.EntryItem decodeBookmarkEntry(JSONObject o, int index) {
@@ -378,7 +597,8 @@ public class BookmarkRepository {
             Log.w(TAG, "bookmark[" + index + "] has no usable url; skipped");
             return null;
         }
-        long time = o.optLong("time", 0);
-        return new BrowserDataStore.EntryItem(o.optString("title", url), url, time);
+        long time = o.optLong("time", 0L);
+        String folder = o.optString("folder", "");
+        return new BrowserDataStore.EntryItem(o.optString("title", url), url, time, folder);
     }
 }

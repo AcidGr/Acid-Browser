@@ -110,12 +110,12 @@ loadBookmarks();
 window.addEventListener('focus', loadBookmarks);
 ```
 
-`bookmarks.json` 结构：
+`bookmarks.json` 结构（`folder` 与 `time` 为可选字段）：
 
 ```json
 [
   { "title": "知乎", "url": "https://www.zhihu.com" },
-  { "title": "GitHub", "url": "https://github.com" }
+  { "title": "GitHub", "url": "https://github.com", "folder": "开发/开源", "time": 1732523600000 }
 ]
 ```
 

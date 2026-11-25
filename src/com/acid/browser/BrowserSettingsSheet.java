@@ -38,6 +38,8 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
         void onBlockImagesChanged(boolean enabled);
         void onLanguageChanged(int langIndex);
         void onWebTextZoomChanged(int zoom);
+        void onImportBookmarksRequested();
+        void onExportBookmarksRequested();
     }
 
     private final BrowserDataStore mDataStore;
@@ -190,6 +192,13 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 container.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, "浏览数据管理"));
                 container.addView(AcidWidgets.groupCard(
                     ctx, mIsDarkMode,
+                    AcidWidgets.navRow(
+                        ctx, mIsDarkMode, AcidIcons.ICON_BOOKMARK, accent,
+                        "书签导入与导出", "兼容主流浏览器 HTML 书签", null, true,
+                        new OnClickListener() {
+                            @Override public void onClick(View v) { showBookmarkBackupDialog(); }
+                        }
+                    ),
                     AcidWidgets.dangerRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_TRASH, "清除浏览数据",
                         new OnClickListener() {
@@ -902,6 +911,31 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                 @Override
                 public void run() {
                     if (mListener != null) mListener.onClearWorkspaceOnlyRequested();
+                }
+            }
+        );
+    }
+
+    private void showBookmarkBackupDialog() {
+        final Context ctx = getContext();
+        String[] options = new String[]{
+            "导入书签 (.html / .json)",
+            "导出书签 (.html)"
+        };
+        AcidDialogs.chooseSingle(
+            ctx, mIsDarkMode,
+            "选择书签操作",
+            options,
+            -1,
+            new AcidDialogs.SingleChoiceCallback() {
+                @Override
+                public void onSelected(int index) {
+                    if (mListener == null) return;
+                    if (index == 0) {
+                        mListener.onImportBookmarksRequested();
+                    } else if (index == 1) {
+                        mListener.onExportBookmarksRequested();
+                    }
                 }
             }
         );

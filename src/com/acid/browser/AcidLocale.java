@@ -232,6 +232,7 @@ public final class AcidLocale {
                 if ("已装载供应商".equals(prefix)) return "Configured Providers" + tail;
                 if ("默认供应商目录".equals(prefix)) return "Preset Providers" + tail;
                 if ("全部书签".equals(prefix)) return "All Bookmarks" + tail;
+                if ("未分类".equals(prefix)) return "Uncategorized" + tail;
                 if ("搜索结果".equals(prefix)) return "Search Results" + tail;
                 if ("今天".equals(prefix)) return "Today" + tail;
                 if ("昨天".equals(prefix)) return "Yesterday" + tail;
@@ -450,6 +451,50 @@ public final class AcidLocale {
         }
         if (s.startsWith("确定要删除书签「") && s.endsWith("」吗？")) {
             return "Delete bookmark \"" + s.substring(8, s.length() - 3) + "\"?";
+        }
+        if (s.startsWith("已导入 ") && s.contains(" 条书签")) {
+            String rest = s.substring(4);
+            int idx = rest.indexOf(" 条书签");
+            String added = rest.substring(0, idx).trim();
+            String tail = rest.substring(idx + 4);
+            if (tail.startsWith("（跳过 ") && tail.endsWith(" 条重复）")) {
+                String skipped = tail.substring(4, tail.length() - 5).trim();
+                return "Imported " + added + " bookmarks (" + skipped + " duplicates skipped)";
+            }
+            return "Imported " + added + " bookmarks";
+        }
+        if (s.startsWith("没有新增书签（") && s.endsWith(" 条与现有书签重复）")) {
+            String skipped = s.substring(7, s.length() - 10).trim();
+            return "No new bookmarks (" + skipped + " duplicates skipped)";
+        }
+        if (s.startsWith("已重命名文件夹 (") && s.endsWith(" 条书签)")) {
+            String count = s.substring(9, s.length() - 5).trim();
+            return "Renamed folder (" + count + " bookmarks)";
+        }
+        if (s.startsWith("已解散文件夹 (") && s.endsWith(" 条书签)")) {
+            String count = s.substring(8, s.length() - 5).trim();
+            return "Dissolved folder (" + count + " bookmarks)";
+        }
+        if (s.startsWith("已删除文件夹及 ") && s.endsWith(" 条书签")) {
+            String count = s.substring(8, s.length() - 4).trim();
+            return "Deleted folder and " + count + " bookmarks";
+        }
+        if (s.startsWith("确定解散文件夹「") && s.endsWith("」吗？其中的书签将移至上级或未分类，不会被删除。")) {
+            String name = s.substring(8, s.length() - 24);
+            return "Dissolve folder \"" + name + "\"? Bookmarks inside will be moved up or uncategorized without being deleted.";
+        }
+        if (s.startsWith("确定要删除文件夹「") && s.endsWith("」及其中的全部书签吗？此操作无法撤销。")) {
+            String name = s.substring(9, s.length() - 20);
+            return "Delete folder \"" + name + "\" and all bookmarks inside? This cannot be undone.";
+        }
+        if (s.startsWith("导入书签失败: ")) {
+            return "Failed to import bookmarks: " + s.substring(8);
+        }
+        if (s.startsWith("导出书签失败: ")) {
+            return "Failed to export bookmarks: " + s.substring(8);
+        }
+        if (s.startsWith("无法拉起系统分享: ")) {
+            return "Unable to open share sheet: " + s.substring(10);
         }
         if (s.startsWith("预估大小: ")) {
             return s.replace("预估大小: ", "Estimated Size: ").replace("未知大小", "Unknown size");
@@ -992,6 +1037,44 @@ public final class AcidLocale {
         EN_MAP.put("清空历史记录", "Clear Browsing History");
         EN_MAP.put("确定要清空全部历史浏览记录吗？此操作无法撤销。", "Clear all browsing history? This cannot be undone.");
         EN_MAP.put("已清空历史浏览记录", "Browsing history cleared");
+        EN_MAP.put("收藏 / 管理", "Bookmark / Manage");
+        EN_MAP.put("添加 / 导入", "Add / Import");
+        EN_MAP.put("书签操作", "Bookmark Actions");
+        EN_MAP.put("手动添加书签", "Add Bookmark");
+        EN_MAP.put("导入书签 (.html / .json)", "Import Bookmarks (.html / .json)");
+        EN_MAP.put("导出书签 (.html)", "Export Bookmarks (.html)");
+        EN_MAP.put("添加书签", "Add Bookmark");
+        EN_MAP.put("添加", "Add");
+        EN_MAP.put("分类文件夹 (选填)", "Folder (Optional)");
+        EN_MAP.put("留空为未分类，支持多级如 开发/开源", "Leave empty for uncategorized, or e.g. Dev/Tools");
+        EN_MAP.put("未分类", "Uncategorized");
+        EN_MAP.put("管理", "Manage");
+        EN_MAP.put("重命名文件夹", "Rename Folder");
+        EN_MAP.put("文件夹名称", "Folder Name");
+        EN_MAP.put("输入新文件夹名称 (支持 A/B)", "Enter new folder name (supports A/B)");
+        EN_MAP.put("文件夹名称不能为空", "Folder name cannot be empty");
+        EN_MAP.put("解散文件夹 (移至未分类)", "Dissolve Folder (Move to Uncategorized)");
+        EN_MAP.put("解散", "Dissolve");
+        EN_MAP.put("删除文件夹及书签", "Delete Folder & Bookmarks");
+        EN_MAP.put("书签导入与导出", "Import & Export Bookmarks");
+        EN_MAP.put("兼容主流浏览器 HTML 书签", "Compatible with standard HTML bookmarks");
+        EN_MAP.put("选择书签操作", "Bookmark Import / Export");
+        EN_MAP.put("选择书签文件 (.html / .json)", "Select Bookmark File (.html / .json)");
+        EN_MAP.put("书签导出成功", "Bookmarks Exported");
+        EN_MAP.put("分享文件", "Share File");
+        EN_MAP.put("完成", "Done");
+        EN_MAP.put("已导出 ", "Exported ");
+        EN_MAP.put(" 条书签至：", " bookmarks to:");
+        EN_MAP.put("分享书签文件", "Share Bookmark File");
+        EN_MAP.put("当前没有可导出的书签", "No bookmarks to export");
+        EN_MAP.put("文件内容为空", "File is empty");
+        EN_MAP.put("未在文件中识别到有效的书签记录", "No valid bookmarks found in file");
+        EN_MAP.put("未在 JSON 文件中找到有效书签", "No valid bookmarks found in JSON file");
+        EN_MAP.put("无法读取不受支持的文件路径", "Cannot read unsupported file path");
+        EN_MAP.put("无法打开选中的书签文件", "Unable to open selected bookmark file");
+        EN_MAP.put("文件过大（超过 16 MB 上限）", "File is too large (exceeds 16 MB limit)");
+        EN_MAP.put("未找到可用的文件选择器", "No file picker found");
+        EN_MAP.put("请输入有效的网址", "Please enter a valid URL");
 
         // Downloads & Download Confirm
         EN_MAP.put("全部", "All");

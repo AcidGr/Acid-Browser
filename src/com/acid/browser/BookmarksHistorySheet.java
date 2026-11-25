@@ -3,6 +3,7 @@ package com.acid.browser;
 import android.app.Dialog;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Typeface;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -13,6 +14,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -21,8 +23,12 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Bookmarks & Browsing History Sheet built on {@link AcidBottomSheetView}'s {@link SheetPage}
@@ -37,6 +43,11 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         void onNavigateUrl(String url);
     }
 
+    public interface BookmarkIoListener {
+        void onImportBookmarksRequested();
+        void onExportBookmarksRequested();
+    }
+
     public static final int TAB_BOOKMARKS = 0;
     public static final int TAB_HISTORY = 1;
     public static final int INITIAL_BATCH_SIZE = 40;
@@ -47,29 +58,42 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         public final String sectionHeader;
         public final BrowserDataStore.EntryItem item;
         public final int originalIndex;
+        public final String folderKey;
 
         public PreparedEntry(String sectionHeader, BrowserDataStore.EntryItem item, int originalIndex) {
+            this(sectionHeader, item, originalIndex, null);
+        }
+
+        public PreparedEntry(
+            String sectionHeader,
+            BrowserDataStore.EntryItem item,
+            int originalIndex,
+            String folderKey
+        ) {
             this.sectionHeader = sectionHeader;
             this.item = item;
             this.originalIndex = originalIndex;
+            this.folderKey = folderKey;
         }
     }
 
     private final BrowserDataStore mDataStore;
     private final BrowserController mController;
     private final OnNavigateListener mNavigateListener;
+    private BookmarkIoListener mBookmarkIoListener = null;
 
     private int mActiveTab = TAB_BOOKMARKS;
     private String mCurrentPageTitle = "";
     private String mCurrentPageUrl = "";
     private String mSearchQuery = "";
+    private String mActiveFolderFilter = null; // null = All, "" = Uncategorized, otherwise exact folder path
 
     private List<BrowserDataStore.EntryItem> mCachedTabEntries = Collections.emptyList();
     private List<PreparedEntry> mPreparedEntries = Collections.emptyList();
     private LinearLayout mActiveListContainer = null;
     private boolean mActiveContainerIsBookmarks = false;
     private int mRenderedCount = 0;
-    private String mLastRenderedSection = null;
+    private String mLastRenderedSectionKey = null;
     private View mLoadMoreFooterView = null;
     private int mRenderGeneration = 0;
     private boolean mAppendingBatch = false;
@@ -100,10 +124,15 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         setRootPage(buildActiveTabPage());
     }
 
+    public void setBookmarkIoListener(BookmarkIoListener listener) {
+        mBookmarkIoListener = listener;
+    }
+
     @Override
     protected void onResetToRootPage() {
         cancelPendingSearch();
         mSearchQuery = "";
+        mActiveFolderFilter = null;
         setRootPage(buildActiveTabPage());
     }
 
@@ -113,6 +142,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         mCurrentPageTitle = currentTitle != null ? currentTitle : "";
         mCurrentPageUrl = currentUrl != null ? currentUrl : "";
         mSearchQuery = "";
+        mActiveFolderFilter = null;
     }
 
     private void cancelPendingSearch() {
@@ -193,7 +223,11 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
                 );
                 pinned.addView(searchBox);
 
-                syncHeaderActionForActiveTab(isBookmarks, mCachedTabEntries);
+                if (isBookmarks) {
+                    buildBookmarkFolderFilterBar(ctx, pinned, container);
+                }
+
+                syncHeaderActionForActiveTab(isBookmarks);
                 renderContainerEntries(container, isBookmarks);
             }
         }).withOnPause(new Runnable() {
@@ -206,23 +240,154 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         return page;
     }
 
-    private void syncHeaderActionForActiveTab(boolean isBookmarks, List<BrowserDataStore.EntryItem> entries) {
-        final Context ctx = getContext();
-        if (isBookmarks) {
-            if (!TextUtils.isEmpty(mCurrentPageUrl)) {
-                setAction(AcidIcons.ICON_PLUS, "收藏当前页", 0, new OnClickListener() {
+    private void buildBookmarkFolderFilterBar(
+        final Context ctx,
+        LinearLayout pinned,
+        final LinearLayout container
+    ) {
+        Set<String> folderSet = new LinkedHashSet<String>();
+        boolean hasUncategorized = false;
+        if (mCachedTabEntries != null) {
+            for (int i = 0; i < mCachedTabEntries.size(); i++) {
+                BrowserDataStore.EntryItem item = mCachedTabEntries.get(i);
+                if (item == null) continue;
+                if (item.folder != null && !item.folder.isEmpty()) {
+                    folderSet.add(item.folder);
+                } else {
+                    hasUncategorized = true;
+                }
+            }
+        }
+        if (folderSet.isEmpty()) {
+            mActiveFolderFilter = null;
+            return;
+        }
+
+        final List<String> folders = new ArrayList<String>(folderSet);
+        if (mActiveFolderFilter != null) {
+            if (mActiveFolderFilter.isEmpty()) {
+                if (!hasUncategorized) mActiveFolderFilter = null;
+            } else if (!folders.contains(mActiveFolderFilter)) {
+                mActiveFolderFilter = null;
+            }
+        }
+
+        final List<String> filterValues = new ArrayList<String>();
+        final List<String> labels = new ArrayList<String>();
+        filterValues.add(null);
+        labels.add("全部");
+        if (hasUncategorized) {
+            filterValues.add("");
+            labels.add("未分类");
+        }
+        for (int i = 0; i < folders.size(); i++) {
+            String f = folders.get(i);
+            filterValues.add(f);
+            labels.add(f);
+        }
+
+        HorizontalScrollView hsv = new HorizontalScrollView(ctx);
+        hsv.setHorizontalScrollBarEnabled(false);
+        LinearLayout.LayoutParams hsvLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        hsvLp.topMargin = AcidTheme.dp(ctx, 8);
+
+        LinearLayout bar = new LinearLayout(ctx);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        final TextView[] chips = new TextView[labels.size()];
+        final Runnable styleChips = new Runnable() {
+            @Override
+            public void run() {
+                int accent = AcidTheme.accent(mIsDarkMode);
+                for (int i = 0; i < chips.length; i++) {
+                    String val = filterValues.get(i);
+                    boolean sel = (val == null && mActiveFolderFilter == null)
+                        || (val != null && val.equals(mActiveFolderFilter));
+                    TextView chip = chips[i];
+                    if (sel) {
+                        chip.setBackground(AcidTheme.interactiveBg(
+                            ctx, accent, AcidTheme.adjustPressFill(accent, mIsDarkMode), 0, AcidTheme.RADIUS_PILL
+                        ));
+                        chip.setTextColor(AcidTheme.onColor(accent));
+                    } else {
+                        chip.setBackground(AcidTheme.interactiveBg(
+                            ctx,
+                            AcidTheme.menuItemBg(mIsDarkMode),
+                            AcidTheme.rowPressed(mIsDarkMode),
+                            AcidTheme.border(mIsDarkMode),
+                            AcidTheme.RADIUS_PILL
+                        ));
+                        chip.setTextColor(AcidTheme.muted(mIsDarkMode));
+                    }
+                }
+            }
+        };
+
+        for (int i = 0; i < labels.size(); i++) {
+            final String targetVal = filterValues.get(i);
+            final TextView chip = new TextView(ctx);
+            chip.setText(targetVal == null || targetVal.isEmpty() ? AcidLocale.tr(labels.get(i)) : labels.get(i));
+            chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_CAPTION);
+            chip.setTypeface(Typeface.DEFAULT_BOLD);
+            chip.setGravity(Gravity.CENTER);
+            chip.setSingleLine(true);
+            int pH = AcidTheme.dp(ctx, 12);
+            int pV = AcidTheme.dp(ctx, 5);
+            chip.setPadding(pH, pV, pH, pV);
+            chip.setClickable(true);
+            chip.setFocusable(true);
+            chip.setOnClickListener(new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    boolean same = (targetVal == null && mActiveFolderFilter == null)
+                        || (targetVal != null && targetVal.equals(mActiveFolderFilter));
+                    if (!same) {
+                        mActiveFolderFilter = targetVal;
+                        styleChips.run();
+                        getScrollView().scrollTo(0, 0);
+                        renderContainerEntries(container, true);
+                    }
+                }
+            });
+            if (targetVal != null && !targetVal.isEmpty()) {
+                chip.setOnLongClickListener(new OnLongClickListener() {
                     @Override
-                    public void onClick(View v) {
-                        mDataStore.addBookmark(mCurrentPageTitle, mCurrentPageUrl);
-                        refreshActivePage();
-                        AcidFeedback.ok(ctx, "已收藏当前网页");
+                    public boolean onLongClick(View v) {
+                        showFolderManageMenu(chip, targetVal);
+                        return true;
                     }
                 });
-            } else {
-                hideAction();
             }
+            chips[i] = chip;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            if (i > 0) lp.leftMargin = AcidTheme.dp(ctx, 6);
+            bar.addView(chip, lp);
+        }
+        styleChips.run();
+        hsv.addView(bar);
+        pinned.addView(hsv, hsvLp);
+    }
+
+    private boolean isCurrentPageBookmarkable() {
+        return !TextUtils.isEmpty(mCurrentPageUrl)
+            && !BrowserController.isLocalHomeUrl(mCurrentPageUrl)
+            && NetscapeBookmarkCodec.isSafeBookmarkUrl(mCurrentPageUrl);
+    }
+
+    private void syncHeaderActionForActiveTab(boolean isBookmarks) {
+        if (isBookmarks) {
+            String label = isCurrentPageBookmarkable() ? "收藏 / 管理" : "添加 / 导入";
+            setAction(AcidIcons.ICON_PLUS, label, 0, new OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showBookmarksHeaderActionMenu(v);
+                }
+            });
         } else {
-            if (entries != null && !entries.isEmpty()) {
+            if (mCachedTabEntries != null && !mCachedTabEntries.isEmpty()) {
                 setAction(AcidIcons.ICON_TRASH, "清空历史", AcidTheme.COLOR_RED, new OnClickListener() {
                     @Override
                     public void onClick(View v) {
@@ -235,6 +400,48 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         }
     }
 
+    private String defaultFolderForAdd() {
+        return (mActiveFolderFilter != null && !mActiveFolderFilter.isEmpty()) ? mActiveFolderFilter : "";
+    }
+
+    private void showBookmarksHeaderActionMenu(View anchor) {
+        final Context ctx = getContext();
+        List<AcidContextMenu.ActionItem> actions = new ArrayList<AcidContextMenu.ActionItem>();
+        if (isCurrentPageBookmarkable()) {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_BOOKMARK, "收藏当前页", new Runnable() {
+                @Override
+                public void run() {
+                    showBookmarkFormDialog(-1, mCurrentPageTitle, mCurrentPageUrl, defaultFolderForAdd());
+                }
+            }));
+        }
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_PLUS, "手动添加书签", new Runnable() {
+            @Override
+            public void run() {
+                showBookmarkFormDialog(-1, "", "", defaultFolderForAdd());
+            }
+        }));
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_FILE, "导入书签 (.html / .json)", new Runnable() {
+            @Override
+            public void run() {
+                if (mBookmarkIoListener != null) {
+                    mBookmarkIoListener.onImportBookmarksRequested();
+                }
+            }
+        }));
+        if (mCachedTabEntries != null && !mCachedTabEntries.isEmpty()) {
+            actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_DOWNLOAD, "导出书签 (.html)", new Runnable() {
+                @Override
+                public void run() {
+                    if (mBookmarkIoListener != null) {
+                        mBookmarkIoListener.onExportBookmarksRequested();
+                    }
+                }
+            }));
+        }
+        AcidContextMenu.showForAnchor(ctx, anchor, mIsDarkMode, "书签操作", actions);
+    }
+
     /**
      * Prepares ordered entries with section headers in a lightweight POJO pass without inflating views.
      */
@@ -244,9 +451,34 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         String searchQuery,
         long nowMillis
     ) {
+        return buildPreparedEntries(rawList, isBookmarks, searchQuery, null, nowMillis);
+    }
+
+    public static List<PreparedEntry> buildPreparedEntries(
+        List<BrowserDataStore.EntryItem> rawList,
+        boolean isBookmarks,
+        String searchQuery,
+        String folderFilter,
+        long nowMillis
+    ) {
         if (rawList == null || rawList.isEmpty()) {
             return Collections.emptyList();
         }
+        boolean hasAnyFolder = false;
+        if (isBookmarks) {
+            for (int i = 0; i < rawList.size(); i++) {
+                BrowserDataStore.EntryItem item = rawList.get(i);
+                if (item != null && item.folder != null && !item.folder.isEmpty()) {
+                    hasAnyFolder = true;
+                    break;
+                }
+            }
+        }
+        String normFolderFilter = folderFilter;
+        if (normFolderFilter != null && !normFolderFilter.isEmpty()) {
+            normFolderFilter = NetscapeBookmarkCodec.normalizeFolderPath(normFolderFilter);
+        }
+
         String q = searchQuery != null ? searchQuery.toLowerCase(Locale.ROOT).trim() : "";
         List<BrowserDataStore.EntryItem> filteredList = new ArrayList<BrowserDataStore.EntryItem>();
         List<Integer> originalIndices = new ArrayList<Integer>();
@@ -254,9 +486,16 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         for (int rawIdx = 0; rawIdx < rawList.size(); rawIdx++) {
             BrowserDataStore.EntryItem item = rawList.get(rawIdx);
             if (item == null) continue;
+            if (isBookmarks && q.isEmpty() && normFolderFilter != null) {
+                String f = item.folder != null ? item.folder : "";
+                if (!normFolderFilter.equals(f)) {
+                    continue;
+                }
+            }
             if (q.isEmpty()
                 || (item.title != null && item.title.toLowerCase(Locale.ROOT).contains(q))
-                || (item.url != null && item.url.toLowerCase(Locale.ROOT).contains(q))) {
+                || (item.url != null && item.url.toLowerCase(Locale.ROOT).contains(q))
+                || (isBookmarks && item.folder != null && item.folder.toLowerCase(Locale.ROOT).contains(q))) {
                 filteredList.add(item);
                 originalIndices.add(Integer.valueOf(rawIdx));
             }
@@ -266,16 +505,79 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         }
 
         List<PreparedEntry> prepared = new ArrayList<PreparedEntry>(filteredList.size());
-        if (isBookmarks || !q.isEmpty()) {
-            String headerText = !q.isEmpty()
-                ? ("搜索结果 (" + filteredList.size() + ")")
-                : ("全部书签 (" + filteredList.size() + ")");
+        if (!q.isEmpty()) {
+            String headerText = "搜索结果 (" + filteredList.size() + ")";
             for (int i = 0; i < filteredList.size(); i++) {
                 prepared.add(new PreparedEntry(
                     headerText,
                     filteredList.get(i),
-                    originalIndices.get(i).intValue()
+                    originalIndices.get(i).intValue(),
+                    null
                 ));
+            }
+            return prepared;
+        }
+
+        if (isBookmarks) {
+            if (!hasAnyFolder && normFolderFilter == null) {
+                String headerText = "全部书签 (" + filteredList.size() + ")";
+                for (int i = 0; i < filteredList.size(); i++) {
+                    prepared.add(new PreparedEntry(
+                        headerText,
+                        filteredList.get(i),
+                        originalIndices.get(i).intValue(),
+                        null
+                    ));
+                }
+                return prepared;
+            }
+            if (normFolderFilter != null) {
+                String headerText = normFolderFilter.isEmpty()
+                    ? ("未分类 (" + filteredList.size() + ")")
+                    : (normFolderFilter + " (" + filteredList.size() + ")");
+                String fKey = normFolderFilter.isEmpty() ? null : normFolderFilter;
+                for (int i = 0; i < filteredList.size(); i++) {
+                    prepared.add(new PreparedEntry(
+                        headerText,
+                        filteredList.get(i),
+                        originalIndices.get(i).intValue(),
+                        fKey
+                    ));
+                }
+                return prepared;
+            }
+
+            List<PreparedEntry> uncategorized = new ArrayList<PreparedEntry>();
+            Map<String, List<PreparedEntry>> grouped = new LinkedHashMap<String, List<PreparedEntry>>();
+            for (int i = 0; i < filteredList.size(); i++) {
+                BrowserDataStore.EntryItem item = filteredList.get(i);
+                int origIdx = originalIndices.get(i).intValue();
+                if (item.folder == null || item.folder.isEmpty()) {
+                    uncategorized.add(new PreparedEntry(null, item, origIdx, null));
+                } else {
+                    List<PreparedEntry> bucket = grouped.get(item.folder);
+                    if (bucket == null) {
+                        bucket = new ArrayList<PreparedEntry>();
+                        grouped.put(item.folder, bucket);
+                    }
+                    bucket.add(new PreparedEntry(null, item, origIdx, item.folder));
+                }
+            }
+            if (!uncategorized.isEmpty()) {
+                String uncHeader = "未分类 (" + uncategorized.size() + ")";
+                for (int i = 0; i < uncategorized.size(); i++) {
+                    PreparedEntry pe = uncategorized.get(i);
+                    prepared.add(new PreparedEntry(uncHeader, pe.item, pe.originalIndex, null));
+                }
+            }
+            for (Map.Entry<String, List<PreparedEntry>> entry : grouped.entrySet()) {
+                String folderName = entry.getKey();
+                List<PreparedEntry> bucket = entry.getValue();
+                String header = folderName + " (" + bucket.size() + ")";
+                for (int i = 0; i < bucket.size(); i++) {
+                    PreparedEntry pe = bucket.get(i);
+                    prepared.add(new PreparedEntry(header, pe.item, pe.originalIndex, folderName));
+                }
             }
             return prepared;
         }
@@ -329,7 +631,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         mActiveListContainer = container;
         mActiveContainerIsBookmarks = isBookmarks;
         mRenderedCount = 0;
-        mLastRenderedSection = null;
+        mLastRenderedSectionKey = null;
         mLoadMoreFooterView = null;
         mPendingLoadMorePosted = false;
         container.removeAllViews();
@@ -343,7 +645,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         List<BrowserDataStore.EntryItem> rawList = mCachedTabEntries != null
             ? mCachedTabEntries
             : Collections.<BrowserDataStore.EntryItem>emptyList();
-        mPreparedEntries = buildPreparedEntries(rawList, isBookmarks, mSearchQuery, now);
+        mPreparedEntries = buildPreparedEntries(rawList, isBookmarks, mSearchQuery, isBookmarks ? mActiveFolderFilter : null, now);
 
         // Empty States
         if (mPreparedEntries.isEmpty()) {
@@ -396,10 +698,43 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
             }
             int targetEnd = Math.min(mPreparedEntries.size(), mRenderedCount + Math.max(1, batchSize));
             for (int i = mRenderedCount; i < targetEnd; i++) {
-                PreparedEntry entry = mPreparedEntries.get(i);
-                if (entry.sectionHeader != null && !entry.sectionHeader.equals(mLastRenderedSection)) {
-                    mActiveListContainer.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, entry.sectionHeader));
-                    mLastRenderedSection = entry.sectionHeader;
+                final PreparedEntry entry = mPreparedEntries.get(i);
+                String sectionKey = entry.folderKey != null
+                    ? ("F:" + entry.folderKey)
+                    : ("S:" + entry.sectionHeader);
+                if (entry.sectionHeader != null && !sectionKey.equals(mLastRenderedSectionKey)) {
+                    if (entry.folderKey != null && !entry.folderKey.isEmpty()) {
+                        final LinearLayout headerRow = new LinearLayout(ctx);
+                        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+                        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+                        TextView tvHeader = AcidWidgets.sectionHeader(ctx, mIsDarkMode, entry.sectionHeader);
+                        tvHeader.setSingleLine(true);
+                        tvHeader.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                        headerRow.addView(tvHeader, new LinearLayout.LayoutParams(
+                            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                        ));
+                        TextView manageBtn = AcidWidgets.textAction(
+                            ctx, mIsDarkMode, "管理", AcidTheme.accent(mIsDarkMode),
+                            new OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    showFolderManageMenu(v, entry.folderKey);
+                                }
+                            }
+                        );
+                        headerRow.addView(manageBtn);
+                        headerRow.setOnLongClickListener(new OnLongClickListener() {
+                            @Override
+                            public boolean onLongClick(View v) {
+                                showFolderManageMenu(headerRow, entry.folderKey);
+                                return true;
+                            }
+                        });
+                        mActiveListContainer.addView(headerRow);
+                    } else {
+                        mActiveListContainer.addView(AcidWidgets.sectionHeader(ctx, mIsDarkMode, entry.sectionHeader));
+                    }
+                    mLastRenderedSectionKey = sectionKey;
                 }
                 renderEntryRow(mActiveListContainer, entry.item, entry.originalIndex, mActiveContainerIsBookmarks);
                 mRenderedCount++;
@@ -447,9 +782,13 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         final boolean isBookmarks
     ) {
         final Context ctx = getContext();
+        String subtitle = item.url;
+        if (isBookmarks && !mSearchQuery.trim().isEmpty() && item.folder != null && !item.folder.isEmpty()) {
+            subtitle = "[" + item.folder + "] " + item.url;
+        }
         AcidWidgets.ListRow rowBuilder = new AcidWidgets.ListRow()
             .title(item.title)
-            .subtitle(item.url);
+            .subtitle(subtitle);
 
         bindRowFavicon(ctx, rowBuilder, item, isBookmarks);
         if (!isBookmarks && item.time > 0) {
@@ -556,7 +895,7 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_EDIT, "编辑书签", new Runnable() {
             @Override
             public void run() {
-                showEditBookmarkDialog(index, item);
+                showBookmarkFormDialog(index, item.title, item.url, item.folder);
             }
         }));
         actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_TRASH, "删除书签", true, new Runnable() {
@@ -589,48 +928,225 @@ public class BookmarksHistorySheet extends AcidBottomSheetView {
         actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_BOOKMARK, "添加到书签", new Runnable() {
             @Override
             public void run() {
-                mDataStore.addBookmark(item.title, item.url);
-                AcidFeedback.ok(ctx, "已添加至书签收藏");
+                showBookmarkFormDialog(-1, item.title, item.url, "");
             }
         }));
         AcidContextMenu.showForAnchor(ctx, anchor, mIsDarkMode, item.title, actions);
     }
 
-    private void showEditBookmarkDialog(final int index, final BrowserDataStore.EntryItem item) {
+    private void showBookmarkFormDialog(
+        final int editIndex,
+        String initTitle,
+        String initUrl,
+        String initFolder
+    ) {
+        final boolean isEdit = (editIndex >= 0);
         final Context ctx = getContext();
-        final EditText etTitle = AcidWidgets.inputField(ctx, mIsDarkMode, item.title, "网站标题", true);
-        final EditText etUrl = AcidWidgets.inputField(ctx, mIsDarkMode, item.url, "网址 (URL)", true);
+        final EditText etTitle = AcidWidgets.inputField(ctx, mIsDarkMode, initTitle, "网站标题", true);
+        final EditText etUrl = AcidWidgets.inputField(ctx, mIsDarkMode, initUrl, "网址 (URL)", true);
         etUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        final EditText etFolder = AcidWidgets.inputField(
+            ctx,
+            mIsDarkMode,
+            NetscapeBookmarkCodec.normalizeFolderPath(initFolder),
+            "留空为未分类，支持多级如 开发/开源",
+            true
+        );
 
         LinearLayout layout = new LinearLayout(ctx);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(AcidTheme.dp(ctx, 16), AcidTheme.dp(ctx, 8), AcidTheme.dp(ctx, 16), AcidTheme.dp(ctx, 8));
+        layout.setPadding(AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 4));
 
         layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "网站标题"));
         layout.addView(etTitle);
         layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "网址 (URL)"));
         layout.addView(etUrl);
+        layout.addView(AcidWidgets.fieldLabel(ctx, mIsDarkMode, "分类文件夹 (选填)"));
+        layout.addView(etFolder);
+
+        List<String> existingFolders = mDataStore.listBookmarkFolders();
+        if (!existingFolders.isEmpty()) {
+            HorizontalScrollView hsv = new HorizontalScrollView(ctx);
+            hsv.setHorizontalScrollBarEnabled(false);
+            LinearLayout chipRow = new LinearLayout(ctx);
+            chipRow.setOrientation(LinearLayout.HORIZONTAL);
+
+            List<String> pickers = new ArrayList<String>(existingFolders.size() + 1);
+            pickers.add("");
+            pickers.addAll(existingFolders);
+            for (int i = 0; i < pickers.size(); i++) {
+                final String val = pickers.get(i);
+                TextView pill = new TextView(ctx);
+                pill.setText(val.isEmpty() ? AcidLocale.tr("未分类") : val);
+                pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, AcidTheme.SP_BADGE);
+                pill.setTypeface(Typeface.DEFAULT_BOLD);
+                pill.setTextColor(AcidTheme.muted(mIsDarkMode));
+                pill.setPadding(AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 4), AcidTheme.dp(ctx, 10), AcidTheme.dp(ctx, 4));
+                pill.setBackground(AcidTheme.interactiveBg(
+                    ctx,
+                    AcidTheme.subtle(mIsDarkMode),
+                    AcidTheme.rowPressed(mIsDarkMode),
+                    AcidTheme.border(mIsDarkMode),
+                    AcidTheme.RADIUS_PILL
+                ));
+                pill.setClickable(true);
+                pill.setFocusable(true);
+                pill.setOnClickListener(new OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        etFolder.setText(val);
+                        if (!val.isEmpty()) {
+                            etFolder.setSelection(val.length());
+                        }
+                    }
+                });
+                LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                if (i > 0) pLp.leftMargin = AcidTheme.dp(ctx, 6);
+                chipRow.addView(pill, pLp);
+            }
+            hsv.addView(chipRow);
+            LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            hLp.bottomMargin = AcidTheme.dp(ctx, 6);
+            layout.addView(hsv, hLp);
+        }
 
         new AcidDialog(ctx, mIsDarkMode)
-            .setTitle("编辑书签")
+            .setTitle(isEdit ? "编辑书签" : "添加书签")
             .setCustomView(layout)
-            .setPositiveButton("保存", new AcidDialog.OnActionListener() {
+            .setPositiveButton(isEdit ? "保存" : "添加", new AcidDialog.OnActionListener() {
                 @Override
                 public boolean onAction(Dialog dialog) {
                     String t = etTitle.getText() != null ? etTitle.getText().toString().trim() : "";
                     String u = etUrl.getText() != null ? etUrl.getText().toString().trim() : "";
-                    if (TextUtils.isEmpty(u)) {
-                        AcidFeedback.warn(ctx, "网址不能为空");
+                    String f = etFolder.getText() != null ? etFolder.getText().toString().trim() : "";
+                    String validUrl = NetscapeBookmarkCodec.normalizeUserBookmarkUrl(u);
+                    if (validUrl == null) {
+                        AcidFeedback.warn(ctx, TextUtils.isEmpty(u) ? "网址不能为空" : "请输入有效的网址");
                         return false;
                     }
-                    mDataStore.updateBookmark(index, t, u);
-                    refreshActivePage();
-                    AcidFeedback.ok(ctx, "书签已更新");
+                    String normFolder = NetscapeBookmarkCodec.normalizeFolderPath(f);
+                    if (isEdit) {
+                        mDataStore.updateBookmark(editIndex, t, validUrl, normFolder);
+                    } else {
+                        mDataStore.addBookmark(t, validUrl, normFolder);
+                    }
+                    if (mActiveTab == TAB_BOOKMARKS) {
+                        if (!normFolder.isEmpty() && mActiveFolderFilter != null && !mActiveFolderFilter.equals(normFolder)) {
+                            mActiveFolderFilter = normFolder;
+                        }
+                        refreshActivePage();
+                    }
+                    AcidFeedback.ok(ctx, isEdit ? "书签已更新" : "已添加至书签收藏");
                     return true;
                 }
             })
             .setNegativeButton("取消", null)
             .show();
+    }
+
+    private void updateActiveFilterOnRename(String oldFolder, String newFolder) {
+        if (mActiveFolderFilter == null || oldFolder == null) return;
+        if (oldFolder.equals(mActiveFolderFilter)) {
+            mActiveFolderFilter = newFolder;
+        } else if (mActiveFolderFilter.startsWith(oldFolder + "/")) {
+            mActiveFolderFilter = NetscapeBookmarkCodec.normalizeFolderPath(
+                newFolder + mActiveFolderFilter.substring(oldFolder.length())
+            );
+        }
+    }
+
+    private void clearActiveFilterIfMatches(String targetFolder) {
+        if (mActiveFolderFilter == null || targetFolder == null) return;
+        if (targetFolder.equals(mActiveFolderFilter)
+            || mActiveFolderFilter.startsWith(targetFolder + "/")) {
+            mActiveFolderFilter = null;
+        }
+    }
+
+    private void showFolderManageMenu(View anchor, final String folder) {
+        if (TextUtils.isEmpty(folder)) return;
+        final Context ctx = getContext();
+        List<AcidContextMenu.ActionItem> actions = new ArrayList<AcidContextMenu.ActionItem>();
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_EDIT, "重命名文件夹", new Runnable() {
+            @Override
+            public void run() {
+                AcidDialogs.inputSingleLine(
+                    ctx,
+                    mIsDarkMode,
+                    "重命名文件夹",
+                    "文件夹名称",
+                    folder,
+                    "输入新文件夹名称 (支持 A/B)",
+                    0,
+                    "保存",
+                    "文件夹名称不能为空",
+                    new AcidDialogs.InputSubmitListener() {
+                        @Override
+                        public boolean onSubmit(String trimmedValue) {
+                            String next = NetscapeBookmarkCodec.normalizeFolderPath(trimmedValue);
+                            if (next.isEmpty()) {
+                                AcidFeedback.warn(ctx, "文件夹名称不能为空");
+                                return false;
+                            }
+                            if (!next.equals(folder)) {
+                                int count = mDataStore.renameBookmarkFolder(folder, next);
+                                updateActiveFilterOnRename(folder, next);
+                                refreshActivePage();
+                                AcidFeedback.ok(ctx, "已重命名文件夹 (" + count + " 条书签)");
+                            }
+                            return true;
+                        }
+                    }
+                );
+            }
+        }));
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_RETURN, "解散文件夹 (移至未分类)", new Runnable() {
+            @Override
+            public void run() {
+                AcidDialogs.confirm(
+                    ctx,
+                    mIsDarkMode,
+                    "解散文件夹 (移至未分类)",
+                    "确定解散文件夹「" + folder + "」吗？其中的书签将移至上级或未分类，不会被删除。",
+                    "解散",
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            int count = mDataStore.dissolveBookmarkFolder(folder);
+                            clearActiveFilterIfMatches(folder);
+                            refreshActivePage();
+                            AcidFeedback.ok(ctx, "已解散文件夹 (" + count + " 条书签)");
+                        }
+                    }
+                );
+            }
+        }));
+        actions.add(new AcidContextMenu.ActionItem(AcidIcons.ICON_TRASH, "删除文件夹及书签", true, new Runnable() {
+            @Override
+            public void run() {
+                AcidDialogs.confirmDanger(
+                    ctx,
+                    mIsDarkMode,
+                    "删除文件夹及书签",
+                    "确定要删除文件夹「" + folder + "」及其中的全部书签吗？此操作无法撤销。",
+                    "删除",
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            int count = mDataStore.deleteBookmarkFolder(folder);
+                            clearActiveFilterIfMatches(folder);
+                            refreshActivePage();
+                            AcidFeedback.info(ctx, "已删除文件夹及 " + count + " 条书签");
+                        }
+                    }
+                );
+            }
+        }));
+        AcidContextMenu.showForAnchor(ctx, anchor, mIsDarkMode, folder, actions);
     }
 
     private void showDeleteBookmarkConfirm(final int index, final BrowserDataStore.EntryItem item) {

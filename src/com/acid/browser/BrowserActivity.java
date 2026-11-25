@@ -39,6 +39,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
 
     private static final String TAG = "BrowserActivity";
     public static final int REQUEST_CODE_AGENT_ATTACH = 0x4644;
+    public static final int REQUEST_CODE_IMPORT_BOOKMARKS = 0x4645;
 
     private BrowserDataStore mDataStore;
     private BrowserController mController;
@@ -515,6 +516,17 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                 }
             }
         );
+        mBookmarksHistorySheet.setBookmarkIoListener(new BookmarksHistorySheet.BookmarkIoListener() {
+            @Override
+            public void onImportBookmarksRequested() {
+                requestBookmarkImportPicker();
+            }
+
+            @Override
+            public void onExportBookmarksRequested() {
+                exportBookmarksToHtml();
+            }
+        });
         attachModalSheet(mBookmarksHistorySheet);
 
         // 3. Downloads Manager
@@ -790,6 +802,16 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
                     if (mController != null) {
                         mController.setWebTextZoom(zoom);
                     }
+                }
+
+                @Override
+                public void onImportBookmarksRequested() {
+                    requestBookmarkImportPicker();
+                }
+
+                @Override
+                public void onExportBookmarksRequested() {
+                    exportBookmarksToHtml();
                 }
             }
         );
@@ -2272,7 +2294,34 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mAgentFloatingView.handleAttachmentPickerResult(resultCode, data);
             return;
         }
+        if (requestCode == REQUEST_CODE_IMPORT_BOOKMARKS) {
+            handleBookmarkImportResult(resultCode, data);
+            return;
+        }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private void requestBookmarkImportPicker() {
+        BookmarkTransferHelper.startImportPicker(this, REQUEST_CODE_IMPORT_BOOKMARKS);
+    }
+
+    private void handleBookmarkImportResult(int resultCode, Intent data) {
+        BookmarkTransferHelper.handleImportResult(this, mDataStore, resultCode, data, new Runnable() {
+            @Override
+            public void run() {
+                if (mBookmarksHistorySheet != null) {
+                    if (mBookmarksHistorySheet.isShowing()) {
+                        mBookmarksHistorySheet.refreshActivePage();
+                    } else {
+                        mBookmarksHistorySheet.markNeedsRenderOnShow();
+                    }
+                }
+            }
+        });
+    }
+
+    private void exportBookmarksToHtml() {
+        BookmarkTransferHelper.exportAndPromptShare(this, mDataStore, mController, mIsDarkMode);
     }
 
     @Override

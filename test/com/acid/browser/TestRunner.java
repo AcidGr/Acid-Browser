@@ -197,6 +197,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testGpuScreenshotCaptureAndMasking(); }
         });
 
+        // 29. Netscape Bookmark HTML/JSON Import-Export, Folder Normalization & Sheet Grouping
+        run("29. Bookmark Import/Export & Folders: Netscape HTML Round-Trip, JSON Import, Dedupe, Folder Batch Ops & Sheet Grouping", new TestCase() {
+            @Override public void execute() throws Exception { testNetscapeBookmarkImportExportAndFolders(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -4457,5 +4462,215 @@ public final class TestRunner {
                 AcidAgentLoop.summarizeToolArgs("browser", takeoverArgs),
                 "request_takeover tool summary includes reason");
         } catch (org.json.JSONException ignored) {}
+    }
+
+    static void testNetscapeBookmarkImportExportAndFolders() throws Exception {
+        // 1. Folder path normalization & ADD_DATE timestamp parsing
+        assertEquals("Dev/Open Source",
+            NetscapeBookmarkCodec.normalizeFolderPath(" /Dev\\../Open   Source/./ "),
+            "Folder path normalizes slashes, dots, and repeated whitespace");
+        assertEquals("", NetscapeBookmarkCodec.normalizeFolderPath("///.. / ."),
+            "Dot-only folder collapses to empty string");
+
+        assertEquals(Long.valueOf(1700000000000L),
+            Long.valueOf(NetscapeBookmarkCodec.parseAddDateToMillis("1700000000")),
+            "Parses Unix seconds ADD_DATE to millis");
+        assertEquals(Long.valueOf(1700000000123L),
+            Long.valueOf(NetscapeBookmarkCodec.parseAddDateToMillis("1700000000123")),
+            "Parses Unix millis ADD_DATE directly");
+        assertEquals(Long.valueOf(1700000000000L),
+            Long.valueOf(NetscapeBookmarkCodec.parseAddDateToMillis("13344473600000000")),
+            "Converts Chrome 17-digit WebKit microseconds since 1601 to Unix millis");
+
+        // 2. Parse Chrome/Firefox-style Netscape HTML with entities, inline base64 ICON, nested H3 & unsafe scheme guard
+        StringBuilder hugeIcon = new StringBuilder();
+        for (int i = 0; i < 600; i++) hugeIcon.append('A');
+        String sampleHtml = "<!DOCTYPE NETSCAPE-Bookmark-file-1>\n"
+            + "<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n"
+            + "<TITLE>Bookmarks</TITLE>\n"
+            + "<H1>Bookmarks</H1>\n"
+            + "<DL><p>\n"
+            + "    <DT><A HREF=\"https://root.example/?a=1&amp;b=2\" ADD_DATE=\"1700000000\">Root &amp; Home</A>\n"
+            + "    <DT><A HREF=\"javascript:alert(1)\" ADD_DATE=\"1700000001\">Evil JS</A>\n"
+            + "    <DT><A HREF=\"data:text/html,hi\" ADD_DATE=\"1700000001\">Evil Data</A>\n"
+            + "    <DT><H3 ADD_DATE=\"1700000000\" PERSONAL_TOOLBAR_FOLDER=\"true\">Bookmarks Bar</H3>\n"
+            + "    <DD>Optional description\n"
+            + "    <DL><p>\n"
+            + "        <DT><A HREF=\"https://github.com/trending\" ADD_DATE=\"1700000100\" ICON=\"data:image/png;base64," + hugeIcon + "\">GitHub &quot;Trending&quot; &#39;Dev&#39; &#x1F680;</A>\n"
+            + "        <DT><H3 ADD_DATE=\"1700000200\">AI / Tools</H3>\n"
+            + "        <DL><p>\n"
+            + "            <DT><A HREF=\"https://openai.com/\" ADD_DATE=\"13344473600000000\"><b>OpenAI</b></A>\n"
+            + "        </DL><p>\n"
+            + "    </DL><p>\n"
+            + "    <DT><A HREF=\"https://after.example/\" ADD_DATE=\"1700000300\">After Folder</A>\n"
+            + "</DL><p>\n";
+
+        NetscapeBookmarkCodec.ImportParseResult parsedHtml = NetscapeBookmarkCodec.parseImportContent(sampleHtml);
+        assertTrue(parsedHtml.ok, "Parses Netscape HTML cleanly");
+        assertEquals("html", parsedHtml.format, "Detects html format");
+        assertEquals(Integer.valueOf(4), Integer.valueOf(parsedHtml.items.size()),
+            "Filters javascript:/data: bookmarks while keeping all 4 safe entries");
+        assertEquals("Root & Home", parsedHtml.items.get(0).title, "Decodes &amp; entity in title");
+        assertEquals("https://root.example/?a=1&b=2", parsedHtml.items.get(0).url, "Decodes &amp; entity in HREF");
+        assertEquals("", parsedHtml.items.get(0).folder, "Root bookmark has empty folder");
+        assertEquals("GitHub \"Trending\" 'Dev' 🚀", parsedHtml.items.get(1).title,
+            "Decodes quot, #39, and hex Unicode entities despite huge ICON attribute");
+        assertEquals("Bookmarks Bar", parsedHtml.items.get(1).folder, "Tracks first-level folder");
+        assertEquals("Bookmarks Bar/AI Tools", parsedHtml.items.get(2).folder,
+            "Tracks nested folder and sanitizes slash inside folder name");
+        assertEquals("OpenAI", parsedHtml.items.get(2).title, "Strips inline <b> tags");
+        assertEquals(Long.valueOf(1700000000000L), Long.valueOf(parsedHtml.items.get(2).time),
+            "Parses WebKit microsecond ADD_DATE");
+        assertEquals("", parsedHtml.items.get(3).folder, "Pops nested folder stack cleanly back to root");
+
+        // 3. Lossless round-trip export -> import
+        List<BrowserDataStore.EntryItem> roundTripSource = new ArrayList<BrowserDataStore.EntryItem>();
+        roundTripSource.add(new BrowserDataStore.EntryItem("Pinned <Top>", "https://pinned.example/?x=1&y=2", 1710000000000L, ""));
+        roundTripSource.add(new BrowserDataStore.EntryItem("Repo", "https://github.com/acid", 1710000100000L, "Tech/Code"));
+        roundTripSource.add(new BrowserDataStore.EntryItem("Docs", "https://docs.example", 1710000200000L, "Tech/Docs"));
+        String exportedHtml = NetscapeBookmarkCodec.exportToHtml(roundTripSource, 1710000000000L);
+        assertTrue(exportedHtml.startsWith("<!DOCTYPE NETSCAPE-Bookmark-file-1>"), "Standard Netscape header emitted");
+        NetscapeBookmarkCodec.ImportParseResult reparsed = NetscapeBookmarkCodec.parseImportContent(exportedHtml);
+        assertTrue(reparsed.ok, "Exported HTML parses back cleanly");
+        assertEquals(Integer.valueOf(3), Integer.valueOf(reparsed.items.size()), "Round-trip preserves item count");
+        assertEquals("Pinned <Top>", reparsed.items.get(0).title, "Round-trip preserves special chars in title");
+        assertEquals("Tech/Code", reparsed.items.get(1).folder, "Round-trip preserves nested folder 1");
+        assertEquals("Tech/Docs", reparsed.items.get(2).folder, "Round-trip preserves nested folder 2");
+        assertEquals(Long.valueOf(1710000100000L), Long.valueOf(reparsed.items.get(1).time),
+            "Round-trip preserves second-precision timestamp");
+
+        // 4. JSON auto-detection with UTF-8 BOM & invalid/empty errors
+        String bomJson = "\uFEFF[{\"title\":\"JSON Site\",\"url\":\"https://json.example\",\"folder\":\"Work/API\",\"time\":1720000000000},{\"title\":\"Bad\",\"url\":\"javascript:void(0)\"}]";
+        NetscapeBookmarkCodec.ImportParseResult parsedJson = NetscapeBookmarkCodec.parseImportContent(bomJson);
+        assertTrue(parsedJson.ok, "Parses JSON bookmark array with UTF-8 BOM");
+        assertEquals("json", parsedJson.format, "Detects json format");
+        assertEquals(Integer.valueOf(1), Integer.valueOf(parsedJson.items.size()), "Filters unsafe URL in JSON import");
+        assertEquals("Work/API", parsedJson.items.get(0).folder, "Preserves folder from JSON");
+        assertTrue(!NetscapeBookmarkCodec.parseImportContent("").ok, "Rejects empty import content");
+        assertTrue(!NetscapeBookmarkCodec.parseImportContent("<html><body>no links</body></html>").ok,
+            "Rejects HTML with zero bookmarks");
+
+        // 4b. Unclosed <H3> boundary & standalone non-folder <h3> leak guard + user URL normalizer
+        String unclosedH3Html = "<DL><p>\n"
+            + "<DT><H3>Outer\n"
+            + "<DL><p>\n"
+            + "<DT><H3>Inner</H3>\n"
+            + "<DL><p>\n"
+            + "<DT><A HREF=\"https://inner.example\">In</A>\n"
+            + "</DL><p>\n"
+            + "</DL><p>\n"
+            + "<H3>Article Heading</H3><p><A HREF=\"https://a.example\">A</A></p>"
+            + "<DL><DT><A HREF=\"https://b.example\">B</A></DL>\n"
+            + "</DL><p>";
+        NetscapeBookmarkCodec.ImportParseResult edgeParsed = NetscapeBookmarkCodec.parseImportContent(unclosedH3Html);
+        assertTrue(edgeParsed.ok, "Parses unclosed H3 and standalone H3 safely");
+        assertEquals(Integer.valueOf(3), Integer.valueOf(edgeParsed.items.size()), "Extracts all 3 links");
+        assertEquals("Outer/Inner", edgeParsed.items.get(0).folder,
+            "Unclosed H3 stops before <DL> and preserves nested Outer/Inner");
+        assertEquals("", edgeParsed.items.get(2).folder,
+            "Standalone H3 before <A> does not leak pendingFolder into subsequent <DL>");
+
+        assertEquals("https://github.com", NetscapeBookmarkCodec.normalizeUserBookmarkUrl("github.com"),
+            "Prepends https:// for bare domain");
+        assertEquals("https://example.com:8443/p", NetscapeBookmarkCodec.normalizeUserBookmarkUrl("example.com:8443/p"),
+            "Prepends https:// for host:port/path");
+        assertEquals("https://acid.org", NetscapeBookmarkCodec.normalizeUserBookmarkUrl("  https://acid.org  "),
+            "Preserves valid https URL");
+        assertEquals(null, NetscapeBookmarkCodec.normalizeUserBookmarkUrl(""), "Rejects empty URL");
+        assertEquals(null, NetscapeBookmarkCodec.normalizeUserBookmarkUrl("javascript:alert(1)"), "Rejects javascript: URL");
+        assertEquals(null, NetscapeBookmarkCodec.normalizeUserBookmarkUrl("data:text/html,1"), "Rejects data: URL");
+        assertEquals(null, NetscapeBookmarkCodec.normalizeUserBookmarkUrl("file:///etc/hosts"), "Rejects file: URL");
+        assertEquals(null, NetscapeBookmarkCodec.normalizeUserBookmarkUrl("mailto:a@b.com"), "Rejects mailto: scheme");
+
+        // 5. Repository persistence, import append+dedupe, and folder batch operations
+        File tmpDir = File.createTempFile("acid_bm_folder_test_", "_dir");
+        tmpDir.delete();
+        tmpDir.mkdirs();
+        try {
+            File settingsFile = new File(tmpDir, "settings.json");
+            File bookmarksFile = new File(tmpDir, "bookmarks.json");
+            File historyFile = new File(tmpDir, "history.json");
+            InMemoryPrefs prefs = new InMemoryPrefs();
+            BrowserDataStore store = new BrowserDataStore(prefs, new InMemoryPrefs(), settingsFile, bookmarksFile, historyFile);
+            store.syncBookmarksJsonFile();
+
+            // Initially 6 default bookmarks at indices 0..5
+            List<BrowserDataStore.EntryItem> incoming = new ArrayList<BrowserDataStore.EntryItem>();
+            incoming.add(new BrowserDataStore.EntryItem("GitHub Dup", "https://github.com", 0L, "Duplicate"));
+            incoming.add(new BrowserDataStore.EntryItem("MDN", "https://developer.mozilla.org", 1725000000000L, "Dev/Docs"));
+            incoming.add(new BrowserDataStore.EntryItem("ArchWiki", "https://wiki.archlinux.org", 1725000001000L, "Dev/Linux"));
+            incoming.add(new BrowserDataStore.EntryItem("News", "https://news.ycombinator.com", 0L, "Reading"));
+            incoming.add(new BrowserDataStore.EntryItem("LWN", "https://lwn.net", 1725000002000L, "Reading"));
+
+            BookmarkRepository.ImportSummary summary = store.importBookmarks(incoming);
+            assertEquals(Integer.valueOf(3), Integer.valueOf(summary.addedCount), "Added 3 non-duplicate bookmarks");
+            assertEquals(Integer.valueOf(2), Integer.valueOf(summary.skippedDuplicateCount), "Skipped 2 duplicate URLs");
+
+            List<BrowserDataStore.EntryItem> afterImport = store.loadBookmarks();
+            assertEquals(Integer.valueOf(9), Integer.valueOf(afterImport.size()), "Total bookmarks = 6 default + 3 imported");
+            assertEquals("Google", afterImport.get(0).title, "Existing top homepage bookmark preserved at index 0");
+            assertEquals("MDN", afterImport.get(6).title, "Imported bookmarks appended after existing entries");
+            assertEquals("Dev/Docs", afterImport.get(6).folder, "Imported bookmark retains folder");
+
+            // Reload from disk JSON confirms folder/time round-trip
+            assertTrue(store.reloadBookmarksFromJsonFile(true), "Reloads bookmarks.json cleanly");
+            assertEquals("Dev/Docs", store.loadBookmarks().get(6).folder, "Folder survives JSON save & reload");
+            assertEquals(Long.valueOf(1725000000000L), Long.valueOf(store.loadBookmarks().get(6).time),
+                "Time survives JSON save & reload");
+
+            // Add bookmark with folder & listFolders
+            store.addBookmark("Kotlin", "https://kotlinlang.org", "Dev");
+            List<String> folders = store.listBookmarkFolders();
+            assertEquals(Integer.valueOf(4), Integer.valueOf(folders.size()), "Lists 4 distinct folders");
+
+            // Rename prefix "Dev" -> "Engineering"
+            int renamed = store.renameBookmarkFolder("Dev", "Engineering");
+            assertEquals(Integer.valueOf(3), Integer.valueOf(renamed),
+                "Renames exact folder and nested subfolder entries");
+            assertTrue(store.listBookmarkFolders().contains("Engineering/Docs"), "Nested folder renamed");
+
+            // Dissolve "Engineering" moves direct entry to "" and promotes "Engineering/Docs" -> "Docs"
+            int dissolved = store.dissolveBookmarkFolder("Engineering");
+            assertEquals(Integer.valueOf(3), Integer.valueOf(dissolved), "Dissolves 3 entries under Engineering");
+            List<String> afterDissolveFolders = store.listBookmarkFolders();
+            assertTrue(afterDissolveFolders.contains("Docs") && afterDissolveFolders.contains("Linux"),
+                "Nested children promoted cleanly on parent folder dissolve");
+
+            // Delete folder "Reading" removes LWN only
+            int deleted = store.deleteBookmarkFolder("Reading");
+            assertEquals(Integer.valueOf(1), Integer.valueOf(deleted), "Deletes folder bookmarks");
+            assertTrue(!store.listBookmarkFolders().contains("Reading"), "Deleted folder gone from folder list");
+
+            // 6. BookmarksHistorySheet 5-arg folder grouping & filtering
+            List<BrowserDataStore.EntryItem> sheetSource = new ArrayList<BrowserDataStore.EntryItem>();
+            sheetSource.add(new BrowserDataStore.EntryItem("Pin1", "https://p1.example", ""));
+            sheetSource.add(new BrowserDataStore.EntryItem("Code1", "https://c1.example", "Code"));
+            sheetSource.add(new BrowserDataStore.EntryItem("Pin2", "https://p2.example", ""));
+            sheetSource.add(new BrowserDataStore.EntryItem("Read1", "https://r1.example", "Read"));
+
+            long now = System.currentTimeMillis();
+            List<BookmarksHistorySheet.PreparedEntry> allGrouped =
+                BookmarksHistorySheet.buildPreparedEntries(sheetSource, true, "", null, now);
+            assertEquals("未分类 (2)", allGrouped.get(0).sectionHeader, "Uncategorized items grouped first");
+            assertEquals("Code (1)", allGrouped.get(2).sectionHeader, "Folder group header includes count");
+            assertEquals("Code", allGrouped.get(2).folderKey, "Named folder sets folderKey");
+            assertEquals(Integer.valueOf(1), Integer.valueOf(allGrouped.get(2).originalIndex),
+                "Grouped order preserves original backing index");
+
+            List<BookmarksHistorySheet.PreparedEntry> onlyCode =
+                BookmarksHistorySheet.buildPreparedEntries(sheetSource, true, "", "Code", now);
+            assertEquals(Integer.valueOf(1), Integer.valueOf(onlyCode.size()), "Folder filter selects matching folder");
+            assertEquals(Integer.valueOf(1), Integer.valueOf(onlyCode.get(0).originalIndex),
+                "Folder filter preserves original index");
+
+            List<BookmarksHistorySheet.PreparedEntry> searchByFolder =
+                BookmarksHistorySheet.buildPreparedEntries(sheetSource, true, "read", null, now);
+            assertEquals(Integer.valueOf(1), Integer.valueOf(searchByFolder.size()),
+                "Search query matches bookmark folder names too");
+            assertEquals("搜索结果 (1)", searchByFolder.get(0).sectionHeader,
+                "Search uses Search Results header");
+        } finally {
+            SkillStorageVault.deleteRecursiveSafe(tmpDir);
+        }
     }
 }
