@@ -186,6 +186,11 @@ public class BrowserSettingsSheet extends AcidBottomSheetView {
                             @Override public void onClick(View v) { showHomepageDialog(); }
                         }
                     ),
+                    AcidWidgets.switchRow(
+                        ctx, mIsDarkMode, AcidIcons.ICON_TABS, accent,
+                        AcidSettings.RESTORE_TABS_ON_STARTUP, mDataStore,
+                        "已开启保留未关闭标签页", "已关闭保留未关闭标签页"
+                    ),
                     AcidWidgets.navRow(
                         ctx, mIsDarkMode, AcidIcons.ICON_DOWNLOAD, accent,
                         AcidSettings.DOWNLOADER_ENGINE.title, getDownloaderEngineLabel(),

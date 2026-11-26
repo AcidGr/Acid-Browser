@@ -218,6 +218,11 @@ public final class TestRunner {
             @Override public void execute() throws Exception { testRendererSingleFlightAndFastAutomationPolicies(); }
         });
 
+        // 33. Startup Tab Restore Setting, Session Persistence, Sanitization & Lazy-Restore Policy
+        run("33. Startup Tab Restore: Setting Default/Sync, Session Codec, URL Sanitization, ActiveIndex Remap, Backup Isolation & Locale", new TestCase() {
+            @Override public void execute() throws Exception { testStartupTabRestorePersistenceAndPolicy(); }
+        });
+
         System.out.println("[AcidTests] Suite Complete -> Passed: " + sPassed + ", Failed: " + sFailed);
         System.exit(sFailed > 0 ? 1 : 0);
     }
@@ -5526,5 +5531,285 @@ public final class TestRunner {
             "eval on loading tab triggers short download poll");
         assertTrue(AcidSandboxTools.shouldPollForDownloadAfterAction("navigate", new JSONObject(), null, false),
             "navigate allows short download poll");
+    }
+
+    // =========================================================================
+    // 33. Startup Tab Restore Setting, Session Persistence & Sanitization
+    // =========================================================================
+
+    private static void testStartupTabRestorePersistenceAndPolicy() throws Exception {
+        File tmpDir = File.createTempFile("acid_tab_restore_", "_dir");
+        tmpDir.delete();
+        tmpDir.mkdirs();
+        BrowserDataStore store = null;
+        try {
+            File wsDir = new File(tmpDir, "workspace");
+            wsDir.mkdirs();
+            File settingsFile = new File(wsDir, "settings.json");
+            InMemoryPrefs prefs = new InMemoryPrefs();
+            store = new BrowserDataStore(prefs, new InMemoryPrefs(), settingsFile);
+            store.setWorkspaceDir(wsDir);
+
+            // 1. Setting default, JSON schema & settings.json hot-reload
+            assertTrue(!store.isRestoreTabsOnStartup(), "RESTORE_TABS_ON_STARTUP defaults to false");
+            assertTrue(
+                AcidSettings.describeJsonSchemaForPrompt().contains("`restore_tabs_on_startup`: boolean"),
+                "Prompt schema includes restore_tabs_on_startup"
+            );
+            JSONObject initialExport = store.exportToJson();
+            assertEquals(Boolean.FALSE, Boolean.valueOf(initialExport.getBoolean("restore_tabs_on_startup")),
+                "Exported settings default restore_tabs_on_startup to false");
+
+            store.setRestoreTabsOnStartup(true);
+            assertTrue(store.isRestoreTabsOnStartup(), "setRestoreTabsOnStartup(true) persists");
+            store.syncSettingsJsonFile();
+            String exportedStr = AcidIo.readFileUtf8OrEmpty(settingsFile, 64 * 1024);
+            assertTrue(
+                exportedStr.contains("\"restore_tabs_on_startup\": true")
+                    || exportedStr.contains("\"restore_tabs_on_startup\":true"),
+                "settings.json reflects restore_tabs_on_startup=true"
+            );
+
+            JSONObject mutated = new JSONObject(exportedStr);
+            mutated.put("restore_tabs_on_startup", false);
+            AcidIo.writeFileUtf8Safe(settingsFile, mutated.toString(2));
+            assertTrue(store.reloadFromJsonFile(true), "Reload mutated settings.json");
+            assertTrue(!store.isRestoreTabsOnStartup(), "Hot-reloaded restore_tabs_on_startup updated to false");
+            store.setRestoreTabsOnStartup(true);
+
+            // 2. Round-trip save/load with url, title, isDesktopMode & activeIndex
+            File snakeFile = new File(wsDir, "snake.html");
+            AcidIo.writeFileUtf8Safe(snakeFile, "<html><body>Snake</body></html>");
+            File plusFile = new File(wsDir, "c++_notes.html");
+            AcidIo.writeFileUtf8Safe(plusFile, "<html><body>C++</body></html>");
+            File spaceFile = new File(wsDir, "my notes.html");
+            AcidIo.writeFileUtf8Safe(spaceFile, "<html><body>Space</body></html>");
+            File wsHomeDir = new File(wsDir, "homepage");
+            wsHomeDir.mkdirs();
+            File wsHomeFile = new File(wsHomeDir, "index.html");
+            AcidIo.writeFileUtf8Safe(wsHomeFile, "<html><body>Acid Home</body></html>");
+
+            List<TabSessionRepository.SavedTabEntry> basicTabs = Arrays.asList(
+                new TabSessionRepository.SavedTabEntry("https://news.ycombinator.com", "Hacker News", false),
+                new TabSessionRepository.SavedTabEntry("http://127.0.0.1:8080/app", "Local Dev", true),
+                new TabSessionRepository.SavedTabEntry("file://" + snakeFile.getAbsolutePath(), "Snake Game", false),
+                new TabSessionRepository.SavedTabEntry("file://" + plusFile.getAbsolutePath(), "C++ Notes", false),
+                new TabSessionRepository.SavedTabEntry("file://" + wsDir.getAbsolutePath() + "/my%20notes.html", "My Notes", false)
+            );
+            store.saveTabSession(basicTabs, 1);
+            TabSessionRepository.SavedTabSession loadedBasic = store.loadTabSession();
+            assertTrue(loadedBasic != null, "Saved tab session loads cleanly");
+            assertEquals(Integer.valueOf(5), Integer.valueOf(loadedBasic.tabs.size()), "All 5 valid tabs restored");
+            assertEquals(Integer.valueOf(1), Integer.valueOf(loadedBasic.activeIndex), "Active index preserved");
+            assertEquals("https://news.ycombinator.com", loadedBasic.tabs.get(0).url, "Tab 0 URL matches");
+            assertEquals("Hacker News", loadedBasic.tabs.get(0).title, "Tab 0 title matches");
+            assertTrue(!loadedBasic.tabs.get(0).isDesktopMode, "Tab 0 mobile mode preserved");
+            assertEquals("http://127.0.0.1:8080/app", loadedBasic.tabs.get(1).url, "Tab 1 URL matches");
+            assertTrue(loadedBasic.tabs.get(1).isDesktopMode, "Tab 1 desktop mode preserved");
+            assertEquals("file://" + snakeFile.getAbsolutePath(), loadedBasic.tabs.get(2).url, "Workspace file:// preserved");
+            assertEquals("file://" + plusFile.getAbsolutePath(), loadedBasic.tabs.get(3).url, "Workspace file:// with literal '+' preserved");
+            assertEquals("file://" + wsDir.getAbsolutePath() + "/my%20notes.html", loadedBasic.tabs.get(4).url, "Workspace file:// with %20 preserved");
+
+            // 3. URL sanitization & homepage alias normalization
+            String effectiveCustomHome = "https://start.example.org/";
+            store.setHomeType(BrowserDataStore.HOME_CUSTOM);
+            store.setCustomHomeUrl(effectiveCustomHome);
+
+            assertTrue(TabSessionRepository.sanitizeRestorableTabUrl("about:blank", wsDir, false, effectiveCustomHome) == null,
+                "about:blank filtered when HOME_TYPE != HOME_BLANK");
+            assertEquals("about:blank",
+                TabSessionRepository.sanitizeRestorableTabUrl("about:blank", wsDir, true, "about:blank"),
+                "about:blank preserved when HOME_TYPE == HOME_BLANK");
+            assertTrue(TabSessionRepository.sanitizeRestorableTabUrl("javascript:alert(1)", wsDir, true, effectiveCustomHome) == null,
+                "javascript: URL rejected");
+            assertTrue(TabSessionRepository.sanitizeRestorableTabUrl("blob:https://example.com/abc", wsDir, true, effectiveCustomHome) == null,
+                "blob: URL rejected");
+            assertTrue(TabSessionRepository.sanitizeRestorableTabUrl("data:text/html,hi", wsDir, true, effectiveCustomHome) == null,
+                "data: URL rejected");
+            assertTrue(TabSessionRepository.sanitizeRestorableTabUrl("intent://scan/#Intent;end", wsDir, true, effectiveCustomHome) == null,
+                "intent: URL rejected");
+            assertTrue(TabSessionRepository.sanitizeRestorableTabUrl("file:///etc/passwd", wsDir, true, effectiveCustomHome) == null,
+                "Sandbox-escaping file:// URL rejected");
+            assertTrue(TabSessionRepository.sanitizeRestorableTabUrl("file:///android_asset/../secret", wsDir, true, effectiveCustomHome) == null,
+                "Traversal android_asset URL rejected");
+            assertTrue(TabSessionRepository.sanitizeRestorableTabUrl("file://" + new File(wsDir, "deleted.html").getAbsolutePath(), wsDir, true, effectiveCustomHome) == null,
+                "Non-existent workspace file:// URL filtered");
+            assertEquals("file:///android_asset/skills/homepage_dev.md",
+                TabSessionRepository.sanitizeRestorableTabUrl("file:///android_asset/skills/homepage_dev.md", wsDir, false, effectiveCustomHome),
+                "Safe android_asset URL preserved");
+            assertEquals(effectiveCustomHome,
+                TabSessionRepository.sanitizeRestorableTabUrl("acid://home", wsDir, false, effectiveCustomHome),
+                "acid://home normalized to effective home");
+            assertEquals(effectiveCustomHome,
+                TabSessionRepository.sanitizeRestorableTabUrl(BrowserController.HOME_URL, wsDir, false, effectiveCustomHome),
+                "HOME_URL normalized to effective home");
+            assertEquals(effectiveCustomHome,
+                TabSessionRepository.sanitizeRestorableTabUrl("file://" + wsHomeFile.getAbsolutePath(), wsDir, false, effectiveCustomHome),
+                "Workspace homepage normalized to effective home");
+
+            // Restore HOME_BLANK allows about:blank in saved session
+            store.setHomeType(BrowserDataStore.HOME_BLANK);
+            store.saveTabSession(Arrays.asList(
+                new TabSessionRepository.SavedTabEntry("about:blank", "Blank", false),
+                new TabSessionRepository.SavedTabEntry("https://example.com", "Example", false)
+            ), 0);
+            TabSessionRepository.SavedTabSession blankSession = store.loadTabSession();
+            assertTrue(blankSession != null && blankSession.tabs.size() == 2, "about:blank retained in HOME_BLANK mode");
+            assertEquals("about:blank", blankSession.tabs.get(0).url, "Blank tab URL kept");
+
+            // 4. ActiveIndex remapping when invalid entries precede or occupy activeIndex
+            store.setHomeType(BrowserDataStore.HOME_ACID);
+            store.saveTabSession(Arrays.asList(
+                new TabSessionRepository.SavedTabEntry("about:blank", "Transient", false),
+                new TabSessionRepository.SavedTabEntry("javascript:void(0)", "Bad", false),
+                new TabSessionRepository.SavedTabEntry("https://first.example", "First", false),
+                new TabSessionRepository.SavedTabEntry("blob:https://x.test/1", "Blob", false),
+                new TabSessionRepository.SavedTabEntry("https://second.example", "Second", true)
+            ), 4);
+            TabSessionRepository.SavedTabSession remapped1 = store.loadTabSession();
+            assertTrue(remapped1 != null && remapped1.tabs.size() == 2, "Filtered session keeps 2 valid entries");
+            assertEquals(Integer.valueOf(1), Integer.valueOf(remapped1.activeIndex),
+                "Active index remapped from 4 to 1 after preceding invalid items dropped");
+            assertEquals("https://second.example", remapped1.tabs.get(remapped1.activeIndex).url,
+                "Remapped active tab points to Second");
+
+            // When active item itself is filtered, falls back cleanly to nearest valid item (or 0)
+            store.saveTabSession(Arrays.asList(
+                new TabSessionRepository.SavedTabEntry("https://alpha.example", "Alpha", false),
+                new TabSessionRepository.SavedTabEntry("data:text/plain,bad", "BadActive", false),
+                new TabSessionRepository.SavedTabEntry("https://beta.example", "Beta", false)
+            ), 1);
+            TabSessionRepository.SavedTabSession remapped2 = store.loadTabSession();
+            assertTrue(remapped2 != null && remapped2.tabs.size() == 2, "Filtered active leaves 2 valid entries");
+            assertEquals(Integer.valueOf(0), Integer.valueOf(remapped2.activeIndex),
+                "Active index remaps to preceding valid entry 0 when active tab itself is invalid");
+
+            store.saveTabSession(Arrays.asList(
+                new TabSessionRepository.SavedTabEntry("javascript:bad()", "BadFirst", false),
+                new TabSessionRepository.SavedTabEntry("https://only-valid.example", "OnlyValid", false)
+            ), 0);
+            TabSessionRepository.SavedTabSession remapped3 = store.loadTabSession();
+            assertTrue(remapped3 != null && remapped3.tabs.size() == 1, "Single valid entry survives");
+            assertEquals(Integer.valueOf(0), Integer.valueOf(remapped3.activeIndex),
+                "Active index clamps to 0 when leading active entry was invalid");
+
+            // 5. MAX_TABS (24) capping preserves active tab window
+            List<TabSessionRepository.SavedTabEntry> manyTabs = new ArrayList<TabSessionRepository.SavedTabEntry>();
+            for (int i = 0; i < BrowserController.MAX_TABS + 4; i++) {
+                manyTabs.add(new TabSessionRepository.SavedTabEntry("https://tab" + i + ".example", "Tab " + i, false));
+            }
+            store.saveTabSession(manyTabs, 26);
+            TabSessionRepository.SavedTabSession cappedHigh = store.loadTabSession();
+            assertTrue(cappedHigh != null, "Capped session loads");
+            assertEquals(Integer.valueOf(BrowserController.MAX_TABS), Integer.valueOf(cappedHigh.tabs.size()),
+                "Session capped to MAX_TABS");
+            assertEquals(Integer.valueOf(BrowserController.MAX_TABS - 1), Integer.valueOf(cappedHigh.activeIndex),
+                "High active index window ends at MAX_TABS - 1");
+            assertEquals("https://tab26.example", cappedHigh.tabs.get(cappedHigh.activeIndex).url,
+                "Capped window preserves active tab at index 26");
+
+            store.saveTabSession(manyTabs, 3);
+            TabSessionRepository.SavedTabSession cappedLow = store.loadTabSession();
+            assertTrue(cappedLow != null, "Low-active capped session loads");
+            assertEquals(Integer.valueOf(BrowserController.MAX_TABS), Integer.valueOf(cappedLow.tabs.size()),
+                "Low-active session capped to MAX_TABS");
+            assertEquals(Integer.valueOf(3), Integer.valueOf(cappedLow.activeIndex),
+                "Low active index preserved unchanged");
+
+            // 6. Corrupt JSON fault tolerance, clearTabSession(), no-op empty clear & clearHistory() integration
+            prefs.edit().putString(
+                BrowserDataStore.PREF_SAVED_TABS,
+                "{\"activeIndex\":2,\"tabs\":[\"corrupt_string\",{\"url\":\"https://ok1.example\",\"title\":\"OK1\"},42,{\"url\":\"https://ok2.example\",\"title\":\"OK2\",\"desktop\":true}]}"
+            ).apply();
+            TabSessionRepository.SavedTabSession recovered = store.loadTabSession();
+            assertTrue(recovered != null && recovered.tabs.size() == 2,
+                "Corrupt elements skipped while valid sibling tabs recovered");
+            assertEquals(Integer.valueOf(0), Integer.valueOf(recovered.activeIndex),
+                "Active index remapped past skipped corrupt entries");
+            assertEquals("https://ok1.example", recovered.tabs.get(0).url, "First recovered URL intact");
+            assertEquals("https://ok2.example", recovered.tabs.get(1).url, "Second recovered URL intact");
+            assertTrue(recovered.tabs.get(1).isDesktopMode, "Second recovered desktop flag intact");
+
+            prefs.edit().putString(BrowserDataStore.PREF_SAVED_TABS, "{bad_json").apply();
+            assertTrue(store.loadTabSession() == null, "Malformed tab session JSON returns null cleanly");
+
+            store.saveTabSession(basicTabs, 0);
+            assertTrue(store.loadTabSession() != null, "Session re-saved before clearTabSession");
+            store.clearTabSession();
+            assertTrue(store.loadTabSession() == null, "clearTabSession removes saved tabs");
+            assertTrue(!prefs.contains(BrowserDataStore.PREF_SAVED_TABS), "PREF_SAVED_TABS removed from prefs");
+            store.clearTabSession();
+            assertTrue(!prefs.contains(BrowserDataStore.PREF_SAVED_TABS), "Calling clearTabSession on empty prefs keeps key absent");
+
+            store.saveTabSession(basicTabs, 0);
+            assertTrue(store.loadTabSession() != null, "Session saved before clearHistory");
+            store.clearHistory();
+            assertTrue(store.loadTabSession() == null, "clearHistory clears saved tab session");
+
+            // 7. Backup isolation: settings ZIP syncs restore_tabs_on_startup without leaking saved tab URLs
+            store.setRestoreTabsOnStartup(true);
+            store.saveTabSession(Arrays.asList(
+                new TabSessionRepository.SavedTabEntry("https://private-unclosed-tab.secret.test/path", "Secret Tab", false)
+            ), 0);
+            UserscriptManager um = new UserscriptManager(wsDir);
+            AdBlockManager ab = new AdBlockManager(new File(wsDir, "adblock/custom_rules.txt"), null, store);
+            SkillManager sm = new SkillManager(null, wsDir);
+            BrowserBackupManager.WorkspaceTarget srcTarget =
+                new BrowserBackupManager.WorkspaceTarget(wsDir, store, um, ab, sm);
+            WebDavClient.SyncSelection settingsOnlySel = new WebDavClient.SyncSelection(false, true, false, false, false);
+            byte[] zipBytes = BrowserBackupManager.buildBackupZipBytes(srcTarget, settingsOnlySel);
+
+            StringBuilder zipContentDump = new StringBuilder();
+            ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipBytes));
+            try {
+                ZipEntry ze;
+                while ((ze = zis.getNextEntry()) != null) {
+                    zipContentDump.append(ze.getName()).append('\n');
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[1024];
+                    int n;
+                    while ((n = zis.read(buf)) != -1) bos.write(buf, 0, n);
+                    zipContentDump.append(new String(bos.toByteArray(), StandardCharsets.UTF_8)).append('\n');
+                    zis.closeEntry();
+                }
+            } finally {
+                zis.close();
+            }
+            String dumpStr = zipContentDump.toString();
+            assertTrue(dumpStr.contains("restore_tabs_on_startup"), "Backup settings.json exports restore_tabs_on_startup");
+            assertTrue(!dumpStr.contains("private-unclosed-tab.secret.test"),
+                "Backup archive never leaks saved_tabs_session URLs");
+
+            File dstWs = new File(tmpDir, "dst_ws");
+            dstWs.mkdirs();
+            BrowserDataStore dstStore = new BrowserDataStore(
+                new InMemoryPrefs(), new InMemoryPrefs(), new File(dstWs, "settings.json")
+            );
+            assertTrue(!dstStore.isRestoreTabsOnStartup(), "Destination store starts with setting false");
+            BrowserBackupManager.WorkspaceTarget dstTarget = new BrowserBackupManager.WorkspaceTarget(
+                dstWs, dstStore, new UserscriptManager(dstWs),
+                new AdBlockManager(new File(dstWs, "adblock/custom_rules.txt"), null, dstStore),
+                new SkillManager(null, dstWs)
+            );
+            BrowserBackupManager.restoreFromZipBytes(dstTarget, zipBytes, settingsOnlySel, false);
+            assertTrue(dstStore.isRestoreTabsOnStartup(), "Backup restore propagates restore_tabs_on_startup=true");
+            assertTrue(dstStore.loadTabSession() == null, "Backup restore leaves destination saved_tabs_session empty");
+
+            // 8. Bilingual localization
+            AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_EN);
+            try {
+                assertEquals("Restore Tabs on Startup", AcidLocale.tr("保留上次未关闭的标签页"), "Setting title EN");
+                assertEquals("Restore tabs on startup enabled", AcidLocale.tr("已开启保留未关闭标签页"), "Enable toast EN");
+                assertEquals("Restore tabs on startup disabled", AcidLocale.tr("已关闭保留未关闭标签页"), "Disable toast EN");
+            } finally {
+                AcidLocale.applyLanguageIndex(null, AcidSettings.LANG_ZH);
+            }
+            assertEquals("保留上次未关闭的标签页", AcidLocale.tr("保留上次未关闭的标签页"), "Setting title ZH preserved");
+        } finally {
+            if (store != null) {
+                store.stopWatchingSettingsFile();
+            }
+            SkillStorageVault.deleteRecursiveSafe(tmpDir);
+        }
     }
 }

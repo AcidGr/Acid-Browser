@@ -902,6 +902,9 @@ public final class AcidLocale {
         EN_MAP.put("主页网址", "Homepage URL");
         EN_MAP.put("主页网址不能为空", "Homepage URL cannot be empty");
         EN_MAP.put("已保存自定义主页", "Custom homepage saved");
+        EN_MAP.put("保留上次未关闭的标签页", "Restore Tabs on Startup");
+        EN_MAP.put("已开启保留未关闭标签页", "Restore tabs on startup enabled");
+        EN_MAP.put("已关闭保留未关闭标签页", "Restore tabs on startup disabled");
         EN_MAP.put("下载引擎", "Download Engine");
         EN_MAP.put("选择默认下载引擎", "Select Download Engine");
         EN_MAP.put("内置下载器", "Built-in Downloader");

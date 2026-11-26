@@ -347,6 +347,10 @@ public final class AcidSettings {
         true
     ));
 
+    public static final BoolKey RESTORE_TABS_ON_STARTUP = register(new BoolKey(
+        "restore_tabs_on_startup", "restore_tabs_on_startup", false, "保留上次未关闭的标签页", true, false
+    ));
+
     public static final int DOWNLOADER_BUILTIN = 0;
     public static final int DOWNLOADER_SYSTEM = 1;
 

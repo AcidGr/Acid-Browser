@@ -36,6 +36,7 @@ public class BrowserDataStore {
     public static final String PREF_BOOKMARKS = BookmarkRepository.PREF_BOOKMARKS;
     public static final String PREF_HISTORY = HistoryRepository.PREF_HISTORY;
     public static final String PREF_DOWNLOADS = "downloads";
+    public static final String PREF_SAVED_TABS = TabSessionRepository.PREF_SAVED_TABS;
     private static final String PREF_SETTINGS_PENDING_SYNC = "settings_pending_json_sync";
     private static final String LEGACY_PREF_ACTIVITY = "acid_browser_prefs";
 
@@ -120,6 +121,7 @@ public class BrowserDataStore {
     private File mWorkspaceDir = null;
     private final BookmarkRepository mBookmarkRepo;
     private final HistoryRepository mHistoryRepo;
+    private final TabSessionRepository mTabSessionRepo;
     private OnSettingsChangedListener mSettingsChangedListener = null;
     private CallbackDispatcher mDispatcher = null;
     private FileObserver mFileObserver = null;
@@ -136,6 +138,7 @@ public class BrowserDataStore {
         mLegacyPrefsOverride = null;
         mBookmarkRepo = new BookmarkRepository(mContext, null, null);
         mHistoryRepo = new HistoryRepository(mContext, null, null);
+        mTabSessionRepo = new TabSessionRepository(mContext, null);
     }
 
     BrowserDataStore(SharedPreferences primary, SharedPreferences legacy, File settingsJsonFile) {
@@ -155,6 +158,7 @@ public class BrowserDataStore {
         mHistoryJsonFile = historyJsonFile;
         mBookmarkRepo = new BookmarkRepository(null, primary, bookmarksJsonFile);
         mHistoryRepo = new HistoryRepository(null, primary, historyJsonFile);
+        mTabSessionRepo = new TabSessionRepository(null, primary);
     }
 
     SharedPreferences prefs() {
@@ -788,6 +792,9 @@ public class BrowserDataStore {
     public boolean isClearOnExit() { return get(AcidSettings.CLEAR_ON_EXIT).booleanValue(); }
     public void setClearOnExit(boolean val) { set(AcidSettings.CLEAR_ON_EXIT, Boolean.valueOf(val)); }
 
+    public boolean isRestoreTabsOnStartup() { return get(AcidSettings.RESTORE_TABS_ON_STARTUP).booleanValue(); }
+    public void setRestoreTabsOnStartup(boolean val) { set(AcidSettings.RESTORE_TABS_ON_STARTUP, Boolean.valueOf(val)); }
+
     public boolean isWebDebuggingEnabled() { return get(AcidSettings.WEB_DEBUGGING).booleanValue(); }
     public void setWebDebuggingEnabled(boolean enabled) { set(AcidSettings.WEB_DEBUGGING, Boolean.valueOf(enabled)); }
 
@@ -1033,6 +1040,7 @@ public class BrowserDataStore {
 
     public void clearHistory() {
         mHistoryRepo.clearHistory();
+        clearTabSession();
     }
 
     public boolean removeHistoryItem(String url) {
@@ -1135,5 +1143,29 @@ public class BrowserDataStore {
                 .putString(PREF_DOWNLOADS, "[]")
                 .apply();
         }
+    }
+
+    // =========================================================================
+    // Tab Session Repository Facade (Isolated from settings.json & Backups)
+    // =========================================================================
+
+    public TabSessionRepository getTabSessionRepository() {
+        return mTabSessionRepo;
+    }
+
+    public void saveTabSession(List<TabSessionRepository.SavedTabEntry> entries, int activeIndex) {
+        mTabSessionRepo.saveTabSession(
+            entries, activeIndex, mWorkspaceDir, getHomeType() == HOME_BLANK, getEffectiveHomeUrl()
+        );
+    }
+
+    public TabSessionRepository.SavedTabSession loadTabSession() {
+        return mTabSessionRepo.loadTabSession(
+            mWorkspaceDir, getHomeType() == HOME_BLANK, getEffectiveHomeUrl()
+        );
+    }
+
+    public void clearTabSession() {
+        mTabSessionRepo.clearTabSession();
     }
 }

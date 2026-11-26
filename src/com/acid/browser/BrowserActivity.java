@@ -328,7 +328,9 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
         if (mAgentLoop != null && mAgentFloatingView != null) {
             mAgentFloatingView.renderSessionChatStream(mAgentLoop.getActiveSession());
         }
-        handleIncomingIntent(getIntent());
+        if (savedInstanceState == null) {
+            handleIncomingIntent(getIntent());
+        }
     }
 
     private void initViewportOverlays() {
@@ -1008,7 +1010,10 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     }
 
     private void handleIncomingIntent(Intent intent) {
-        if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction())) {
+        if (intent == null || (intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) {
+            return;
+        }
+        if (Intent.ACTION_VIEW.equals(intent.getAction())) {
             Uri data = intent.getData();
             if (data != null && mController != null) {
                 String targetUrl = data.toString();
@@ -2536,6 +2541,7 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
     protected void onStop() {
         super.onStop();
         if (mController != null) {
+            mController.flushTabSessionNow();
             mController.flushCookiesNow();
         }
     }
@@ -2553,7 +2559,11 @@ public class BrowserActivity extends Activity implements BrowserController.Brows
             mController.flushCookiesNow();
         }
         if (isFinishing() && mDataStore != null && mDataStore.isClearOnExit()) {
+            if (mController != null) {
+                mController.suppressTabSessionPersistence();
+            }
             mDataStore.clearBrowsingData(mController, true, true, false, true, false);
+            mDataStore.clearTabSession();
         }
         if (mDownloadReceiver != null) {
             try {

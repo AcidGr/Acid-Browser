@@ -93,6 +93,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         public volatile String lastHistoryUrl = "";
         public volatile String lastHistoryTitle = "";
         public volatile boolean isDesktopMode = false;
+        public volatile boolean pendingLazyLoad = false;
         public Bitmap snapshot = null;
 
         public TabSession(int id, WebView webView) {
@@ -153,6 +154,27 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private int mFileChooserTabId = -1;
     private BrowserDataStore mDataStore = null;
     private boolean mApplyingHotReload = false;
+    private static final long TAB_SESSION_SAVE_DEBOUNCE_MS = 350L;
+    private volatile boolean mSuppressTabSessionPersistence = false;
+    private final Runnable mPersistTabSessionRunnable = new Runnable() {
+        @Override
+        public void run() {
+            persistTabSessionNow();
+        }
+    };
+    private final AcidSettings.KeyObserver<Boolean> mRestoreTabsObserver = new AcidSettings.KeyObserver<Boolean>() {
+        @Override
+        public void onSettingChanged(Boolean newValue) {
+            if (Boolean.TRUE.equals(newValue)) {
+                persistTabSessionNow();
+            } else {
+                mMainHandler.removeCallbacks(mPersistTabSessionRunnable);
+                if (mDataStore != null) {
+                    mDataStore.clearTabSession();
+                }
+            }
+        }
+    };
     /**
      * Minimum spacing between cookie flushes triggered by page loads.
      *
@@ -166,6 +188,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     private long mLastCookieFlushMs = 0L;
 
     public void setDataStore(BrowserDataStore dataStore) {
+        if (mDataStore != null && mDataStore != dataStore) {
+            mDataStore.unobserve(AcidSettings.RESTORE_TABS_ON_STARTUP, mRestoreTabsObserver);
+        }
         mDataStore = dataStore;
         if (mDownloadCoordinator != null) {
             mDownloadCoordinator.setDataStore(dataStore);
@@ -175,6 +200,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     private void bindDataStoreSideEffects(BrowserDataStore dataStore) {
         if (dataStore == null) return;
+        dataStore.observe(AcidSettings.RESTORE_TABS_ON_STARTUP, mRestoreTabsObserver);
         dataStore.setOnBookmarksMutatedListener(new Runnable() {
             @Override
             public void run() {
@@ -257,6 +283,32 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             }
         }
 
+        initInitialTabs();
+    }
+
+    private void initInitialTabs() {
+        if (mDataStore != null && mDataStore.isRestoreTabsOnStartup()) {
+            TabSessionRepository.SavedTabSession session = mDataStore.loadTabSession();
+            if (session != null && !session.tabs.isEmpty()) {
+                List<TabSession> restoredTabs = new ArrayList<TabSession>(session.tabs.size());
+                mSuppressTabSessionPersistence = true;
+                try {
+                    for (TabSessionRepository.SavedTabEntry entry : session.tabs) {
+                        String title = !entry.title.isEmpty() ? entry.title : entry.url;
+                        restoredTabs.add(allocateTab(entry.url, title, entry.isDesktopMode, true));
+                    }
+                    TabSession activeTarget = restoredTabs.get(session.activeIndex);
+                    mIsDesktopMode = activeTarget.isDesktopMode;
+                    switchToTab(activeTarget.id);
+                } finally {
+                    mSuppressTabSessionPersistence = false;
+                }
+                persistTabSessionNow();
+                return;
+            }
+        } else if (mDataStore != null) {
+            mDataStore.clearTabSession();
+        }
         createNewTab(getHomeUrl(), true);
     }
 
@@ -307,19 +359,23 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         return createTabInternal(null, switchToIt, false, mIsDesktopMode);
     }
 
-    private TabSession createTabInternal(
+    private TabSession allocateTab(
         String initialUrl,
-        boolean switchToIt,
-        boolean loadInitialPage,
-        boolean initialDesktopMode
+        String initialTitle,
+        boolean desktopMode,
+        boolean pendingLazyLoad
     ) {
-        final int tabId = mNextTabId++;
+        int tabId = mNextTabId++;
         WebView wv = new AcidWebView(mContext);
-        final TabSession tab = new TabSession(tabId, wv);
-        tab.isDesktopMode = initialDesktopMode;
-        if (!loadInitialPage) {
-            tab.url = "about:blank";
+        TabSession tab = new TabSession(tabId, wv);
+        tab.isDesktopMode = desktopMode;
+        if (initialUrl != null) {
+            tab.url = initialUrl;
         }
+        if (initialTitle != null) {
+            tab.title = initialTitle;
+        }
+        tab.pendingLazyLoad = pendingLazyLoad;
         configureWebView(tab);
 
         mTabs.add(tab);
@@ -327,6 +383,18 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
         wv.setVisibility(android.view.View.INVISIBLE);
+        return tab;
+    }
+
+    private TabSession createTabInternal(
+        String initialUrl,
+        boolean switchToIt,
+        boolean loadInitialPage,
+        boolean initialDesktopMode
+    ) {
+        final TabSession tab = allocateTab(!loadInitialPage ? "about:blank" : null, null, initialDesktopMode, false);
+        final int tabId = tab.id;
+        final WebView wv = tab.webView;
 
         if (switchToIt || mActiveTab == null) {
             switchToTab(tabId);
@@ -347,7 +415,61 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (mListener != null) {
             mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
         }
+        schedulePersistTabSession();
         return tab;
+    }
+
+    private void ensureTabLoaded(TabSession tab) {
+        if (tab == null || !tab.pendingLazyLoad || tab.webView == null) return;
+        tab.pendingLazyLoad = false;
+        String targetUrl = (tab.url != null && !tab.url.isEmpty()) ? tab.url : getHomeUrl();
+        tab.url = targetUrl;
+        if (tab.title == null || tab.title.isEmpty()) {
+            tab.title = targetUrl;
+        }
+        tab.webView.loadUrl(targetUrl);
+    }
+
+    public void suppressTabSessionPersistence() {
+        mSuppressTabSessionPersistence = true;
+        mMainHandler.removeCallbacks(mPersistTabSessionRunnable);
+    }
+
+    private void schedulePersistTabSession() {
+        if (mSuppressTabSessionPersistence || mIncognitoMode || mDataStore == null || !mDataStore.isRestoreTabsOnStartup()) {
+            return;
+        }
+        mMainHandler.removeCallbacks(mPersistTabSessionRunnable);
+        mMainHandler.postDelayed(mPersistTabSessionRunnable, TAB_SESSION_SAVE_DEBOUNCE_MS);
+    }
+
+    public void flushTabSessionNow() {
+        mMainHandler.removeCallbacks(mPersistTabSessionRunnable);
+        persistTabSessionNow();
+    }
+
+    private void persistTabSessionNow() {
+        if (mSuppressTabSessionPersistence || mIncognitoMode || mDataStore == null || !mDataStore.isRestoreTabsOnStartup()) {
+            return;
+        }
+        List<TabSession> snapshotTabs = new ArrayList<TabSession>(mTabs);
+        if (snapshotTabs.isEmpty()) {
+            return;
+        }
+        TabSession active = mActiveTab;
+        int activeId = active != null ? active.id : -1;
+        int activeIndex = 0;
+        List<TabSessionRepository.SavedTabEntry> entries =
+            new ArrayList<TabSessionRepository.SavedTabEntry>(snapshotTabs.size());
+        for (int i = 0; i < snapshotTabs.size(); i++) {
+            TabSession t = snapshotTabs.get(i);
+            if (t == null) continue;
+            if (t.id == activeId) {
+                activeIndex = entries.size();
+            }
+            entries.add(new TabSessionRepository.SavedTabEntry(t.url, t.title, t.isDesktopMode));
+        }
+        mDataStore.saveTabSession(entries, activeIndex);
     }
 
     public void captureActiveTabSnapshot() {
@@ -377,7 +499,14 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public boolean switchToTab(int tabId) {
-        if (mActiveTab != null && mActiveTab.id == tabId) return true;
+        if (mActiveTab != null && mActiveTab.id == tabId) {
+            boolean wasPending = mActiveTab.pendingLazyLoad;
+            ensureTabLoaded(mActiveTab);
+            if (wasPending) {
+                schedulePersistTabSession();
+            }
+            return true;
+        }
         TabSession target = null;
         for (TabSession t : mTabs) {
             if (t.id == tabId) {
@@ -399,6 +528,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         target.webView.bringToFront();
         mActiveTab = target;
         syncAllTabWebViewPolicies();
+        ensureTabLoaded(target);
 
         mTabHistory.remove(Integer.valueOf(tabId));
         mTabHistory.add(tabId);
@@ -415,6 +545,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             mListener.onUrlChanged(mActiveTab.url, mActiveTab.title);
             mListener.onProgressChanged(mActiveTab.progress, mActiveTab.isLoading);
         }
+        schedulePersistTabSession();
         return true;
     }
 
@@ -520,8 +651,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 int newActiveIndex = Math.max(0, Math.min(removeIndex - 1, mTabs.size() - 1));
                 switchToTab(mTabs.get(newActiveIndex).id);
             }
-        } else if (mListener != null) {
-            mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
+        } else {
+            if (mListener != null) {
+                mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
+            }
+            schedulePersistTabSession();
         }
         return true;
     }
@@ -560,6 +694,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (mListener != null) {
             mListener.onTabsChanged(mTabs.size(), mActiveTab != null ? mActiveTab.id : -1);
         }
+        schedulePersistTabSession();
     }
 
     public List<TabSession> getTabs() {
@@ -579,10 +714,22 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
      * also what lets the agent recover on its own through {@code browser(action='tabs',
      * tab_action='switch'|'new')} after the user closed the tab it was driving.
      */
-    public void setAgentBoundTabId(int tabId) {
+    public void setAgentBoundTabId(final int tabId) {
         boolean changed = (mAgentBoundTabId != tabId) || mAgentTargetLost;
         mAgentBoundTabId = tabId;
         mAgentTargetLost = false;
+        if (tabId > 0) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                ensureTabLoaded(getTabById(tabId));
+            } else {
+                mMainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        ensureTabLoaded(getTabById(tabId));
+                    }
+                });
+            }
+        }
         syncAllTabWebViewPolicies();
         if (mOverlayView != null) {
             mOverlayView.postInvalidateOnAnimation();
@@ -1097,6 +1244,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                 }
 
                 commitHistoryVisit(tab);
+                schedulePersistTabSession();
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(url, tab.title);
                     mListener.onProgressChanged(100, false);
@@ -1110,6 +1258,22 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                         }
                     }
                 }, 800);
+            }
+
+            @Override
+            public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                super.doUpdateVisitedHistory(view, url, isReload);
+                String mainUrl = (view != null && view.getUrl() != null && !view.getUrl().isEmpty())
+                    ? view.getUrl()
+                    : url;
+                if (mainUrl != null && !mainUrl.isEmpty() && !mainUrl.equals(tab.url)) {
+                    tab.url = mainUrl;
+                    commitHistoryVisit(tab);
+                    schedulePersistTabSession();
+                    if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
+                        mListener.onUrlChanged(tab.url, tab.title);
+                    }
+                }
             }
         });
 
@@ -1130,6 +1294,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void onReceivedTitle(WebView view, String title) {
                 tab.title = (title != null && !title.isEmpty()) ? title : tab.url;
                 commitHistoryVisit(tab);
+                schedulePersistTabSession();
                 if (mActiveTab != null && mActiveTab.id == tab.id && mListener != null) {
                     mListener.onUrlChanged(tab.url, tab.title);
                 }
@@ -1982,7 +2147,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
                     @Override
                     public void run() {
                         for (TabSession t : mTabs) {
-                            if (t != null && t.webView != null
+                            if (t != null && t.webView != null && !t.pendingLazyLoad
                                     && isTrustedLocalHomepageFileUrl(t.url, getWorkspaceDir())) {
                                 if (Build.VERSION.SDK_INT >= 19) {
                                     t.webView.evaluateJavascript(js, null);
@@ -2014,7 +2179,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             @Override
             public void run() {
                 for (TabSession t : mTabs) {
-                    if (t != null && t.webView != null
+                    if (t != null && t.webView != null && !t.pendingLazyLoad
                             && isTrustedLocalHomepageFileUrl(t.url, getWorkspaceDir())) {
                         if (Build.VERSION.SDK_INT >= 19) {
                             t.webView.evaluateJavascript(js, null);
@@ -2036,7 +2201,11 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             public void run() {
                 for (TabSession t : mTabs) {
                     if (t != null && t.webView != null && isTrustedLocalHomepageFileUrl(t.url, wsDir)) {
-                        t.webView.loadUrl(targetHome);
+                        if (t.pendingLazyLoad) {
+                            t.url = targetHome;
+                        } else {
+                            t.webView.loadUrl(targetHome);
+                        }
                     }
                 }
             }
@@ -2127,6 +2296,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
 
     public void loadUrlWithTab(TabSession tab, String url, boolean userInitiated) {
         if (tab == null || tab.webView == null || url == null) return;
+        tab.pendingLazyLoad = false;
         if (!url.equals(tab.url)) {
             tab.title = url;
             tab.lastHistoryUrl = "";
@@ -2134,6 +2304,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
         tab.url = url;
         tab.webView.loadUrl(url);
+        schedulePersistTabSession();
     }
 
     public void applySettingsHotReload() {
@@ -2159,7 +2330,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (tab == null || tab.webView == null) return;
         tab.isDesktopMode = desktop;
         applyIdentityToSettings(tab.webView, desktop);
-        if (DesktopViewportManager.isEligibleUrl(tab.url)) {
+        if (!tab.pendingLazyLoad && DesktopViewportManager.isEligibleUrl(tab.url)) {
             DesktopViewportManager.applyDesktopViewport(tab.webView, desktop);
         }
     }
@@ -2179,6 +2350,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
             if (boundTab == mActiveTab && mListener != null) {
                 mListener.onModeChanged(isDesktopMode(), mOverlayView.getControlMode(), mSomEnabled);
             }
+            schedulePersistTabSession();
             return;
         }
 
@@ -2204,6 +2376,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         if (mListener != null) {
             mListener.onModeChanged(isDesktopMode(), mOverlayView.getControlMode(), mSomEnabled);
         }
+        schedulePersistTabSession();
     }
 
     @Override
@@ -2257,7 +2430,9 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         mDarkMode = dark;
         for (TabSession t : mTabs) {
             applyDarkModeToSettings(t.webView, dark);
-            injectDarkModeCss(t.webView);
+            if (!t.pendingLazyLoad) {
+                injectDarkModeCss(t.webView);
+            }
         }
     }
 
@@ -2334,6 +2509,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
      * Pauses active WebView execution when app transitions to background.
      */
     public void onPause() {
+        flushTabSessionNow();
         if (mActiveTab != null && mActiveTab.webView != null) {
             try {
                 mActiveTab.webView.onPause();
@@ -2499,6 +2675,8 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
     }
 
     public void destroy() {
+        flushTabSessionNow();
+        mSuppressTabSessionPersistence = true;
         mWindowPixelCopyCapturer = null;
         cancelPendingFileChooser("destroy");
         mUploadManager.cancelAll("destroy");
@@ -2508,6 +2686,7 @@ public class BrowserController implements WebAutomationDriver.AutomationHost {
         }
         mMainHandler.removeCallbacksAndMessages(null);
         if (mDataStore != null) {
+            mDataStore.unobserve(AcidSettings.RESTORE_TABS_ON_STARTUP, mRestoreTabsObserver);
             mDataStore.setOnBookmarksMutatedListener(null);
         }
         if (mContext != null) {
